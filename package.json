@@ -2,7 +2,7 @@
   "name": "modelbot",
   "version": "0.0.1",
   "private": true,
-  "description": "Give an AI agent its own computer - a browser, shell and files in a container on your machine. Bring your own model.",
+  "description": "An AI agent with its own computer. Give it a task, watch it browse and work with files, and review the results it saves.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": [
     "agent",

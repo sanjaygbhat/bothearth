@@ -846,7 +846,7 @@ describe("task view — finished", () => {
         "Sites it visited",
         "Things it asked you",
         "Files it saved",
-        "Left on its computer",
+        "Browser profile",
       ]);
       assert.equal(t.root.querySelectorAll(".receipt dd")[0]!.textContent, "4 min 12 s");
       assert.match(t.root.querySelectorAll(".receipt dd")[1]!.textContent, /of your \$2\.00 budget/);

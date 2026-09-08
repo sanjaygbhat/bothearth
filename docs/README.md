@@ -1,6 +1,6 @@
 # Documentation
 
-New here? [Quickstart](QUICKSTART.md) takes you from a fresh checkout to your first task: build it, `bothearth start`, and open the printed link in your browser. The Mac app is an optional shell over the same thing.
+BotHearth is your AI agent with a computer: give it a task, follow its work, and open the result. Start with the [quickstart](QUICKSTART.md) to install it and connect your AI account, or [choose an example task](https://bothearth.com/examples/) to see what to try.
 
 [CLI.md](CLI.md) and [CONFIG.md](CONFIG.md) are generated from the implementation and the schema. Run `npm run docs:gen` rather than editing them by hand.
 

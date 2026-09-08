@@ -4,7 +4,7 @@
 
 <h1 align="center">BotHearth</h1>
 
-<p align="center">A self-hosted computer for AI agents.</p>
+<p align="center">Your AI agent. With a computer.</p>
 
 <p align="center"><a href="https://bothearth.com/">Website</a> · <a href="https://bothearth.com/quickstart/">Quickstart</a> · <a href="https://bothearth.com/security/">Security and privacy</a></p>
 
@@ -12,11 +12,13 @@
   <a href="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml"><img src="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-![BotHearth part-way through a task. On the left, a feed naming every step it took — asked you about opening a new site, you said yes, read the page, opened bot.sannysoft.com. On the right, the live view of its computer showing that page's results table, with Take control and Full screen underneath, and a running count: $0.06 of $20.00 of budget used, 6 steps so far, no files saved yet.](assets/screenshots/task-running.png)
+[![An actual BotHearth reading-log task: 70 minutes across three entries, with reading.csv and reading-summary.md saved and ready to open.](website/screenshots/reading-summary-detail.png)](website/screenshots/reading-summary.png)
+
+*An actual task using the [sample reading log](https://bothearth.com/examples/#workspace). Open the image for the complete capture; [capture details and usage meter](https://bothearth.com/about/#credits).*
 
 ## Run it
 
-BotHearth gives an AI agent a Chromium browser, shell, and workspace in containers on your Mac or Linux host. Start a task, watch its browser, review approval requests, and take control when a site needs you.
+Give BotHearth a task: research a topic from pages you provide, compare your options, or turn a personal reading log into a summary. Your AI agent uses its computer to browse and work with files while you follow along. Review requests, take control when a site needs you, and open the results it saves.
 
 The software is free for the noncommercial purposes permitted by its [license](LICENSE). There is no BotHearth subscription or checkout. You supply the machine and an eligible model account; provider usage, electricity, and optional hosting can cost money. This release is source-available under PolyForm Noncommercial, which is **not an OSI open-source license**. See [license and cost questions](COMMERCIAL.md).
 
@@ -63,9 +65,9 @@ Builds from this checkout are ad-hoc signed, which means macOS refuses to let th
 
 | Review a destination | Inspect a finished result |
 |---|---|
-| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![A completed diagnostic task with its saved Markdown file and estimated tool usage.](assets/screenshots/done.png) |
+| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![An actual reading-log task with the original CSV and a 70-minute Markdown summary saved.](website/screenshots/reading-summary-detail.png) |
 
-*Unretouched pre-rename development captures, 7 September 2026. Older labels may appear. The dollar meter is an estimate of tool usage, not a provider bill.*
+*Unretouched app captures: the approval view is a pre-rename development build from 7 September 2026; the reading-log result is an actual sample task from 8 September. The dollar meter estimates tool usage, not a provider bill.*
 
 ## How it works
 

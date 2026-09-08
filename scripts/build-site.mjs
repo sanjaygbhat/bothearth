@@ -20,8 +20,7 @@ const repo = repository.href.replace(/\/$/, "");
 const escape = (value) => String(value).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const template = readFileSync(join(source, "layout.html"), "utf8");
-const nav = [["quickstart", "Quickstart"], ["how-it-works", "How it works"],
-  ["examples", "Examples"], ["faq", "FAQ"]];
+const nav = [["how-it-works", "How it works"], ["examples", "What it can do"], ["faq", "FAQ"]];
 const pages = config.pages;
 assert.equal(new Set(pages.map((page) => page.slug)).size, pages.length, "Duplicate page slug");
 const author = { "@type": "Person", "@id": `${site.href}about/#author`,
@@ -38,12 +37,12 @@ for (const page of pages) {
     dateModified: config.reviewed }];
   if (!page.slug) graph.push({ "@type": "SoftwareApplication", "@id": `${site.href}#software`,
     name: config.name, alternateName: "ModelBot", url: site.href,
-    description: "A self-hosted computer for AI agents, with browser, shell, workspace, approvals, and human control.",
-    applicationCategory: "DeveloperApplication", operatingSystem: "macOS, Linux",
+    description: page.description,
+    applicationCategory: "ProductivityApplication", operatingSystem: "macOS, Linux",
     softwareVersion: version, releaseNotes: `${site.href}about/#release`,
     softwareRequirements: "Node.js 22.18+, supported container runtime, and an eligible model account",
     license: `${repo}/blob/main/LICENSE`, author,
-    downloadUrl: repo, screenshot: `${site.href}screenshots/task-running.png` });
+    downloadUrl: repo, screenshot: `${site.href}screenshots/reading-summary.png` });
   const values = { TITLE: escape(page.title), DESCRIPTION: escape(page.description),
     CANONICAL: escape(canonical), SITE: escape(site.href), BASE: escape(site.pathname),
     REPOSITORY: escape(repo), VERSION: escape(version), DATE: escape(config.reviewed),
@@ -60,7 +59,8 @@ for (const page of pages) {
 }
 for (const file of ["tokens.css", "style.css", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
   "fonts/fraunces-latin-wght.woff2", "fonts/Fraunces-OFL.txt",
-  "screenshots/task-running.png", "screenshots/needs-you.png"]) {
+  "screenshots/task-running.png", "screenshots/needs-you.png",
+  "screenshots/reading-summary.png", "screenshots/reading-summary-detail.png"]) {
   mkdirSync(dirname(join(output, file)), { recursive: true });
   cpSync(join(source, file), join(output, file));
 }

@@ -2679,8 +2679,8 @@ class TaskView {
       // Follow-up: once the daemon reports a real wipe result on the record,
       // read that field here instead of this fixed line.
       [
-        "Left on its computer",
-        "Its browser stays on its own computer, never on this machine.",
+        "Browser profile",
+        "The agent uses a separate browser profile for this computer.",
       ],
     ];
     this.receiptCost = null;

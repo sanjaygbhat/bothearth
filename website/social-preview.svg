@@ -1,9 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-<rect width="1200" height="630" fill="#fafaf5"/><rect x="820" y="60" width="320" height="510" rx="16" fill="#f4f4ed" stroke="#d9ded5"/>
-<g fill="none" stroke="#142920" stroke-width="5" stroke-linejoin="round"><path d="m861 308 119-107 119 107v147H861Z"/><path d="M941 455v-65a39 39 0 0 1 78 0v65M843 455h274"/></g>
-<path d="M980 355c-3 19-23 24-23 42a23 23 0 0 0 46 0c0-12-7-20-12-25 0 12-7 12-7 12s5-17-4-29Z" fill="#a84e13"/>
-<text x="62" y="102" font-family="Georgia,serif" font-size="37" fill="#142920">BotHearth</text><circle cx="257" cy="90" r="6" fill="#a84e13"/>
-<text x="62" y="224" font-family="Arial,sans-serif" font-size="15" letter-spacing="2" fill="#526259">A SELF-HOSTED COMPUTER FOR AI AGENTS</text>
-<g font-family="Georgia,serif" font-size="78"><text x="58" y="326" fill="#142920">Your agent.</text><text x="58" y="411" fill="#142920">A computer</text><text x="58" y="496" fill="#a84e13">of its own.</text></g>
-<text x="62" y="565" font-family="Arial,sans-serif" font-size="18" fill="#526259">Free for permitted noncommercial use · macOS + Linux</text>
+<rect width="1200" height="630" fill="#fafaf5"/>
+<g transform="translate(60 49)" fill="none" stroke="#a84e13" stroke-width="3" stroke-linejoin="round"><path d="m0 19 19-17 19 17v28H0Z"/><path d="M19 20c-1 7-8 9-8 15a8 8 0 0 0 16 0c0-4-3-6-4-9 0 4-3 4-3 4s2-6-1-10Z" fill="#a84e13" stroke="none"/></g>
+<text x="116" y="89" font-family="Georgia,serif" font-size="38" fill="#142920">BotHearth</text>
+<text x="1138" y="85" text-anchor="end" font-family="Arial,sans-serif" font-size="20" fill="#526259">bothearth.com</text>
+<path d="M60 125h1080" stroke="#d9ded5"/>
+<g font-family="Georgia,serif" font-size="92"><text x="57" y="250" fill="#142920">Your AI agent.</text><text x="57" y="356" fill="#a84e13">With a computer.</text></g>
+<text x="61" y="422" font-family="Arial,sans-serif" font-size="25" fill="#526259">Give it a task. Watch it work. Review the result.</text>
+<g fill="#f4f4ed" stroke="#d9ded5"><rect x="60" y="480" width="345" height="75" rx="8"/><rect x="427" y="480" width="345" height="75" rx="8"/><rect x="794" y="480" width="345" height="75" rx="8"/></g>
+<g font-family="Arial,sans-serif" font-size="22" fill="#142920"><text x="84" y="525">Research a topic</text><text x="451" y="525">Compare your options</text><text x="818" y="525">Summarize a file</text></g>
+<text x="61" y="600" font-family="Arial,sans-serif" font-size="16" fill="#526259">Free for noncommercial use · Source install on Mac or Linux · Bring your own AI access</text>
 </svg>

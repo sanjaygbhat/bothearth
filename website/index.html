@@ -1,31 +1,41 @@
 <section class="hero">
   <div class="hero-copy">
-    <p class="eyebrow"><span class="ember" aria-hidden="true"></span> A self-hosted computer for AI agents</p>
-    <h1>Your agent.<br>A computer<br><em>of its own.</em></h1>
-    <p class="lead">BotHearth gives your AI agent a browser, shell, and workspace on your Mac or Linux machine. Watch it work. Review its requests. Take the controls when it needs you.</p>
-    <div class="actions"><a class="button" href="{{BASE}}quickstart/">Make yourself at home <span aria-hidden="true">↗</span></a><a class="text-link" href="{{BASE}}how-it-works/">See how it works <span aria-hidden="true">→</span></a></div>
-    <p class="qualification">Alpha · Install from source · Free for noncommercial use</p>
+    <p class="eyebrow"><span class="ember" aria-hidden="true"></span> Meet BotHearth</p>
+    <h1>Your AI agent.<br><em>With a computer.</em></h1>
+    <p class="lead">Give BotHearth a task. It browses websites, works with files, and saves results for you to review. Watch it work and step in when it needs you.</p>
+    <div class="actions"><a class="button" href="{{BASE}}quickstart/">Get BotHearth <span aria-hidden="true">→</span></a><a class="text-link" href="{{BASE}}examples/">See what it can do <span aria-hidden="true">↗</span></a></div>
+    <p class="qualification">Free for noncommercial use. Alpha source install on Mac or Linux.<br>Bring your own AI access. <a href="{{BASE}}faq/#costs">Costs &amp; requirements</a>.</p>
   </div>
-  <aside class="hearth" aria-label="BotHearth at a glance">
-    <div class="hearth-label"><span class="ember" aria-hidden="true"></span> ON YOUR MACHINE <span>01</span></div>
-    <div class="hearth-window"><div class="window-bar"><span></span><span></span><span></span><span class="window-name">A place to get things done</span></div><div class="hearth-scene"><svg viewBox="0 0 240 210" width="240" height="210" fill="none" aria-hidden="true"><path d="M38 103 120 29l82 74v78H38Z" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M93 181v-48a27 27 0 0 1 54 0v48M20 181h200M172 46V27h19v36" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M120 138c-2 12-15 15-15 27a15 15 0 0 0 30 0c0-8-4-12-7-16 0 8-5 8-5 8s3-11-3-19Z" class="flame"/><path d="M66 120h12m-6-6v12M162 120h12m-6-6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><p>A browser. A shell. A workspace.<br><strong>Room for the work, on a host you control.</strong></p></div></div>
-    <div class="hearth-tags"><span>Bring your model</span><span>Watch &amp; take control</span></div>
-    <p class="hearth-foot">Small, inspectable, yours to run.</p>
-  </aside>
+  <figure class="product-shot hero-shot" id="workspace">
+    <div class="shot-label"><span class="ember" aria-hidden="true"></span> BOTHEARTH AT WORK <span>Actual product capture</span></div>
+    <a href="{{BASE}}screenshots/reading-summary.png" aria-label="Open the complete BotHearth reading-log task capture"><img src="{{BASE}}screenshots/reading-summary-detail.png" width="1200" height="540" alt="BotHearth’s completed reading-log task: 70 minutes across three entries, with the original reading.csv and reading-summary.md saved and ready to open." fetchpriority="high" decoding="async"></a>
+    <figcaption>An actual task using the <a href="{{BASE}}examples/#workspace">sample reading log</a>. <a href="{{BASE}}about/#credits">Capture details &amp; usage meter</a>.</figcaption>
+  </figure>
 </section>
-<div class="facts-strip" aria-label="Project facts"><span><strong>Your infrastructure</strong>macOS or Linux + containers</span><span><strong>Your model account</strong>Official Codex or Claude Code CLI</span><span><strong>Source you can read</strong>PolyForm Noncommercial 1.0.0</span></div>
-<section class="section" id="workspace">
-  <div class="section-heading"><div><p class="eyebrow">A clear view of the work</p><h2>From “can you…”<br>to something you can check.</h2></div><p>Start a task in plain language. Follow the activity feed beside its live browser. Inspect the result before you rely on it.</p></div>
-  <figure class="product-shot"><div class="shot-label"><span class="ember" aria-hidden="true"></span> THE TASK WORKSPACE <span>Actual development build</span></div><a href="{{BASE}}screenshots/task-running.png" aria-label="Open the full-size task workspace screenshot"><img src="{{BASE}}screenshots/task-running.png" width="1440" height="900" alt="A running browser task with a step-by-step activity feed, live Chromium view, Take control button, and an estimated tool budget." loading="lazy" decoding="async"></a><figcaption>Unretouched pre-rename development build, 7 September 2026. The dollar meter estimates tool usage; it does not measure a model-provider bill.</figcaption></figure>
-  <div class="feature-grid"><article><span class="feature-number">01 / A separate computer</span><h3>Give it a place to work.</h3><p>A Chromium browser with its own profile. A separate shell container. A configured workspace on your host. Your everyday browser profile is not mounted by default.</p></article><article><span class="feature-number">02 / A human in the loop</span><h3>Step in when it matters.</h3><p>Review new destinations and detected sensitive actions. During human control, model capture is blocked. Approval detection has limits; stay present for sensitive work.</p></article><article><span class="feature-number">03 / A result to inspect</span><h3>Keep the work in view.</h3><p>Follow task steps, review requests, and open saved outputs. Task allowances can pause work. Your provider's own limits and charges still apply.</p></article></div>
-  <p class="section-link"><a href="{{BASE}}security/">Understand the security and privacy boundaries <span aria-hidden="true">→</span></a></p>
+<section class="section" id="start">
+  <div class="section-heading"><div><p class="eyebrow">What will you ask it to do?</p><h2>Something you want to learn.<br>Something you need to sort out.</h2></div><p>A topic to research, options to compare, or a file you want to understand. Give it the starting point and say what you want back.</p></div>
+  <div class="use-case-grid">
+    <a class="use-case" href="{{BASE}}examples/#first-page"><span class="feature-number">RESEARCH A TOPIC</span><h3>Get up to speed.</h3><p>“Read these pages about a topic I’m learning. Make me a brief with the key points and sources.”</p><span class="use-case-result">A brief you can come back to <span aria-hidden="true">↗</span></span></a>
+    <a class="use-case" href="{{BASE}}examples/#review-page"><span class="feature-number">COMPARE YOUR OPTIONS</span><h3>See them side by side.</h3><p>“Compare the options on these pages. Pull out the differences and anything I should check.”</p><span class="use-case-result">A comparison to help you choose <span aria-hidden="true">↗</span></span></a>
+    <a class="use-case" href="{{BASE}}examples/#workspace"><span class="feature-number">UNDERSTAND YOUR FILES</span><h3>Make sense of your week.</h3><p>“Summarize my reading log. Show me where the time went and save the totals.”</p><span class="use-case-result">A useful summary of your own data <span aria-hidden="true">↗</span></span></a>
+  </div>
 </section>
-<section class="section split-section" id="start">
-  <div><p class="eyebrow">Bring a little curiosity</p><h2>A small task.<br>A good place to start.</h2><p class="intro">Start with a public page, no credentials, and a result you can verify. These recipes explain what to ask and how to check the work.</p><a class="text-link" href="{{BASE}}examples/">Try the example tasks <span aria-hidden="true">→</span></a></div>
-  <div class="recipe-list"><a href="{{BASE}}examples/#first-page"><span>01</span><div><h3>Read a page. Save a note.</h3><p>A public page, a source URL, one Markdown file.</p></div><span aria-hidden="true">↗</span></a><a href="{{BASE}}examples/#review-page"><span>02</span><div><h3>Review a page you own.</h3><p>Visible headings and links, with an evidence check.</p></div><span aria-hidden="true">↗</span></a><a href="{{BASE}}examples/#workspace"><span>03</span><div><h3>Turn a small CSV into a summary.</h3><p>A known input, local output, and totals to compare.</p></div><span aria-hidden="true">↗</span></a></div>
+<section class="section">
+  <div class="section-heading"><div><p class="eyebrow">A task, from start to finish</p><h2>You give it the task.<br>It works through the steps.</h2></div><p>BotHearth puts the request, the agent’s actions, and its saved files in one place. Here is a small task you can try yourself.</p></div>
+  <div class="task-example">
+    <p class="example-label">Illustrated example using the sample reading log</p>
+    <div class="task-story">
+      <article><span class="story-step">01 · YOU ASK</span><h3>“Where did my reading time go?”</h3><p>Take my reading log, add up the minutes by topic, and save a summary I can keep.</p><a href="{{BASE}}examples/#workspace">Try it with the sample log <span aria-hidden="true">→</span></a></article>
+      <article><span class="story-step">02 · THE AGENT WORKS</span><h3>You follow along.</h3><ol class="action-list"><li>Reads the entries in the log</li><li>Adds up the time by topic</li><li>Saves the summary as a file</li></ol></article>
+      <article class="example-file"><span class="story-step">03 · YOU REVIEW</span><h3>reading-summary.md</h3><p class="file-heading">Your reading, at a glance</p><p>History · 35 minutes<br>Science · 35 minutes</p><span class="file-source">70 minutes across 3 reading sessions</span></article>
+    </div>
+    <p class="example-caption">The sample has three entries. Open the saved summary and check its totals against your log.</p>
+  </div>
+  <div class="feature-grid">
+    <article><span class="feature-number">WATCH</span><h3>See its computer.</h3><p>Follow the live browser beside a feed of what the agent opens, reads, and saves. Check where it is headed as the task unfolds.</p></article>
+    <article><span class="feature-number">STEP IN</span><h3>Take the controls.</h3><p>Review requests for new sites and detected sensitive actions. When a site needs your sign-in, take control yourself, then give it back to continue.</p></article>
+    <article><span class="feature-number">CHECK</span><h3>Open what it made.</h3><p>When a task saves a file, open it from the result view. Read the summary, inspect the source, or check the numbers before using them.</p></article>
+  </div>
+  <p class="section-link"><a href="{{BASE}}how-it-works/">See how a task works <span aria-hidden="true">→</span></a> <span class="link-divider" aria-hidden="true">·</span> <a href="{{BASE}}security/">Understand the controls and their limits</a></p>
 </section>
-<section class="section split-section">
-  <div><p class="eyebrow">Free to get started</p><h2>No BotHearth bill.<br>No account to create.</h2></div>
-  <div class="prose"><p>BotHearth is free for the noncommercial purposes permitted by the <a href="{{REPOSITORY}}/blob/main/LICENSE">PolyForm Noncommercial 1.0.0 licence</a>. Read the code, build it, and adapt it within those terms.</p><p>You provide the computer and an eligible model account. Provider usage, a container runtime, electricity, or a rented server may cost money. This release includes no commercial-use grant.</p><p>It is an alpha: source installation, one operator, macOS and Linux. Model errors, prompt injection, and website automation restrictions remain real limitations.</p><a class="text-link" href="{{BASE}}faq/">Read the licence, costs, and limits <span aria-hidden="true">→</span></a></div>
-</section>
-<section class="closing"><p class="eyebrow">The door is open</p><h2>Make room for your agent.</h2><p>Build it. Try something small. Tell us what happened.</p><div class="actions"><a class="button" href="{{BASE}}quickstart/">Read the quickstart <span aria-hidden="true">→</span></a><a class="text-link" href="{{BASE}}about/">Meet the project</a></div></section>
+<section class="closing"><p class="eyebrow">Your next task starts here</p><h2>Give your agent<br>something to do.</h2><p>Set up BotHearth, connect your model account, and try a task of your own.</p><div class="actions"><a class="button" href="{{BASE}}quickstart/">Get BotHearth <span aria-hidden="true">→</span></a><a class="text-link" href="{{BASE}}examples/">Choose a first task</a></div><p class="closing-note">Free for uses permitted by <a href="{{BASE}}faq/#licence">PolyForm Noncommercial</a>. Source installation on Mac or Linux; model access is separate.</p></section>

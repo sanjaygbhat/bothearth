@@ -34,7 +34,9 @@ SITE_URL=https://sanjaygbhat.github.io/bothearth/ npm run site:check
 
 The website uses a text/SVG BotHearth wordmark, the existing warm palette, a locally served Fraunces font, and system interface fonts. `social-preview.svg` is the editable 1200×630 vector source for the committed `social-preview.png`. No external font or image service is used.
 
-Only `task-running.png` and `needs-you.png` are deployed. They are unretouched pre-rename development captures from 7 September 2026. Captions identify the old labels and estimated usage meter. Other historical screenshots are not launch assets.
+The main page introduces BotHearth through a task, the agent's visible work, and its saved result. Keep setup requirements beside the entry point and detailed implementation/licence answers in the linked guides. The reading-log illustration is labeled as an example and uses the exact sample totals from the examples page.
+
+The homepage and repository README use `reading-summary-detail.png`, an actual 1200×540 viewport capture of the reading-log result on 8 September 2026, linked to the complete `reading-summary.png` capture. The task saved a correct 70-minute summary and the original three-row CSV. The approval screenshot `needs-you.png` and retained `task-running.png` asset are pre-rename app captures from 7 September. All image bytes are unretouched; captions link to provenance and usage-meter details. Other historical screenshots are not deployed assets.
 
 ## Publish the informational site with GitHub Pages
 

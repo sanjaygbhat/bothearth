@@ -1,6 +1,6 @@
 # Quickstart
 
-BotHearth runs on your own machine. Start it from a terminal and use it in your browser — that is the path below, and it works on macOS and on Linux. On a Mac you can also build an optional native window; that comes after. Your phone can watch and take over either one.
+Give BotHearth a task, watch its computer, and open the files it saves. This guide takes you from a source install on Mac or Linux to your first task. You’ll connect your own model account and use BotHearth in a browser; the optional Mac window and paired phone access come later.
 
 BotHearth is the public name of the project developed as ModelBot. The `bothearth` command and existing `modelbot` alias run the same CLI. Configuration files, environment variables, image names, local `ModelBot` directories, and `ModelBot.app` keep their existing names so installations continue to work.
 
