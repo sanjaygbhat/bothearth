@@ -1,0 +1,61 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  MODELBOT_NO_OPEN: '1'
+  CI: '1'
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Source checks for contributors; container acceptance is a separate local release gate.
+  checks:
+    name: node ${{ matrix.node }} on ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            computer-server/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix computer-server --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test:unit
+      - run: npm run test:contracts
+
+  # Check the optional development Mac shell without distributing a binary.
+  macos-app:
+    name: macOS app
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # Ad-hoc signed: no signing identity and no secrets are used in CI.
+      - run: npm run app:mac
+      # Source launch: verify the native shell without distributing an unsigned app.

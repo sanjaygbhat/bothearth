@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "seq": 1,
+  "ts": 0,
+  "mime": "image/jpeg",
+  "mode": "agent",
+  "epoch": 1,
+  "target": "p0",
+  "viewport": {
+    "w": 800,
+    "h": 600,
+    "dpr": 1
+  },
+  "meta": {
+    "offsetTop": 0,
+    "pageScaleFactor": 1,
+    "deviceWidth": 800,
+    "deviceHeight": 600,
+    "scrollOffsetX": 0,
+    "scrollOffsetY": 0
+  }
+}

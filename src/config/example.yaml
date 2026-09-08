@@ -1,0 +1,95 @@
+# ARCHITECTURE §3 example. routines nested under scheduler (ARCH indent typo fixed).
+version: 1
+bind: 127.0.0.1
+port: 7777
+auth:
+  mcp_token_env: MODELBOT_TOKEN
+data_dir: ~/ModelBot
+updates:
+  check: false
+mode: supervised
+policy:
+  gates: [external_send, payment, upload, delete, secret_entry, new_domain]
+  categories_path: policy/categories.json
+  tos_risk_path: policy/tos-risk.json
+  strict_allowlist: []
+  kill_switch: true
+  # Seconds an approval card stays answerable before it expires and the task
+  # pauses. Long enough to notice the ask, short enough that a forgotten one
+  # does not hold a computer open.
+  approval_ttl_sec: 900
+sandbox:
+  runtime: auto
+  image_browser: modelbot/browser:dev
+  image_shell: modelbot/shell:dev
+  memory: 2g
+  cpus: 2
+  shm_size: 1g
+  max_computers: 2
+  idle_pause_min: 10
+  workspace_root: ~/ModelBot/computers
+  capabilities: [browser]
+browser:
+  max_tabs: 5
+  default_tabs: 1
+  snapshot_max_chars: 16000
+  screenshot_max: 2
+  screenshot_jpeg_q: 60
+agent:
+  max_steps: 400
+  loop_identical: 3
+  stall_sec: 300
+  spend_cap_usd: 20.00
+  spend_cap_max_usd: 100.00
+  # 0 = no time limit. A positive value pauses a run that reaches it; it never fails one.
+  max_runtime_sec: 0
+  context_tokens_max: 120000
+  compact_at: 0.6
+  token_cap_in: null
+  token_cap_out: null
+adapters:
+  default: openai_compat
+  openai_compat:
+    base_url: https://api.openai.com/v1
+    model: gpt-5.5
+    api_key_vault: providers/openai
+  anthropic:
+    model: claude-sonnet-4-5
+    api_key_vault: providers/anthropic
+mcp:
+  server:
+    http_path: /mcp
+    stdio_bridge: true
+    tool_timeout_sec: 300
+  # Host-side connectors. Tools require UI approval before connector_call.
+  # kinds: mcp_stdio | mcp_http | browser_session (persistent: true named computer).
+  connectors: []
+  # connectors:
+  #   - id: echo
+  #     kind: mcp_stdio
+  #     command: node
+  #     args: ["--experimental-strip-types", "path/to/server.ts"]
+  #     env: [API_TOKEN]   # from vault connectors/echo/API_TOKEN
+  #   - id: remote
+  #     kind: mcp_http
+  #     url: https://mcp.example.com/mcp
+  #     env: [BEARER_TOKEN]
+  #   - id: gmail
+  #     kind: browser_session
+  #     origin: https://mail.google.com
+  #     computer_name: gmail-personal
+  #     persistent: true
+  #     notes: "Use takeover for 2FA; cookies stay on the computer profile."
+takeover:
+  ttl_sec: 600
+  notify: []
+scheduler:
+  enabled: true
+  routines: []
+remote:
+  access: tailscale
+audit:
+  path: ~/ModelBot/audit.jsonl
+vault:
+  path: ~/ModelBot/vault.enc
+  keychain: auto

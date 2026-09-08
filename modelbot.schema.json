@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://modelbot.schema.json",
+  "title": "modelbot.yaml",
+  "description": "ModelBot daemon config (ARCHITECTURE \u00a73). Every key is optional: src/config/load.ts fills unset keys from its defaults before validation, so an empty modelbot.yaml is valid. Required columns below describe the config after defaults are applied.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "bind": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mcp_token_env": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data_dir": {
+      "type": "string"
+    },
+    "updates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "supervised",
+        "strict"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "external_send",
+              "payment",
+              "upload",
+              "delete",
+              "secret_entry",
+              "new_domain"
+            ]
+          }
+        },
+        "categories_path": {
+          "type": "string"
+        },
+        "tos_risk_path": {
+          "type": "string"
+        },
+        "strict_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kill_switch": {
+          "type": "boolean"
+        },
+        "approval_ttl_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds an approval stays answerable before it expires and the task pauses."
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "orbstack",
+            "colima",
+            "docker",
+            "podman"
+          ]
+        },
+        "image_browser": {
+          "type": "string"
+        },
+        "image_shell": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        },
+        "cpus": {
+          "type": "number"
+        },
+        "shm_size": {
+          "type": "string"
+        },
+        "max_computers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "idle_pause_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "browser",
+              "shell"
+            ]
+          }
+        }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_tabs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "default_tabs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "snapshot_max_chars": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "screenshot_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "screenshot_jpeg_q": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "loop_identical": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stall_sec": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "spend_cap_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "What one task is given when the request names no budget."
+        },
+        "spend_cap_max_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The most a task request or a resume may ask for; above it the daemon answers E_LIMIT."
+        },
+        "max_runtime_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds of wall clock one run may take before it pauses; 0 (the default) means no time limit. A run that reaches it pauses with failure_kind max_runtime and keeps its receipt; POST /api/v1/tasks/:id/resume with a larger max_runtime_sec carries it on. It never fails a task."
+        },
+        "context_tokens_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compact_at": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "token_cap_in": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "token_cap_out": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/adapterEndpoint"
+      },
+      "properties": {
+        "default": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registered adapter name. Built-in: openai_compat, anthropic. A third-party adapter registers its own name."
+        },
+        "openai_compat": {
+          "$ref": "#/$defs/adapterEndpoint"
+        },
+        "anthropic": {
+          "$ref": "#/$defs/adapterEndpoint"
+        }
+      },
+      "description": "AI connection. `default` names a registered adapter (see docs/EXTENDING.md)."
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "http_path": {
+              "type": "string"
+            },
+            "stdio_bridge": {
+              "type": "boolean"
+            },
+            "tool_timeout_sec": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "connectors": {
+          "type": "array"
+        }
+      }
+    },
+    "takeover": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ttl_sec": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "notify": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "routines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "cron",
+              "task",
+              "notify_on"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "cron": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              },
+              "notify_on": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fail",
+                    "done"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "type": "string"
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "public_origin": {
+          "type": "string",
+          "pattern": "^https://[^/]+/?$",
+          "description": "Canonical HTTPS origin of the trusted reverse proxy; daemon remains on loopback."
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "vault": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "keychain": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "passphrase"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "adapterEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "api_key_vault": {
+          "type": "string"
+        },
+        "api_key_env": {
+          "type": "string"
+        },
+        "price_per_mtok_in": {
+          "type": "number"
+        },
+        "price_per_mtok_out": {
+          "type": "number"
+        },
+        "extra": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

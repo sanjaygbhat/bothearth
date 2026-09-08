@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/connector_call.json",
+  "title": "connector_call",
+  "description": "Invoke an approved host-side connector tool.",
+  "type": "object",
+  "properties": {
+    "connector_id": {
+      "type": "string"
+    },
+    "tool": {
+      "type": "string"
+    },
+    "arguments": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "connector_id",
+    "tool",
+    "arguments"
+  ],
+  "additionalProperties": false
+}

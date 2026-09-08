@@ -1,0 +1,71 @@
+{
+  "note": "Frozen canonical JSON of audit hash payloads. Chain v stays 1; byte-identical with pre-JCS JSON.stringify(sorted-keys) for these records (no integer-index keys).",
+  "payloads": [
+    {
+      "payload": {
+        "v": 1,
+        "seq": 1,
+        "ts": "2026-09-02T12:00:00.000Z",
+        "type": "task.started",
+        "task_id": "t_1",
+        "computer_id": "c_1",
+        "body": {},
+        "prev_hash": "genesis"
+      },
+      "canonical": "{\"body\":{},\"computer_id\":\"c_1\",\"prev_hash\":\"genesis\",\"seq\":1,\"task_id\":\"t_1\",\"ts\":\"2026-09-02T12:00:00.000Z\",\"type\":\"task.started\",\"v\":1}"
+    },
+    {
+      "payload": {
+        "v": 1,
+        "seq": 2,
+        "ts": "2026-09-02T12:00:01.000Z",
+        "type": "tool.call",
+        "task_id": "t_1",
+        "computer_id": "c_1",
+        "body": { "tool": "browser_navigate" },
+        "prev_hash": "PLACEHOLDER"
+      },
+      "canonical": "{\"body\":{\"tool\":\"browser_navigate\"},\"computer_id\":\"c_1\",\"prev_hash\":\"PLACEHOLDER\",\"seq\":2,\"task_id\":\"t_1\",\"ts\":\"2026-09-02T12:00:01.000Z\",\"type\":\"tool.call\",\"v\":1}"
+    },
+    {
+      "payload": {
+        "v": 1,
+        "seq": 3,
+        "ts": "2026-09-02T12:00:02.000Z",
+        "type": "task.completed",
+        "task_id": "t_1",
+        "computer_id": "c_1",
+        "body": { "status": "success" },
+        "prev_hash": "PLACEHOLDER"
+      },
+      "canonical": "{\"body\":{\"status\":\"success\"},\"computer_id\":\"c_1\",\"prev_hash\":\"PLACEHOLDER\",\"seq\":3,\"task_id\":\"t_1\",\"ts\":\"2026-09-02T12:00:02.000Z\",\"type\":\"task.completed\",\"v\":1}"
+    },
+    {
+      "payload": {
+        "v": 1,
+        "seq": 2,
+        "ts": "2026-09-02T12:00:01.000Z",
+        "type": "takeover.gap",
+        "task_id": "t1",
+        "body": {
+          "t0": "2026-09-02T12:00:00.000Z",
+          "t1": "2026-09-02T12:01:00.000Z",
+          "frames_suppressed": true
+        },
+        "prev_hash": "genesis"
+      },
+      "canonical": "{\"body\":{\"frames_suppressed\":true,\"t0\":\"2026-09-02T12:00:00.000Z\",\"t1\":\"2026-09-02T12:01:00.000Z\"},\"prev_hash\":\"genesis\",\"seq\":2,\"task_id\":\"t1\",\"ts\":\"2026-09-02T12:00:01.000Z\",\"type\":\"takeover.gap\",\"v\":1}"
+    },
+    {
+      "payload": {
+        "v": 1,
+        "seq": 2,
+        "ts": "2026-09-02T12:00:01.000Z",
+        "type": "tool.call",
+        "body": { "tool": "browser_click" },
+        "prev_hash": "hmac-sha256:dead"
+      },
+      "canonical": "{\"body\":{\"tool\":\"browser_click\"},\"prev_hash\":\"hmac-sha256:dead\",\"seq\":2,\"ts\":\"2026-09-02T12:00:01.000Z\",\"type\":\"tool.call\",\"v\":1}"
+    }
+  ]
+}

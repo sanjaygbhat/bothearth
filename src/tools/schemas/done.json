@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/done.json",
+  "title": "done",
+  "description": "Mark the task finished.",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "status": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "success",
+        "fail",
+        "cancelled",
+        null
+      ]
+    }
+  },
+  "required": [
+    "summary",
+    "status"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,370 @@
+/* ============================================================================
+   ModelBot — design tokens
+   Plain CSS custom properties. No Tailwind, no preprocessor, no build step.
+
+   Colour space: OKLCH throughout. Every value is inside the sRGB gamut and
+   contrast-checked against the ground it is used on.
+
+   Theming contract, in this order:
+     :root                                     -> complete light palette
+     @media (prefers-color-scheme: dark)        -> guarded by :not([data-theme="light"])
+     :root[data-theme="dark"]                   -> explicit override wins
+   Only the semantic layer is redefined per theme. Sizes, spacing, radii,
+   motion and z-index are theme-independent and are declared once.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. COLOUR — light (default)
+   ------------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces. Warm paper, never pure white. Tinted toward the brand green. */
+  --color-bg:            oklch(98.4% 0.006 106);   /* #FAFAF5 app ground     */
+  --color-surface:       oklch(96.6% 0.009 108);   /* #F4F4ED sidebar, wells */
+  --color-elevated:      oklch(99.4% 0.004 106);   /* #FDFDFA cards, menus   */
+
+  /* Text. Deep evergreen ink, never pure black. */
+  --color-text:          oklch(26% 0.032 165);     /* #142920  14.67:1 on bg */
+  --color-muted:         oklch(48% 0.024 162);     /* #526259   6.17:1 on bg */
+  --color-border:        oklch(89.5% 0.014 130);   /* #D9DED5  decorative    */
+  --color-border-strong: oklch(80% 0.018 140);     /* dividers that must read */
+
+  /* Accent — ember. The only warm hue in the system; keep it to ~10% of
+     visual weight. It carries white text. */
+  --color-accent:        oklch(53% 0.135 48);      /* #A84E13   5.32:1 on bg */
+  --color-accent-hover:  oklch(47% 0.118 46);      /* #8E4116   6.85:1 on bg */
+  --color-on-accent:     oklch(99% 0.006 100);     /* #FDFCF7  5.42:1 on accent */
+  --color-accent-wash:   oklch(96% 0.022 60);      /* tinted ember backdrop  */
+
+  /* Ink fill — a primary button that is waiting for its input. A primary is
+     never grey: the grey `:disabled` treatment reads as broken on the app's
+     most important screen. It keeps a filled weight in ink while it waits, and
+     the ember arrives the moment the control can act — so the ember lives on
+     ONE thing per screen, the button you are meant to press. */
+  --color-ink-fill:      oklch(48% 0.024 162);     /* #526259  muted ink     */
+  --color-on-ink:        oklch(99% 0.006 100);     /* #FDFCF7  6.10:1 on ink */
+
+  /* Semantic. Success reuses the brand green: "done" should feel like rest. */
+  --color-success:       oklch(46% 0.100 158);     /* #136842   6.47:1 on bg */
+  --color-success-wash:  oklch(96% 0.022 158);
+  --color-warn:          oklch(52% 0.095 78);      /* #87611E   5.34:1 on bg */
+  --color-warn-wash:     oklch(96.5% 0.020 82);
+  --color-danger:        oklch(50% 0.160 25);      /* #AC3031   6.23:1 on bg */
+  --color-danger-wash:   oklch(96% 0.020 25);
+
+  /* Focus. Distinct from accent by lightness so a focused primary button
+     still shows its ring. Verified >=3:1 against bg and surface. */
+  --color-focus:         oklch(55% 0.132 50);      /* #AD561B   4.87:1 on bg */
+
+  /* Live-view chrome. The browser frame the operator watches. */
+  --color-view-frame:    oklch(89.5% 0.014 130);
+  --color-view-human:    oklch(53% 0.135 48);      /* frame while YOU drive  */
+
+  /* Remote page inside the live view. It shows a real website, so it does NOT
+     follow the app theme in either direction — only its chrome does. */
+  --color-screen:        oklch(99% 0.004 106);
+  --color-screen-ink:    oklch(30% 0.020 160);
+
+  /* Scrim behind the settings sheet. */
+  --color-overlay:       oklch(26% 0.032 165 / 0.28);
+
+  /* Shadows: layered and tinted with the ink hue, never neutral black.
+     Two layers each — a tight contact shadow plus a wide soft one. */
+  --shadow-sm:
+    0 1px 1px oklch(26% 0.032 165 / 0.04),
+    0 1px 3px oklch(26% 0.032 165 / 0.05);
+  --shadow-md:
+    0 2px 4px -1px oklch(26% 0.032 165 / 0.05),
+    0 5px 12px -2px oklch(26% 0.032 165 / 0.07);
+  --shadow-lg:
+    0 4px 8px -2px oklch(26% 0.032 165 / 0.05),
+    0 14px 30px -6px oklch(26% 0.032 165 / 0.10);
+  --shadow-xl:
+    0 8px 16px -4px oklch(26% 0.032 165 / 0.06),
+    0 30px 64px -12px oklch(26% 0.032 165 / 0.14);
+  --hairline-top: none;                            /* dark mode only         */
+}
+
+/* ---------------------------------------------------------------------------
+   2. COLOUR — dark
+   Not an inversion. Depth comes from surfaces getting *lighter*, shadows do
+   almost nothing, and the accent flips to a light ember carrying dark text.
+   ------------------------------------------------------------------------ */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-bg:            oklch(17.5% 0.014 168);  /* #0A130F               */
+    --color-surface:       oklch(21.5% 0.015 168);  /* #131C18  "higher"     */
+    --color-elevated:      oklch(25.5% 0.014 168);  /* #1C2521  "higher yet" */
+
+    --color-text:          oklch(94% 0.010 108);    /* #EBECE4 15.88:1 on bg */
+    --color-muted:         oklch(73% 0.016 140);    /* #A3AAA1  7.96:1 on bg */
+    --color-border:        oklch(31% 0.016 166);    /* #29332E               */
+    --color-border-strong: oklch(40% 0.018 166);
+
+    --color-accent:        oklch(74% 0.135 60);     /* #E8954A  7.93:1 on bg */
+    --color-accent-hover:  oklch(79% 0.130 62);     /* #F6A65D  9.51:1 on bg */
+    --color-on-accent:     oklch(20% 0.030 60);     /* #201308  7.62:1 on accent */
+    --color-accent-wash:   oklch(27% 0.045 55);
+    --color-ink-fill:      oklch(42% 0.020 166);
+    --color-on-ink:        oklch(96% 0.008 108);
+
+    --color-success:       oklch(76% 0.120 158);    /* #68C894  9.26:1 on bg */
+    --color-success-wash:  oklch(26% 0.040 158);
+    --color-warn:          oklch(82% 0.120 82);     /* #EBBC63 10.74:1 on bg */
+    --color-warn-wash:     oklch(28% 0.040 82);
+    --color-danger:        oklch(70% 0.150 27);     /* #ED756A  6.63:1 on bg */
+    --color-danger-wash:   oklch(27% 0.050 27);
+
+    --color-focus:         oklch(78% 0.140 58);     /* #F99F55  9.12:1 on bg */
+
+    --color-view-frame:    oklch(31% 0.016 166);
+    --color-view-human:    oklch(74% 0.135 60);
+
+    --color-screen:        oklch(99% 0.004 106);
+    --color-screen-ink:    oklch(30% 0.020 160);
+    --color-overlay:       oklch(10% 0.010 168 / 0.55);
+
+    /* Dark elevation reads through surface lightness plus a top hairline.
+       Shadows shrink to a contact shadow so floating menus still detach. */
+    --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.40);
+    --shadow-md: 0 2px 6px oklch(0% 0 0 / 0.45);
+    --shadow-lg: 0 8px 20px -4px oklch(0% 0 0 / 0.55);
+    --shadow-xl: 0 18px 44px -10px oklch(0% 0 0 / 0.65);
+    --hairline-top: inset 0 1px 0 oklch(100% 0 0 / 0.06);
+  }
+}
+
+/* Explicit dark choice must win in both directions. Values duplicated on
+   purpose: a token whose only definition lives in a media query breaks the
+   in-app theme switch. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg:            oklch(17.5% 0.014 168);
+  --color-surface:       oklch(21.5% 0.015 168);
+  --color-elevated:      oklch(25.5% 0.014 168);
+
+  --color-text:          oklch(94% 0.010 108);
+  --color-muted:         oklch(73% 0.016 140);
+  --color-border:        oklch(31% 0.016 166);
+  --color-border-strong: oklch(40% 0.018 166);
+
+  --color-accent:        oklch(74% 0.135 60);
+  --color-accent-hover:  oklch(79% 0.130 62);
+  --color-on-accent:     oklch(20% 0.030 60);
+  --color-accent-wash:   oklch(27% 0.045 55);
+  --color-ink-fill:      oklch(42% 0.020 166);
+  --color-on-ink:        oklch(96% 0.008 108);
+
+  --color-success:       oklch(76% 0.120 158);
+  --color-success-wash:  oklch(26% 0.040 158);
+  --color-warn:          oklch(82% 0.120 82);
+  --color-warn-wash:     oklch(28% 0.040 82);
+  --color-danger:        oklch(70% 0.150 27);
+  --color-danger-wash:   oklch(27% 0.050 27);
+
+  --color-focus:         oklch(78% 0.140 58);
+
+  --color-view-frame:    oklch(31% 0.016 166);
+  --color-view-human:    oklch(74% 0.135 60);
+
+  --color-screen:        oklch(99% 0.004 106);
+  --color-screen-ink:    oklch(30% 0.020 160);
+  --color-overlay:       oklch(10% 0.010 168 / 0.55);
+
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.40);
+  --shadow-md: 0 2px 6px oklch(0% 0 0 / 0.45);
+  --shadow-lg: 0 8px 20px -4px oklch(0% 0 0 / 0.55);
+  --shadow-xl: 0 18px 44px -10px oklch(0% 0 0 / 0.65);
+  --hairline-top: inset 0 1px 0 oklch(100% 0 0 / 0.06);
+}
+
+/* ---------------------------------------------------------------------------
+   3. TYPE
+   Two families, real contrast between them: a warm variable serif for the few
+   display moments, the macOS system sans for everything operational.
+   Fixed rem scale (ratio 1.25) — app UIs need spatial predictability, so no
+   fluid clamp() here. The marketing site may add clamp() for display only.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --font-display: "Fraunces", ui-serif, Georgia, "Times New Roman", serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+             "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  /* Scale, anchored at 1rem = 16px, ratio 1.25 (major third).
+     --text-ui (14px) is deliberately off-scale: it is the native macOS
+     chrome size. Everything a person READS is >= 16px. */
+  --text-caption:  0.8rem;      /* 12.8px  timestamps, legal, meta          */
+  --text-ui:       0.875rem;    /* 14px    labels, sidebar, buttons, menus  */
+  --text-body:     1rem;        /* 16px    task output, messages, prose     */
+  --text-heading:  1.25rem;     /* 20px    section headings                 */
+  --text-title:    1.5625rem;   /* 25px    view titles                      */
+  --text-display:  2.4414rem;   /* 39px    first run, empty states only     */
+
+  --leading-display: 1.08;
+  --leading-title:   1.2;
+  --leading-heading: 1.3;
+  --leading-body:    1.58;
+  --leading-ui:      1.43;
+  --leading-caption: 1.45;
+  /* One value for both themes. Running different leading per theme put the
+     same content on two vertical rhythms, drifting pages several pixels
+     apart. */
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  --tracking-display: -0.022em;
+  --tracking-title:   -0.018em;
+  --tracking-heading: -0.012em;
+  --tracking-caps:     0.06em;  /* small all-caps labels only               */
+}
+
+/* ---------------------------------------------------------------------------
+   4. SPACE — 4pt base. Section rhythm (24/48/96) is a multiple of the body
+   line box (16px * 1.5 = 24px), so type and space share one grid.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --space-3xs: 0.25rem;   /*  4px */
+  --space-2xs: 0.5rem;    /*  8px */
+  --space-xs:  0.75rem;   /* 12px */
+  --space-sm:  1rem;      /* 16px */
+  --space-md:  1.5rem;    /* 24px */
+  --space-lg:  2rem;      /* 32px */
+  --space-2xl: 4rem;      /* 64px */
+  --space-3xl: 6rem;      /* 96px */
+
+  --tap-target: 44px;     /* minimum hit area, visual size may be smaller   */
+}
+
+/* ---------------------------------------------------------------------------
+   5. RADII — tuned to sit beside native macOS window and control curvature.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --radius-xs:   4px;    /* tags, chips, inline code                        */
+  --radius-sm:   6px;    /* inputs, small buttons                           */
+  --radius-md:  10px;    /* buttons, menu items — matches macOS controls    */
+  --radius-lg:  14px;    /* cards, wells, the live-view frame               */
+  --radius-xl:  20px;    /* sheets, the first-run panel                     */
+  --radius-full: 999px;  /* pills, status dots, avatars                     */
+}
+
+/* ---------------------------------------------------------------------------
+   6. MOTION
+   A keyframe animation is a budgeted thing, not a default. The whole app
+   declares five — rise, wipe, unwipe, approval-arrive, draw — plus the
+   first-run reveal and the Settings sheet, which would otherwise read as a
+   rendering fault. Everything else is instant, or a colour or transform hint
+   at --dur-fast. `prefers-reduced-motion: reduce` collapses every duration
+   below to 0.01ms, which turns all of them off.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --dur-fast:    120ms;   /* press, toggle, colour change                   */
+  --dur-base:    200ms;   /* hover, tooltip, state change                   */
+  --dur-slow:    320ms;   /* menu, drawer, layout change                    */
+  --dur-entrance: 480ms;  /* first-run reveal only                          */
+  --dur-exit:    150ms;   /* exits run at ~75% of their entrance            */
+
+  /* Exponential ease-outs. No bounce, no elastic — real objects decelerate. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);    /* default            */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-quart:  cubic-bezier(0.5, 0, 0.75, 0);    /* leaving            */
+
+  --stagger-step: 60ms;   /* animation-delay: calc(var(--i) * step)         */
+  --stagger-max:  4;      /* never stagger more than this many items        */
+}
+
+/* ---------------------------------------------------------------------------
+   7. FOCUS
+   Two-ring box-shadow: an inner ring in the current background punches the
+   ring away from the control so it reads on any surface, including on top of
+   a filled accent button. Pair with :focus-visible, never remove it.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --focus-width:  2px;
+  --focus-offset: 2px;
+  --focus-ring:
+    0 0 0 var(--focus-offset) var(--color-bg),
+    0 0 0 calc(var(--focus-offset) + var(--focus-width)) var(--color-focus);
+}
+
+/* ---------------------------------------------------------------------------
+   8. Z-INDEX — semantic ladder. Never write a bare number in a component.
+   --z-takeover sits above everything: when a person has taken control, that
+   status must never be occluded by a toast or a tooltip.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --z-raised:   10;
+  --z-sticky:  200;
+  --z-backdrop:300;
+  --z-modal:   400;
+  --z-toast:   500;
+  --z-takeover:700;
+}
+
+/* ---------------------------------------------------------------------------
+   9. REDUCED MOTION
+   Collapse spatial movement, keep state legible.
+   ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast:     0.01ms;
+    --dur-base:     0.01ms;
+    --dur-slow:     0.01ms;
+    --dur-entrance: 0.01ms;
+    --dur-exit:     0.01ms;
+    --stagger-step: 0ms;
+    --stagger-max:  0;
+  }
+
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   10. FRAME METRICS
+   The window frame constants, as tokens rather than literals, so every view
+   shares exactly one left edge and one right edge with the titlebar chrome.
+   shell.css re-declares the gutters at <=620px; because the views read the
+   token rather than the number, they all narrow together.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --titlebar-h:     52px;   /* transparent-titlebar drag region, every width  */
+  --inset-traffic:  78px;   /* clearance the macOS traffic lights need        */
+  --gutter-left:    84px;   /* content left edge: wordmark-aligned, clear of  */
+                            /* the traffic lights (84 > 78)                   */
+  --gutter-right:   64px;   /* one right edge, shared with the titlebar       */
+  --gutter-phone:   16px;
+
+  --col-task:      700px;   /* task column max width on home                  */
+  --col-recent:    292px;   /* Recent column                                  */
+  --col-live:      520px;   /* live view column on the task view              */
+  --sheet-w:       904px;   /* settings sheet                                 */
+  --sheet-h:       592px;
+
+  --control-h:      38px;   /* desktop button/chip height (hit area padded)   */
+  --control-h-sm:   32px;
+  --control-h-touch: 44px;  /* <=620px: the visual height too                 */
+  --icon-btn:       30px;
+
+  --hairline: 1px;
+}

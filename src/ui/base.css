@@ -1,0 +1,607 @@
+/* ============================================================================
+   ModelBot — base sheet
+   Reset, web fonts, typography roles, focus, and the shared control primitives
+   (.btn, .chip, .iconbtn, .dot, kbd, .caps, .meter) that every view reuses.
+
+   Load order is tokens.css -> base.css -> shell.css -> <view>.css. Nothing
+   here hard-codes a colour, a size or a duration: every value is a token from
+   tokens.css, so a theme change is a token change.
+
+   View sheets import nothing; they just use these class names. If a primitive
+   is missing here, it belongs here — do not redefine .btn in a view sheet.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. WEB FONT — Fraunces (variable weight axis), bundled locally.
+   The app is served under `script-src 'self'` with no external origins, so the
+   font ships in the bundle at /fonts/*.woff2 rather than from a CDN. Latin and
+   Latin-Ext are split on unicode-range so the common case downloads 36 KB.
+   Licence: SIL OFL 1.1, see fonts/Fraunces-OFL.txt.
+   ------------------------------------------------------------------------ */
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/fraunces-latin-wght.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/fraunces-latin-ext-wght.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+/* ---------------------------------------------------------------------------
+   2. RESET
+   ------------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* The window scrolls nothing; each region owns its own scroller. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+img,
+canvas,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+/* Icons are sized by their own attributes. `max-width: 100%` on an SVG makes
+   its width depend on a track that is sized from the SVG, and the circular
+   resolution collapses the icon — never add it here. */
+svg {
+  display: block;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   3. TYPOGRAPHY ROLES
+   Fraunces carries the title — one of the few moments a person reads rather
+   than operates. Everything operational is the system UI face, at the size
+   macOS chrome actually uses, and is styled by element rather than by role.
+   ------------------------------------------------------------------------ */
+
+.t-title {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: var(--weight-medium);
+  margin: 0;
+  text-wrap: pretty;
+}
+
+/* Small all-caps section label. Never a heading — it labels a region. */
+.caps {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  font-weight: var(--weight-semibold);
+  color: var(--color-muted);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+/* Anything timed aligns on the digit. */
+time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Element defaults, so unclassed markup still lands on the scale. */
+h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--text-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  font-weight: var(--weight-semibold);
+  margin: 0;
+}
+
+h3 {
+  font-size: var(--text-body);
+  line-height: var(--leading-heading);
+  font-weight: var(--weight-semibold);
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration-color: color-mix(in oklch, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+::selection {
+  background: var(--color-accent-wash);
+  color: var(--color-text);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   4. FOCUS
+   Visible on every focusable thing, including the composer. `outline` rather
+   than the two-stop box-shadow by default: it follows border-radius and never
+   collides with a control's own shadow. --focus-ring stays available for
+   controls that need the ring punched away from a filled accent ground.
+   Nothing in this codebase may write `outline: none` without a replacement.
+   ------------------------------------------------------------------------ */
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+/* A composer/well is focused through its child textarea: a ring on the textarea
+   alone sits inside the box and reads as a second border, so the indicator goes
+   round the well instead. ONLY the textarea delegates. Every other control
+   inside the well keeps its own ring — the well is bigger than the button in
+   it, and a ring that does not say which control has focus is not a focus
+   indicator (WCAG 2.4.7).
+
+   It is not the 2px ember ring: the composer autofocuses on launch, so that
+   made a 160px box the loudest object on every screen while the button you must
+   press stayed quiet. The replacement is still measurable — the well's own 1px
+   border turns accent (>=3:1 against both grounds, WCAG 1.4.11) and gains a
+   soft outer glow. `outline: none` here is legal precisely because of that
+   replacement; see the rule above this block. */
+.focus-well:has(textarea:focus-visible) {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-md), 0 0 0 4px var(--color-accent-wash);
+}
+
+.focus-well textarea:focus-visible {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------------------
+   5. CONTROL PRIMITIVES
+   ------------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  position: relative;
+  height: var(--control-h);
+  padding: 0 15px;
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+/* Hit area padded to 44px without growing the visual control. */
+.btn::after,
+.chip::after,
+.iconbtn::after,
+.set-rail button::after,
+.set-links a::after,
+.set-seg button::after {
+  content: "";
+  position: absolute;
+  inset: calc((var(--control-h-touch) - 100%) / -2) 0;
+  min-height: var(--control-h-touch);
+}
+
+.btn:hover {
+  background: var(--color-surface);
+}
+
+.btn:active {
+  background: var(--color-border);
+}
+
+/* The primary is the one ember object on a screen and the one control sized to
+   its importance: 44px at every width, not the 38px the rest of the row uses.
+   `.btn.sm` still wins on height for the small inline primaries, because it is
+   declared later at equal specificity. */
+.btn.primary {
+  height: var(--control-h-touch);
+  padding: 0 19px;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+/* A filled primary must not wear a ring OUTSIDE its own fill: ember, a white
+   gap, then an ember ring is a bullseye. The ring goes inside the fill in the
+   on-accent colour — 5.42:1 against it, unmistakable, and it changes nothing
+   about the button's footprint. */
+.btn.primary:focus-visible {
+  outline-color: var(--color-on-accent);
+  outline-offset: calc(-1 * var(--focus-width) - 2px);
+}
+
+.btn.primary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* A primary waiting for its input is NOT disabled chrome. It keeps a filled
+   weight in ink so the eye still lands on it and the button still reads as the
+   thing to press; the ember arrives the moment the control can act. This must
+   beat the generic `.btn[aria-disabled]` grey below, which on the home screen
+   made `Start task` look broken. */
+.btn.primary[aria-disabled="true"],
+.btn.primary:disabled {
+  background: var(--color-ink-fill);
+  border-color: var(--color-ink-fill);
+  color: var(--color-on-ink);
+  cursor: default;
+}
+
+.btn.ghost {
+  border-color: transparent;
+  color: var(--color-muted);
+}
+
+.btn.ghost:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.btn.danger {
+  border-color: transparent;
+  color: var(--color-danger);
+}
+
+.btn.danger:hover {
+  background: var(--color-danger-wash);
+}
+
+.btn.sm {
+  height: var(--control-h-sm);
+  padding: 0 12px;
+  font-size: var(--text-caption);
+}
+
+/* Disabled states use a real token pair and always say why: never opacity,
+   which produces an unmeasurable contrast ratio. */
+.btn[aria-disabled="true"],
+.btn:disabled {
+  color: var(--color-muted);
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  cursor: default;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: var(--radius-full);
+  border: var(--hairline) solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart);
+}
+
+.chip:hover {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+}
+
+.chip .sub {
+  color: var(--color-muted);
+}
+
+.iconbtn {
+  display: grid;
+  place-items: center;
+  position: relative;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+.iconbtn:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* Status: a dot AND a word AND a position — colour is never the only signal. */
+.dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  background: var(--color-muted);
+}
+
+.dot.ok {
+  background: var(--color-success);
+}
+
+.dot.run {
+  background: var(--color-accent);
+}
+
+/* "Working" (ember) and "Waiting for you" (warn) are two warm browns, and at
+   6px they are the same amber — two states, one signal, with only the word to
+   tell them apart. The header comment above this block promises colour is never
+   the only signal, so the shape carries it: "working" is solid and filling,
+   "waiting for you" is an open ring — a thing with a hole in it, waiting to be
+   completed. Legible at 6px, and legible without colour vision at all. */
+.dot.warn {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--color-warn);
+}
+
+.dot.danger {
+  background: var(--color-danger);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 19px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  border: var(--hairline) solid var(--color-border);
+  background: var(--color-surface);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+/* The key cap on a filled primary is a border and nothing else. A 16% wash of
+   --color-on-accent used to fill it, and that wash lightened the ground under
+   the glyph enough to take white-on-accent from 5.43:1 down to 3.99:1 — the
+   chip meant to make the key legible was the one thing making it illegible.
+   Measured on the rendered page, not from the token table. */
+.btn.primary kbd {
+  color: var(--color-on-accent);
+  background: transparent;
+  border-color: color-mix(in oklch, var(--color-on-accent) 46%, transparent);
+}
+
+/* Determinate progress only. Never an indeterminate spinner. */
+.meter {
+  height: 4px;
+  max-width: 340px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transform-origin: left;
+  transition: transform var(--dur-slow) var(--ease-out-quart);
+}
+
+.meter.warn > i {
+  background: var(--color-warn);
+}
+
+/* Inputs. A visible <label> is required in the markup — a placeholder is not
+   a label, and placeholder ink is held at the muted token so it still reads. */
+input,
+select,
+textarea {
+  min-width: 0;
+  border: var(--hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-elevated);
+  color: var(--color-text);
+  padding: 9px 11px;
+}
+
+textarea {
+  resize: vertical;
+  line-height: var(--leading-body);
+}
+
+::placeholder {
+  color: var(--color-muted);
+  opacity: 1;
+}
+
+hr {
+  border: 0;
+  border-top: var(--hairline) solid var(--color-border);
+  margin: var(--space-md) 0;
+}
+
+/* ---------------------------------------------------------------------------
+   6. SCROLLBARS — present enough to grab, quiet enough to ignore.
+   ------------------------------------------------------------------------ */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--color-border-strong) 80%, transparent)
+    transparent;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--color-border-strong) 80%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+   7. TOUCH — at phone widths the visual size becomes the hit size.
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 620px) {
+  .btn,
+  .btn.sm,
+  .chip,
+  .iconbtn {
+    min-height: var(--control-h-touch);
+  }
+
+  .iconbtn {
+    width: var(--control-h-touch);
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: var(--text-body); /* < 16px makes iOS Safari zoom on focus */
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   8. MOTION
+   Every entrance in the app is the same six pixels of rise: shared here so the
+   five call sites cannot drift apart. Each keeps its own duration and easing.
+   No `to` keyframe — the element's own styles are the destination, so a rule
+   that changes them later (a card leaving, say) is not pinned by the fill.
+   ------------------------------------------------------------------------ */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   9. REDUCED MOTION
+   tokens.css collapses every duration globally. Determinate progress is the
+   one thing that carries information rather than decoration, so it keeps its
+   transition.
+   ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .meter > i {
+    transition-duration: revert;
+  }
+}

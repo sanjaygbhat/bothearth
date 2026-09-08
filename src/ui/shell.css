@@ -1,0 +1,389 @@
+/* ============================================================================
+   ModelBot — app shell
+   The window frame: the 52px transparent-titlebar band, the brand lockup, the
+   status cluster, the content area every view mounts into, and the toast layer.
+
+   Frame contract, and every view depends on it:
+     * one left edge  — var(--gutter-left),  84px on desktop, 16px on phone
+     * one right edge — var(--gutter-right), 64px on desktop, 16px on phone
+     * the titlebar and the content share both edges, so the wordmark, the H1
+       and the status cluster all sit on the same two verticals
+     * the titlebar is var(--titlebar-h) tall at EVERY width and is a drag
+       region; the first var(--inset-traffic) of it belongs to the macOS
+       traffic lights and must never hold a control
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. WINDOW
+   ------------------------------------------------------------------------ */
+
+.win {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: var(--color-bg);
+}
+
+/* ---------------------------------------------------------------------------
+   2. TITLEBAR
+   The Swift shell uses a transparent titlebar with a full-size content view,
+   so this band sits *under* the real macOS window buttons. `-webkit-app-region`
+   is honoured by the Electron-family hosts and ignored by WKWebView (where the
+   native titlebar already provides the drag); the padding is what actually
+   guarantees the traffic lights have their space in both.
+   ------------------------------------------------------------------------ */
+
+.titlebar {
+  flex: 0 0 var(--titlebar-h);
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding-inline: var(--gutter-left) var(--gutter-right);
+  position: relative;
+  z-index: var(--z-sticky);
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+
+/* Everything interactive opts back out of the drag region. */
+.titlebar button,
+.titlebar a,
+.titlebar input,
+.titlebar [data-no-drag] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* The reserved traffic-light corner. Nothing may be placed in it; the rule is
+   declarative so a future control that overlaps it is visible in review. */
+.titlebar::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: var(--inset-traffic);
+  pointer-events: none;
+}
+
+.tb-spacer {
+  flex: 1 1 auto;
+  min-width: var(--space-sm);
+}
+
+/* --- brand lockup --------------------------------------------------------
+   The mark is referenced by path and painted with currentColor through a mask,
+   so it follows the theme and a change to assets/brand/mark.svg lands here with
+   no code change. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--color-text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.brand-mark {
+  inline-size: 20px;
+  block-size: 20px;
+  flex: 0 0 auto;
+  background: currentColor;
+  -webkit-mask: url("/brand/mark.svg") no-repeat center / contain;
+  mask: url("/brand/mark.svg") no-repeat center / contain;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* --- back + view title (task view) --------------------------------------- */
+.tb-back {
+  display: grid;
+  place-items: center;
+  position: relative;
+  background: none;
+  border: 0;
+  padding: 0;
+  inline-size: var(--icon-btn);
+  block-size: var(--icon-btn);
+  margin-inline-start: -6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+/* The visual button is --icon-btn (30px), which is right for a titlebar; the
+   hit area is padded out to the 44px minimum, the same way .iconbtn does it. */
+.tb-back::after {
+  content: "";
+  position: absolute;
+  inset: calc((var(--tap-target) - 100%) / -2) calc((var(--tap-target) - 100%) / -2);
+  min-height: var(--tap-target);
+  min-width: var(--tap-target);
+}
+
+.tb-back:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.tb-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.tb-title > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- right-hand status cluster ------------------------------------------- */
+.tb-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  flex: 0 0 auto;
+}
+
+#tb-pill {
+  max-width: 42ch;
+}
+
+#tb-pill > .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   3. CONTENT AREA
+   One box. Views own their own scrolling; the frame never scrolls, so a view
+   can pin an action row to its own bottom edge and know the frame will not
+   move it off screen.
+   ------------------------------------------------------------------------ */
+
+.shell-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* The view root is the parent of exactly one mounted view. A view that wants
+   the whole area is `flex: 1; min-height: 0` — never `height: 100vh`, which
+   would double-count the titlebar. */
+.shell-view > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The overlay slot holds the Settings sheet. It takes no space of its own — the
+   scrim and the sheet are both `position: fixed` — so the view underneath keeps
+   its full height and stays painted while the sheet is open. */
+.shell-overlay {
+  flex: 0 0 auto;
+}
+
+/* While a sheet is open the view behind it is `inert`: it cannot be clicked or
+   tabbed into. It stays fully painted, because the whole point of a sheet is
+   that you can still see what you were doing. */
+.shell-view[inert] {
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
+   3b. "YOUR BOT NEEDS YOU"
+   A strip under the titlebar, on every route. Deliberately part of the frame
+   rather than a floating card: it must not be dismissible, must not
+   cover anything, and must still be there when you come back to the window.
+   It sits on the accent wash so it reads as the app talking, not as an error.
+   ------------------------------------------------------------------------ */
+
+.needs-you {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: 10px var(--gutter-right) 10px var(--gutter-left);
+  background: var(--color-accent-wash);
+  border-bottom: var(--hairline) solid var(--color-border);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: var(--color-text);
+}
+
+.needs-you > strong {
+  font-weight: var(--weight-medium);
+}
+
+.needs-you-sub {
+  color: var(--color-muted);
+}
+
+/* The button goes to the right edge, on the same vertical as the status
+   cluster above it. */
+.needs-you > .btn {
+  margin-left: auto;
+}
+
+@media (max-width: 620px) {
+  .needs-you {
+    flex-wrap: wrap;
+    row-gap: var(--space-2xs);
+  }
+
+  .needs-you > .btn {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   4. TOASTS
+   Bottom-centre, above everything except a takeover. Two live regions: status
+   for the quiet kinds, alert for the ones that interrupt.
+   ------------------------------------------------------------------------ */
+
+.toasts {
+  position: fixed;
+  inset-inline: 0;
+  bottom: var(--space-md);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2xs);
+  pointer-events: none;
+}
+
+/* Real boxes, not `display: contents`: a live region needs a box in every
+   engine for the announcement to be reliable. */
+.toast-region {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  max-width: min(52ch, calc(100vw - 2 * var(--gutter-phone)));
+  padding: 10px var(--space-xs);
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--color-border-strong);
+  background: var(--color-elevated);
+  box-shadow: var(--shadow-lg), var(--hairline-top);
+  color: var(--color-text);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  pointer-events: auto;
+  /* No entrance: a toast is usually an error, and an error appears instantly
+     and holds still, because the person needs to read it. */
+}
+
+.toast[data-kind="success"] {
+  border-color: var(--color-success);
+}
+
+.toast[data-kind="warn"] {
+  border-color: var(--color-warn);
+}
+
+.toast[data-kind="error"] {
+  border-color: var(--color-danger);
+}
+
+/* ---------------------------------------------------------------------------
+   5. FIRST-RUN REVEAL
+   Staggered and capped. Applied by shell.ts once per install; tokens.css
+   already collapses it under prefers-reduced-motion.
+   ------------------------------------------------------------------------ */
+
+[data-reveal] > * {
+  animation: rise var(--dur-entrance) var(--ease-out-quart) both;
+  animation-delay: calc(min(var(--i, 0), var(--stagger-max)) * var(--stagger-step));
+}
+
+/* ---------------------------------------------------------------------------
+   6. EMBEDDED CONTROL SURFACE
+   The native and phone clients reuse this same bundle as a bare control
+   surface (`?view=control`). They draw their own chrome, so the frame hides
+   its own rather than nesting two titlebars.
+   ------------------------------------------------------------------------ */
+
+.win[data-chrome="none"] > .titlebar,
+.win[data-chrome="none"] > .toasts {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   7. RESPONSIVE
+   The breakpoints move tokens, not layouts, so every view narrows with the
+   frame instead of each sheet re-deriving the same numbers.
+   ------------------------------------------------------------------------ */
+
+/* 900-1100: the window minimum. Columns collapse inside the views; the frame
+   only tightens its right edge so the status cluster keeps its air. */
+@media (max-width: 1100px) {
+  :root {
+    --gutter-right: var(--space-lg);
+  }
+}
+
+/* 620-900: the settings sheet becomes a bottom sheet. The frame
+   pulls the content edges in toward the wordmark. */
+@media (max-width: 900px) {
+  :root {
+    --gutter-left: var(--space-2xl);
+    --gutter-right: var(--space-md);
+  }
+}
+
+/* <=620 / phone. The traffic lights are gone, so the reserved corner goes with
+   them; gutters drop to 16px, the display size drops to the title size, and
+   controls take their full 44px. */
+@media (max-width: 620px) {
+  :root {
+    --gutter-left: var(--gutter-phone);
+    --gutter-right: var(--gutter-phone);
+    --inset-traffic: 0px;
+    --control-h: var(--control-h-touch);
+    --control-h-sm: 38px;
+    --text-display: var(--text-title);
+  }
+
+  .titlebar {
+    gap: var(--space-2xs);
+  }
+
+  .brand-name {
+    font-size: var(--text-body);
+  }
+
+  /* At this width the pill's model detail is noise; the dot and the provider
+     are the signal. Hidden, not truncated — the full string stays in the
+     button's accessible name. */
+  #tb-pill > .sub {
+    display: none;
+  }
+}

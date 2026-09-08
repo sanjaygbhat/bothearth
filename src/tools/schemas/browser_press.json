@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_press.json",
+  "title": "browser_press",
+  "description": "Press a key chord on the page or focused element.",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "description": "Playwright key name, e.g. Enter, Control+a."
+    },
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional focus target before press."
+    }
+  },
+  "required": [
+    "key",
+    "snapshot_id",
+    "ref"
+  ],
+  "additionalProperties": false
+}

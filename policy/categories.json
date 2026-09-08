@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "force_human": [
+    {
+      "id": "banking_brokerage_crypto_transfer",
+      "label": "Banking / brokerage / crypto transfer",
+      "example_origins": [
+        "*.chase.com",
+        "*.bankofamerica.com",
+        "*.wellsfargo.com",
+        "*.paypal.com",
+        "*.venmo.com",
+        "*.coinbase.com",
+        "*.binance.com",
+        "*.kraken.com",
+        "*.schwab.com",
+        "*.fidelity.com",
+        "*.etrade.com"
+      ]
+    },
+    {
+      "id": "password_managers",
+      "label": "Password managers",
+      "example_origins": [
+        "*.1password.com",
+        "*.lastpass.com",
+        "*.bitwarden.com",
+        "*.dashlane.com",
+        "*.keepersecurity.com"
+      ]
+    },
+    {
+      "id": "government_id",
+      "label": "Government ID portals",
+      "example_origins": [
+        "*.gov",
+        "*.gov.uk",
+        "*.irs.gov",
+        "*.ssa.gov",
+        "*.uscis.gov",
+        "*.uidai.gov.in"
+      ]
+    },
+    {
+      "id": "email_account_security",
+      "label": "Email / account security settings",
+      "example_origins": [
+        "myaccount.google.com",
+        "account.live.com",
+        "account.microsoft.com",
+        "appleid.apple.com",
+        "*.accounts.google.com"
+      ]
+    },
+    {
+      "id": "domain_registrars",
+      "label": "Domain registrars",
+      "example_origins": [
+        "*.godaddy.com",
+        "*.namecheap.com",
+        "*.cloudflare.com",
+        "*.google.com/registrar",
+        "*.hover.com"
+      ]
+    }
+  ]
+}

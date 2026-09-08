@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>ModelBot</string>
+  <key>CFBundleDisplayName</key><string>ModelBot</string>
+  <key>CFBundleIdentifier</key><string>org.modelbot.desktop</string>
+  <key>CFBundleExecutable</key><string>ModelBot</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__BUILD__</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSHumanReadableCopyright</key><string>ModelBot — source-available, free for personal use. Your model, your machine, your data.</string>
+  <!-- The daemon binds 127.0.0.1 over plain HTTP; nothing else is reachable. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key><true/>
+  </dict>
+  <!-- Repo root recorded at build time so a dev build can find dist/cli/index.js.
+       Overridden by --repo or MODELBOT_REPO. Empty in a bundled release build. -->
+  <key>MBRepoRoot</key><string>__REPO_ROOT__</string>
+</dict>
+</plist>

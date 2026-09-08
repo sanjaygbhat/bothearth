@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_click.json",
+  "title": "browser_click",
+  "description": "Click an element by ref from a prior snapshot. Coordinates use computer_mouse.",
+  "type": "object",
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "description": "Snapshot that minted the ref."
+    },
+    "ref": {
+      "type": "string",
+      "description": "Ref id from snapshot (e.g. e12)."
+    },
+    "button": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Mouse button; default left.",
+      "enum": [
+        "left",
+        "right",
+        "middle",
+        null
+      ]
+    },
+    "double_click": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Double-click if true."
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "ref",
+    "button",
+    "double_click"
+  ],
+  "additionalProperties": false
+}

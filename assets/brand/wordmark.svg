@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 48" width="260" height="48" role="img" aria-label="BotHearth">
+  <title>BotHearth</title>
+  <g fill="#142920" transform="translate(0 4) scale(1.6)">
+    <rect x="3.5" y="16" width="17" height="4.25" rx="1.75"/>
+    <rect x="7" y="10.75" width="11.5" height="4.25" rx="1.75"/>
+    <rect x="8.25" y="5.5" width="6.75" height="4.25" rx="1.75"/>
+  </g>
+  <text x="47" y="36" font-family="Georgia,serif" font-size="36" letter-spacing="-1.8" fill="#142920">BotHearth</text>
+</svg>

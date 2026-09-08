@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/shell_exec.json",
+  "title": "shell_exec",
+  "description": "Run a command in the shell container (workspace jail).",
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Under /workspace."
+    },
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "command",
+    "cwd",
+    "timeout_ms"
+  ],
+  "additionalProperties": false
+}

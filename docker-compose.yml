@@ -1,0 +1,124 @@
+# ModelBot per-computer stack (ARCHITECTURE §9).
+# Daemon runs on the HOST via `npx modelbot start` — never a compose service.
+# Required env: COMPUTER_NAME, WORKSPACE. INTERNAL_SUBNET / INTERNAL_PROXY_IP default to 10.233.77.0/24 / .2.
+# See docs/COMPOSE.md.
+services:
+  proxy:
+    image: modelbot/proxy:dev
+    container_name: modelbot-${COMPUTER_NAME}-proxy
+    networks:
+      egress: {}
+      internal:
+        ipv4_address: ${INTERNAL_PROXY_IP:-10.233.77.2}
+    restart: unless-stopped
+    user: 1000:1000
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "3"
+    environment:
+      PROXY_ACCESS_LOG_VERBOSE: "0"
+    labels:
+      modelbot.computer: ${COMPUTER_NAME}
+  browser:
+    image: modelbot/computer:dev
+    container_name: modelbot-${COMPUTER_NAME}-browser
+    user: 1001:1001
+    group_add:
+      - ${WORKSPACE_GID:-1001}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /quarantine:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=1001,gid=1001
+    shm_size: 1g
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./sandbox/seccomp-chromium.json
+    networks:
+      - internal
+    dns:
+      - ${INTERNAL_PROXY_IP:-10.233.77.2}
+    extra_hosts:
+      proxy: ${INTERNAL_PROXY_IP:-10.233.77.2}
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      http_proxy: http://proxy:3128
+      https_proxy: http://proxy:3128
+      MODELBOT_PROXY_SERVER: http://proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    volumes:
+      - profile:/home/browser/profile
+      - ${WORKSPACE}:/workspace:rw
+    labels:
+      modelbot.computer: ${COMPUTER_NAME}
+    depends_on:
+      - proxy
+  shell:
+    image: modelbot/shell:dev
+    container_name: modelbot-${COMPUTER_NAME}-shell
+    user: 1002:1002
+    group_add:
+      - ${WORKSPACE_GID:-1001}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    dns:
+      - ${INTERNAL_PROXY_IP:-10.233.77.2}
+    extra_hosts:
+      proxy: ${INTERNAL_PROXY_IP:-10.233.77.2}
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      http_proxy: http://proxy:3128
+      https_proxy: http://proxy:3128
+      MODELBOT_PROXY_SERVER: http://proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    volumes:
+      - ${WORKSPACE}:/workspace:rw
+    labels:
+      modelbot.computer: ${COMPUTER_NAME}
+    depends_on:
+      - proxy
+networks:
+  internal:
+    name: modelbot-${COMPUTER_NAME}-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: ${INTERNAL_SUBNET:-10.233.77.0/24}
+  egress:
+    name: modelbot-${COMPUTER_NAME}-egress
+volumes:
+  profile:
+    name: modelbot-${COMPUTER_NAME}-profile

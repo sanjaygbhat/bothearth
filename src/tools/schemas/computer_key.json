@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/computer_key.json",
+  "title": "computer_key",
+  "description": "Vision/CDP key event.",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string"
+    },
+    "mods": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "CDP mods: Alt=1 Ctrl=2 Meta=4 Shift=8."
+    }
+  },
+  "required": [
+    "key",
+    "mods"
+  ],
+  "additionalProperties": false
+}

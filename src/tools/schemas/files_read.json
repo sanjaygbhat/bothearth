@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/files_read.json",
+  "title": "files_read",
+  "description": "Read a file under /workspace (64KiB cap).",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "offset": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Max lines; default 4000."
+    }
+  },
+  "required": [
+    "path",
+    "offset",
+    "limit"
+  ],
+  "additionalProperties": false
+}

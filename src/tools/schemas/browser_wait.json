@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_wait.json",
+  "title": "browser_wait",
+  "description": "Wait for time, text, URL, or load state.",
+  "type": "object",
+  "properties": {
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Overall timeout; default 30000."
+    },
+    "ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Fixed delay."
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "url_glob": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "load_state": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "load",
+        "domcontentloaded",
+        "networkidle",
+        null
+      ]
+    }
+  },
+  "required": [
+    "timeout_ms",
+    "ms",
+    "text",
+    "url_glob",
+    "load_state"
+  ],
+  "additionalProperties": false
+}

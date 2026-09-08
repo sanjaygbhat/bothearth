@@ -1,0 +1,54 @@
+id = "modelbot"
+name = "ModelBot"
+version = "0.0.1"
+min_herdr_version = "0.8.2"
+description = "Control ModelBot computers, live view, and takeover from Herdr"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "status"
+title = "modelbot: status"
+description = "JSON status of computers, tasks, takeovers, approvals"
+contexts = ["workspace", "global"]
+command = ["node", "actions/status.mjs"]
+
+[[actions]]
+id = "start"
+title = "modelbot: start computer"
+description = "Start a ModelBot computer (MODELBOT_COMPUTER_ID or first listed)"
+contexts = ["workspace", "global"]
+command = ["node", "actions/start.mjs"]
+
+[[actions]]
+id = "stop"
+title = "modelbot: stop computer"
+description = "Stop a ModelBot computer"
+contexts = ["workspace", "global"]
+command = ["node", "actions/stop.mjs"]
+
+[[actions]]
+id = "computer-create"
+title = "modelbot: create computer"
+description = "Create a computer via the daemon UI API"
+contexts = ["workspace", "global"]
+command = ["node", "actions/computer-create.mjs"]
+
+[[actions]]
+id = "computer-open"
+title = "modelbot: open UI"
+description = "Print and open the UI bootstrap URL"
+contexts = ["workspace", "global"]
+command = ["node", "actions/computer-open.mjs"]
+
+[[actions]]
+id = "takeover-open"
+title = "modelbot: open takeover"
+description = "Open live view for a pending takeover request"
+contexts = ["workspace", "global"]
+command = ["node", "actions/takeover-open.mjs"]
+
+[[panes]]
+id = "status"
+title = "modelbot status"
+placement = "overlay"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/status-watch\""]

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_scroll.json",
+  "title": "browser_scroll",
+  "description": "Scroll page or element into view / by delta.",
+  "type": "object",
+  "properties": {
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dx": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "dy": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "direction": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right",
+        null
+      ]
+    },
+    "amount": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "ref",
+    "dx",
+    "dy",
+    "direction",
+    "amount"
+  ],
+  "additionalProperties": false
+}

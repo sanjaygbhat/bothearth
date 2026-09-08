@@ -1,0 +1,13 @@
+{
+  "name": "modelbot-local",
+  "owner": {
+    "name": "ModelBot"
+  },
+  "plugins": [
+    {
+      "name": "modelbot-computer",
+      "source": "./",
+      "description": "Sandboxed computer via ModelBot MCP (streamable HTTP + skill)"
+    }
+  ]
+}

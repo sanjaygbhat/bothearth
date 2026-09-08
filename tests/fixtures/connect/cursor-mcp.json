@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "modelbot": {
+      "url": "http://127.0.0.1:7777/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MODELBOT_TOKEN}"
+      }
+    }
+  }
+}

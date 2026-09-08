@@ -1,0 +1,84 @@
+BotHearth
+Copyright 2026 Sanjay Bhat
+
+This product is source-available under the PolyForm Noncommercial License 1.0.0
+(see LICENSE). It is free for the purposes permitted by that license.
+See COMMERCIAL.md for scope and costs; no paid offering is included in this launch.
+
+The third-party components listed below keep their own licences, which are
+unaffected by the BotHearth licence and continue to apply on their own terms.
+
+--------------------------------------------------------------------------------
+OpenBot — MIT License
+--------------------------------------------------------------------------------
+
+Portions derived from OpenBot, Copyright (c) 2026 CopilotKit, MIT License
+Derived: computer-server/src/browser/live-page.ts, computer-server/src/browser/live-key.ts (OpenBot agent-computer/src/live-page.ts, screencast.ts)
+Derived: src/proxy/policy.ts NEVER_ALLOWED_HOSTNAMES (OpenBot server/src/computer/target.ts)
+Derived: computer-server/src/shell/tools.ts (OpenBot agent-computer/src/shell.ts)
+Derived: src/mcp/client.ts resultText (OpenBot server/src/plugins/mcp.ts)
+Derived: src/scheduler/cron.ts describeCron (OpenBot scheduling code)
+Derived: src/adapters/openai-compatible.ts reasoning options (OpenBot agent-langgraph/src/model-options.ts)
+
+This product includes software derived from OpenBot
+https://github.com/CopilotKit/OpenBot
+Copyright (c) 2026 CopilotKit
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+Fraunces — SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+
+Fraunces, Copyright 2020 The Fraunces Project Authors
+https://github.com/undercasetype/Fraunces
+
+The bundled font files src/ui/fonts/fraunces-latin-wght.woff2 and
+src/ui/fonts/fraunces-latin-ext-wght.woff2 are licensed under the
+SIL Open Font License, Version 1.1. The brand lettering was created with Fraunces;
+the artwork's copyright terms are described in assets/brand/README.md.
+The full licence text ships alongside the fonts at src/ui/fonts/Fraunces-OFL.txt
+and is available at https://openfontlicense.org.
+
+--------------------------------------------------------------------------------
+Moby v27.3.1 seccomp profile — Apache License 2.0
+--------------------------------------------------------------------------------
+
+sandbox/seccomp-chromium.json is modified from Moby v27.3.1
+profiles/seccomp/default.json. BotHearth changes clone/unshare/chroot permissions
+for Chromium user namespaces. Details are in sandbox/README-seccomp.md.
+The upstream license and notices ship in sandbox/Moby-LICENSE.txt and
+sandbox/Moby-NOTICE.txt. These terms apply to that component independently.
+
+Additional dependency and redistribution information: THIRD_PARTY_NOTICES.md.
+
+--------------------------------------------------------------------------------
+JSON Canonicalization Scheme test vectors — Apache License 2.0
+--------------------------------------------------------------------------------
+
+tests/fixtures/jcs/input and tests/fixtures/jcs/output derive from
+https://github.com/cyberphone/json-canonicalization/tree/master/testdata
+Copyright 2018 Anders Rundgren
+Licensed under Apache License 2.0; the full text is in sandbox/Moby-LICENSE.txt.
+
+tests/fixtures/jcs/rfc8785-appendix-b.json transcribes RFC 8785 Appendix B.
+Copyright (c) 2020 IETF Trust and the persons identified as the document authors.
+All rights reserved. See https://www.rfc-editor.org/rfc/rfc8785.html and
+https://trustee.ietf.org/documents/trust-legal-provisions/tlp-5/ for the applicable
+IETF Trust legal provisions, including the terms for extracted code components.

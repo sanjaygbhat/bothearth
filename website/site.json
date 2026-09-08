@@ -1,0 +1,15 @@
+{
+  "name": "BotHearth",
+  "url": "https://bothearth.com/",
+  "repository": "https://github.com/sanjaygbhat/bothearth",
+  "reviewed": "2026-09-08",
+  "pages": [
+    { "slug": "", "file": "index.html", "title": "BotHearth — a self-hosted computer for AI agents", "description": "Give your AI agent a browser, shell, and workspace on your Mac or Linux machine. Free for permitted noncommercial use, with source, live view, and human control." },
+    { "slug": "quickstart", "file": "quickstart.html", "title": "Install BotHearth on macOS or Linux — quickstart", "description": "Build BotHearth from source with Node.js 22.18+ and Docker, connect your own model account, and run a small first task you can verify." },
+    { "slug": "how-it-works", "file": "how-it-works.html", "title": "How BotHearth works — containers, model connections, and MCP", "description": "Understand the host daemon, separate browser and shell containers, native Codex and Claude Code connections, and BotHearth's task-scoped MCP tools." },
+    { "slug": "security", "file": "security.html", "title": "BotHearth security and privacy — where your data goes", "description": "Read BotHearth's container, approval, and human-control boundaries; what remote models receive; how task data is retained; and how to report a vulnerability." },
+    { "slug": "examples", "file": "examples.html", "title": "BotHearth examples — three small tasks with checks", "description": "Try reproducible browser and workspace tasks in BotHearth. Each example includes a prompt, permissions, expected output, and a way to check the result." },
+    { "slug": "faq", "file": "faq.html", "title": "BotHearth FAQ — licence, costs, compatibility, and limits", "description": "Is BotHearth free? What does the usage meter measure? Which platforms work? Clear answers about PolyForm Noncommercial, model costs, and the alpha release." },
+    { "slug": "about", "file": "about.html", "title": "About BotHearth — project, author, and contribution guide", "description": "BotHearth is maintained by Sanjay Bhat. Explore the source, read the current release boundaries, report reproducible issues, and contribute under the project terms." }
+  ]
+}

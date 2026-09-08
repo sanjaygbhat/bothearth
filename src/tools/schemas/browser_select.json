@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_select.json",
+  "title": "browser_select",
+  "description": "Select option(s) in a select element by ref.",
+  "type": "object",
+  "properties": {
+    "snapshot_id": {
+      "type": "string"
+    },
+    "ref": {
+      "type": "string"
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "ref",
+    "values"
+  ],
+  "additionalProperties": false
+}

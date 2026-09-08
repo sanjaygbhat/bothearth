@@ -1,0 +1,97 @@
+{
+  "name": "modelbot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Give an AI agent its own computer - a browser, shell and files in a container on your machine. Bring your own model.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "browser-automation",
+    "computer-use",
+    "mcp",
+    "model-context-protocol",
+    "playwright",
+    "sandbox",
+    "self-hosted",
+    "docker"
+  ],
+  "homepage": "https://bothearth.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanjaygbhat/bothearth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sanjaygbhat/bothearth/issues"
+  },
+  "type": "module",
+  "bin": {
+    "modelbot": "./dist/cli/index.js",
+    "bothearth": "./dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "test": "node --test --test-concurrency=1 $(find tests -name '*.test.ts' | sort)",
+    "test:contracts": "node --test tests/contracts/*.test.ts",
+    "test:unit": "node --test $(find tests/unit -name '*.test.ts' | sort)",
+    "test:docker-int": "node --test --test-concurrency=1 $(find tests/docker-int -name '*.test.ts' | sort)",
+    "docs:config": "node --experimental-strip-types scripts/gen-config-doc.ts",
+    "docs:cli": "node --experimental-strip-types scripts/gen-cli-doc.ts",
+    "claim-scan": "node --experimental-strip-types scripts/claim-scan.ts",
+    "docs:gen": "npm run docs:config && npm run docs:cli",
+    "app:mac": "bash apps/macos/build.sh",
+    "prepack": "npm run build",
+    "site:build": "node scripts/build-site.mjs",
+    "site:check": "node scripts/check-site.mjs",
+    "site:test": "node --test tests/unit/website/site.test.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "yaml": "^2.9.0"
+  },
+  "files": [
+    "dist",
+    "computer-server/src",
+    "computer-server/*.json",
+    "computer-server/stdio.*",
+    "src/protocol",
+    "src/types",
+    "src/tools",
+    "src/proxy",
+    "assets/brand/*.svg",
+    "Dockerfile.computer",
+    "Dockerfile.shell",
+    "Dockerfile.proxy",
+    ".dockerignore",
+    "docker-compose.yml",
+    "policy",
+    "sandbox",
+    "modelbot.schema.json",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "SECURITY.md",
+    "PRIVACY.md",
+    "COMMERCIAL.md",
+    "TRADEMARK.md",
+    "CLA.md",
+    "CONTRIBUTING.md"
+  ],
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  }
+}

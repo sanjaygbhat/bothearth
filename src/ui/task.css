@@ -1,0 +1,1164 @@
+/* ===========================================================================
+   task.css — the task view: feed, live view, approval, takeover, done.
+   Tokens only; no literal colour, no second accent, no nested cards.
+   Companion module: task.ts (see the doc block there for the DOM contract).
+   ======================================================================== */
+
+/* ---------------------------------------------------------------------------
+   1. FRAME
+   The view fills the shell box. One right edge (--gutter-right) shared with
+   the titlebar, one left edge (--gutter-left) aligned with the wordmark.
+   ------------------------------------------------------------------------ */
+
+/* Task start. Set only for the task you just started (task.ts
+   `markTaskStarted`); a back navigation or a deep link never carries it. */
+.task-view.starting {
+  animation: rise var(--dur-base) var(--ease-out-quart) both;
+}
+
+.task-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The task's own chrome row. The budget and Stop belong in the titlebar, but
+   the shell owns that markup and a view may not write into it, so they sit on
+   the first row of the view instead — same right edge, same reading order,
+   36px below. */
+.task-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  min-height: 36px;
+  padding: 0 var(--gutter-right) 0 var(--gutter-left);
+}
+
+.task-bar .spend {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--col-live);
+  gap: var(--space-lg);
+  padding: 0 var(--gutter-right) var(--space-lg) var(--gutter-left);
+  overflow: hidden;
+}
+
+.task-left {
+  min-height: 0;
+  min-width: 0;
+  /* Its children own their own scrollers, so this normally never scrolls. It
+     is `auto` rather than `hidden` because `hidden` made an overflow silent:
+     a long goal pushed the approval card and its actions out of the column
+     with nothing on screen saying so. Still clips, so nothing paints over the
+     live view. */
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.task-side {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding-top: 2px;
+}
+
+/* The heading is `goalHead()`'s first line, so it is two or three lines at
+   most. The rest of the prompt lives in `.goal-full`, which scrolls inside
+   itself and can therefore never push the card below it off the column. */
+.task-goal {
+  flex: 0 0 auto;
+}
+
+.goal-more {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+/* No height cap: `flex: 0 1 auto` against a `flex-basis: 0` feed means this
+   block absorbs the whole shrink, so it is the thing that scrolls. */
+.goal-full {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: var(--space-2xs);
+  font-size: var(--text-ui);
+  line-height: var(--leading-body);
+  color: var(--color-muted);
+  white-space: pre-wrap;
+}
+
+/* Some actions are links because they open a real URL; they must still read
+   as the same control. */
+.task-view a.btn {
+  text-decoration: none;
+}
+
+/* Holds the approval or the takeover card. It may shrink so its child's own
+   scroller absorbs the pressure; it never grows past the column. */
+.task-surface {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-surface > * {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   2. FEED — a hairline timeline, one plain sentence per step
+   ------------------------------------------------------------------------ */
+
+.feed {
+  flex: 1 1 0;
+  /* The feed's floor is what keeps the approval from eating the column. It is
+     expressed here, in px, rather than as a vh cap on the card: a viewport
+     cap on a panel inside the frame is exactly what clipped the action row in
+     the first place, and tests/unit/ui/tokens.test.ts holds that line. */
+  min-height: 96px;
+  overflow: auto;
+  padding-right: var(--space-2xs);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+}
+
+.step {
+  position: relative;
+  padding: 0 0 var(--space-sm) var(--space-md);
+  border-left: var(--hairline) solid var(--color-border);
+  animation: rise 180ms var(--ease-out-quart) both;
+}
+
+.step:last-child {
+  padding-bottom: 0;
+}
+
+.step::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+  box-shadow: 0 0 0 2px var(--color-bg);
+}
+
+.step.now::before {
+  background: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 5px var(--color-accent-wash);
+}
+
+.step .when {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.step .what {
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+/* The bot's own narration reads as prose; tool steps stay operational. */
+.step.say .what {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+  max-width: 60ch;
+}
+
+.step.stumble .what {
+  color: var(--color-text);
+}
+
+.step .rep {
+  margin-left: 7px;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.feed-empty {
+  font-size: var(--text-ui);
+  color: var(--color-muted);
+}
+
+/* ---------------------------------------------------------------------------
+   3. RICH TEXT — markdown rendered, never printed with asterisks
+   ------------------------------------------------------------------------ */
+
+.rich > * + * {
+  margin-top: var(--space-2xs);
+}
+
+.rich ul,
+.rich ol {
+  margin: 0;
+  padding-left: 1.35em;
+}
+
+.rich li + li {
+  margin-top: 3px;
+}
+
+.rich h3 {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-heading);
+  margin: 0;
+}
+
+.rich code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+}
+
+.rich pre {
+  margin: 0;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+}
+
+/* ---------------------------------------------------------------------------
+   4. LIVE VIEW — "its computer". The frame never animates; only the takeover
+   handoff moves, and that is the whole delight budget.
+   ------------------------------------------------------------------------ */
+
+.side-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 20px;
+}
+
+.side-head .state {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.view {
+  flex: 0 0 auto;
+  position: relative;
+  border: var(--hairline) solid var(--color-view-frame);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-elevated);
+  transition: border-color var(--dur-base) var(--ease-out-quart);
+}
+
+.view.human {
+  border-color: var(--color-view-human);
+  border-width: 2px;
+}
+
+.view .wipe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--color-view-human);
+  transform: scaleX(0);
+  transform-origin: left;
+  z-index: var(--z-raised);
+}
+
+.view.human .wipe {
+  animation: wipe var(--dur-slow) var(--ease-out-quart) forwards;
+}
+
+.view.releasing .wipe {
+  animation: unwipe var(--dur-exit) var(--ease-in-quart) forwards;
+}
+
+@keyframes wipe {
+  to { transform: scaleX(1); }
+}
+
+@keyframes unwipe {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+.view .bar {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: var(--hairline) solid var(--color-border);
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  background: var(--color-surface);
+}
+
+.view .url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The remote page is not part of the app theme — it is somebody else's site,
+   and tinting it would misreport what the bot sees. */
+.screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: var(--color-screen);
+  color: var(--color-screen-ink);
+  overflow: hidden;
+}
+
+.screen canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+}
+
+/* While the bot drives, the screen is a picture you can tab to. The ring is the
+   ordinary one. While YOU drive, the ring moves to the frame (below), so there
+   is never an ember rectangle 2px inside an ember rectangle. */
+.view:not(.human) .screen canvas:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+/* While you are driving, the screen holds the keyboard, and a person has to be
+   able to SEE that it does — a click that landed somewhere else is otherwise
+   indistinguishable from a keyboard that was never handed over.
+   The ring goes on the whole frame, not on the canvas: the frame is already
+   ember while you drive, and a second ember rectangle 2px inside it reads as a
+   doubled border rather than as focus. `:focus`, not `:focus-visible` — this
+   focus arrives from a click, which `:focus-visible` deliberately does not
+   ring, and a click is how a person takes the screen. */
+.view.human:has(.screen canvas:focus) {
+  box-shadow: var(--focus-ring);
+}
+
+.screen.dim {
+  filter: saturate(0.85) brightness(0.99);
+}
+
+/* Never an ambiguous empty rectangle. */
+.screen .waiting {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  background: var(--color-surface);
+  text-align: center;
+  padding: var(--space-sm);
+}
+
+/* Control landed, or it did not — said over the picture it is about. It sits
+   at the foot of the frame so it never covers the thing being driven, and it
+   goes on its own after six seconds or on the first keystroke. */
+.screen .notice {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-sm);
+  transform: translateX(-50%);
+  max-width: min(56ch, calc(100% - 2 * var(--space-sm)));
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--color-view-human);
+  background: var(--color-elevated);
+  color: var(--color-text);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-raised);
+}
+
+.screen .notice.warn {
+  border-color: var(--color-warn);
+}
+
+/* LAST SCREEN with no frame kept. Dropping the block entirely leaves the Done
+   column half empty, and an unstyled empty rectangle says nothing. This is
+   neither: a deliberate, calm state that says what is missing and names the
+   last page it was on. */
+.view.kept-none {
+  border-style: dashed;
+}
+
+.view.kept-none .screen {
+  display: none;
+}
+
+.view-empty {
+  display: grid;
+  place-items: center;
+  min-height: 168px;
+  padding: var(--space-md);
+  background: var(--color-surface);
+}
+
+.view-empty p {
+  margin: 0;
+  max-width: 34ch;
+  text-align: center;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+}
+
+.view-note {
+  flex: 0 0 auto;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+/* The one line that says the screen takes the keyboard now, and how to leave. */
+.view-hint {
+  flex: 0 0 auto;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-view-human);
+  margin-top: 2px;
+}
+
+.view-acts {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-2xs);
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* Full screen: the live view takes the whole content box. Esc leaves. */
+.task-grid[data-full="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.task-grid[data-full="true"] .task-left {
+  display: none;
+}
+
+.task-grid[data-full="true"] .screen {
+  aspect-ratio: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.task-grid[data-full="true"] .view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The browser's own full screen renders the panel and nothing above it, so the
+   panel has to paint its own ground and its own margin. */
+.task-side:fullscreen {
+  background: var(--color-bg);
+  padding: var(--space-sm);
+}
+
+/* Driving full screen: the page you are driving, the time you have left, and
+   the way out. Every other control is noise on someone else's website. */
+.task-side.driving-full .side-head,
+.task-side.driving-full .view-note,
+.task-side.driving-full .view-hint,
+.task-side.driving-full .view-acts,
+.task-side.driving-full .facts {
+  display: none;
+}
+
+.drive-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 28px;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-view-human);
+}
+
+.drive-bar .lease {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   5. THE FACTS BLOCK — budget, steps, files. Pinned to the column foot.
+   ------------------------------------------------------------------------ */
+
+.facts {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: var(--space-sm);
+  border-top: var(--hairline) solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.facts .r {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.facts .r b {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.facts .meter {
+  max-width: none;
+}
+
+.facts .files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--text-caption);
+}
+
+/* ---------------------------------------------------------------------------
+   6. APPROVAL — a focused surface, NOT an alert in a capped scroller.
+   The card may shrink; its body scrolls; the action row lives outside that
+   scroller, so no button can ever be clipped.
+   ------------------------------------------------------------------------ */
+
+/* An approval arrives with opacity only, no travel: a permission ask appears
+   instantly and holds still, because the person needs to read it. */
+.approval {
+  flex: 0 1 auto;
+  min-height: 0;
+  /* `.feed` is masked, which makes it a stacking context and paints it over an
+     un-positioned sibling: every action in this row was dead to the mouse. */
+  position: relative;
+  z-index: var(--z-raised);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-elevated);
+  border: var(--hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: approval-arrive var(--dur-base) var(--ease-out-quart) both;
+}
+
+@keyframes approval-arrive {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.approval-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+}
+
+.approval .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.approval h2 {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: var(--weight-semibold);
+}
+
+.approval .what-why {
+  margin: 9px 0 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+  max-width: 56ch;
+}
+
+.dest {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: var(--space-sm);
+  padding: 12px 0;
+  border-top: var(--hairline) solid var(--color-border);
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+/* The approval destination and a saved-file row are the same three parts:
+   glyph, name, sub-line. Only the file name may break mid-word. */
+.dest .g,
+.file .g {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+}
+
+.dest .n,
+.file .n {
+  display: block;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.file .n {
+  overflow-wrap: anywhere;
+}
+
+.dest .w,
+.file .w {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.disclose {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  margin-top: var(--space-xs);
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.disclose::after {
+  content: "";
+  position: absolute;
+  inset: calc((var(--tap-target) - 100%) / -2) 0;
+}
+
+.disclose:hover {
+  color: var(--color-text);
+}
+
+.disclose .cv {
+  font-size: 9px;
+  line-height: 1;
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+
+.disclose[aria-expanded="true"] .cv {
+  transform: rotate(90deg);
+}
+
+.payload {
+  margin: var(--space-2xs) 0 0;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.approval-actions {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 10px;
+  padding: var(--space-xs) var(--space-md) var(--space-sm);
+  border-top: var(--hairline) solid var(--color-border);
+  background: var(--color-elevated);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* At 390px `Don't allow` once measured ~24px against a 40px `Allow once`:
+   asymmetric targets on a safety decision, biased toward the permissive answer.
+   Every button in this row is the SAME 44px at every width, whatever its
+   treatment — the row is the one place in the app where a size difference could
+   be read as a nudge. */
+.approval-actions .btnrow {
+  display: flex;
+  gap: var(--space-2xs);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.approval-actions .btnrow .btn {
+  height: var(--control-h-touch);
+  flex: 0 1 auto;
+}
+
+
+/* ---------------------------------------------------------------------------
+   7. TAKEOVER — the one state that must never be occluded.
+   Quiet copy on the wash is a tint of the wash's own hue, never grey.
+   ------------------------------------------------------------------------ */
+
+.takeover-ask,
+.driving {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  z-index: var(--z-takeover);
+  background: var(--color-accent-wash);
+  border: var(--hairline) solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+}
+
+.takeover-ask h2,
+.driving h2 {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text);
+}
+
+.takeover-ask p,
+.driving p {
+  margin: 9px 0 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+  max-width: 52ch;
+}
+
+.takeover-ask p.q,
+.driving p.q {
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: color-mix(in oklch, var(--color-text) 70%, var(--color-accent));
+}
+
+.takeover-ask .acts,
+.driving .acts {
+  display: flex;
+  gap: var(--space-2xs);
+  margin-top: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.takeover-ask .btn.ghost,
+.driving .btn.ghost {
+  color: color-mix(in oklch, var(--color-text) 70%, var(--color-accent));
+}
+
+.takeover-ask .btn.ghost:hover,
+.driving .btn.ghost:hover {
+  color: var(--color-text);
+  background: color-mix(in oklch, var(--color-accent) 12%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   8. DONE — the result, then the receipt. No confetti.
+   ------------------------------------------------------------------------ */
+
+.done-h {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.check {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  color: var(--color-success);
+}
+
+.check path {
+  stroke-dasharray: 22;
+  stroke-dashoffset: 0;
+  animation: draw 260ms var(--ease-out-quint) both;
+}
+
+@keyframes draw {
+  from { stroke-dashoffset: 22; }
+  to   { stroke-dashoffset: 0; }
+}
+
+/* The result follows the check rather than arriving with it, so the eye reads
+   "finished" and then "here is what you got". */
+.done-scroll .result,
+.done-scroll .file {
+  animation: rise var(--dur-base) var(--ease-out-quart) both;
+  animation-delay: 260ms;
+}
+
+.done-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: var(--space-2xs);
+}
+
+/* What the AI threw, when it threw something. Never the headline. */
+.done-detail {
+  margin-top: var(--space-sm);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+  max-width: 68ch;
+}
+
+.done-detail summary {
+  cursor: pointer;
+}
+
+.done-lede {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-muted);
+  max-width: 60ch;
+  margin-top: var(--space-2xs);
+}
+
+.result {
+  margin-top: var(--space-sm);
+  font-size: var(--text-ui);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+  max-width: 68ch;
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: var(--space-md);
+  padding: 13px 0;
+  border-top: var(--hairline) solid var(--color-border);
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.file + .file {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.file .who {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   FILES IT SAVED. The product's promise is that files land where you can open
+   them, so the screen that proves it names every one. One eyebrow, one row per
+   file, two actions each.
+   ------------------------------------------------------------------------ */
+
+.artifacts,
+.sofar {
+  display: block;
+  margin-top: var(--space-lg);
+}
+
+.artifacts > .caps,
+.sofar > .caps {
+  display: block;
+  margin-bottom: var(--space-3xs);
+}
+
+.artifacts .file {
+  margin-top: var(--space-2xs);
+}
+
+.artifacts .file + .file {
+  margin-top: 0;
+}
+
+.file-acts {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-3xs);
+}
+
+/* What it got done before it stopped — so "check what it did" points at
+   something. */
+.sofar-list {
+  margin: var(--space-2xs) 0 0;
+  padding: 0;
+  list-style: none;
+  max-width: 60ch;
+}
+
+.sofar-list li {
+  position: relative;
+  padding: 5px 0 5px 17px;
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: var(--color-text);
+}
+
+.sofar-list li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 12px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+}
+
+.done-acts {
+  display: flex;
+  gap: var(--space-2xs);
+  margin-top: var(--space-lg);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.receipt {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.receipt > div {
+  padding: 11px 0;
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.receipt > div:last-child {
+  border-bottom: 0;
+}
+
+.receipt dt {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.receipt dd {
+  margin: 2px 0 0;
+  font-size: var(--text-ui);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   9. TABS — phone only. The live view is never amputated, only deferred.
+   ------------------------------------------------------------------------ */
+
+.task-tabs {
+  display: none;
+  flex: 0 0 auto;
+  gap: var(--space-2xs);
+  padding: 0 var(--gutter-right) var(--space-2xs) var(--gutter-left);
+}
+
+.task-tabs button {
+  flex: 1 1 0;
+  position: relative;
+  height: var(--control-h-touch);
+  border: 0;
+  border-bottom: 2px solid var(--color-border);
+  background: none;
+  font: inherit;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.task-tabs button[aria-selected="true"] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------------
+   10. RESPONSIVE
+   ------------------------------------------------------------------------ */
+
+/* 620-1100: one column, and therefore ONE scroller. Two nested scrollers in a
+   600px-tall window is what let the live view eat the whole screen and paint
+   over the approval; here the view scrolls as a page and every block keeps its
+   natural height. */
+@media (min-width: 621px) and (max-width: 1100px) {
+  .task-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .task-left,
+  .task-side {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .feed {
+    flex: 0 0 auto;
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  /* The card still owns a scroller, so its action row cannot be pushed below
+     the fold by a long payload. */
+  .approval {
+    flex: 0 0 auto;
+  }
+
+  /* 600px tall minus the titlebar, the task bar and the goal leaves ~430px.
+     280 lets the disclosure sit above the fold and still lands the action row
+     around y=550. */
+  .approval-body {
+    max-height: 280px;
+  }
+
+  /* The live view takes what it needs and no more. */
+  .screen {
+    max-height: 320px;
+  }
+
+  .facts {
+    margin-top: var(--space-sm);
+    padding-bottom: var(--space-sm);
+  }
+}
+
+@media (max-width: 620px) {
+  /* The three answers stack full width in the order they escalate — refuse,
+     remember, allow — rather than overflowing the card sideways, which pushed
+     `Allow once` off the right edge entirely. Same 44px each, and the same
+     width, so nothing about the layout favours one answer. */
+  .approval-actions .btnrow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .approval-actions .btnrow .btn {
+    width: 100%;
+  }
+
+  /* 844px tall minus the titlebar, the task bar, the tabs and the goal leaves
+     roughly 560px; the body takes 300 so the action row keeps its air. */
+  .approval-body {
+    max-height: 300px;
+  }
+
+  /* On a phone the question outranks the history. The feed is given a real
+     flex-basis and no floor so it absorbs the shrink first; with `flex: 1 1 0`
+     it absorbed none and pushed the action row off the bottom of the column. */
+  .feed {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .task-bar {
+    min-height: var(--control-h-touch);
+  }
+
+  .task-tabs {
+    display: flex;
+  }
+
+  .task-grid {
+    /* One column. Without this the 520px live-view track survives even while
+       the Computer tab is hidden, and the goal wraps to five characters a
+       line. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    padding-bottom: var(--space-sm);
+  }
+
+  .task-grid[data-tab="task"] .task-side,
+  .task-grid[data-tab="computer"] .task-left {
+    display: none;
+  }
+
+  .screen {
+    max-height: none;
+  }
+
+  .step.say .what {
+    font-size: var(--text-ui);
+    line-height: var(--leading-ui);
+  }
+}
+
+/* The takeover degrades to a static ember rule: the state stays unmistakable,
+   it just arrives without travel. */
+@media (prefers-reduced-motion: reduce) {
+  .view.human .wipe,
+  .view.releasing .wipe {
+    animation: none;
+  }
+
+  .view.human .wipe {
+    transform: scaleX(1);
+  }
+
+  .step,
+  .check path,
+  .approval,
+  .task-view.starting,
+  .done-scroll .result,
+  .done-scroll .file {
+    animation: none;
+  }
+
+  /* Anything that faded in must still be visible once the fade is refused. */
+  .approval,
+  .task-view.starting,
+  .done-scroll .result,
+  .done-scroll .file {
+    opacity: 1;
+    transform: none;
+  }
+}

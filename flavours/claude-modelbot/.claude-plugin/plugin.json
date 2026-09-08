@@ -1,0 +1,6 @@
+{
+  "name": "modelbot-computer",
+  "description": "Sandboxed computer via ModelBot MCP",
+  "version": "1.0.0",
+  "author": { "name": "ModelBot" }
+}

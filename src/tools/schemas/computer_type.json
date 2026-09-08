@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/computer_type.json",
+  "title": "computer_type",
+  "description": "Insert text via CDP (vision path).",
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "additionalProperties": false
+}

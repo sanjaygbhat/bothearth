@@ -1,0 +1,7 @@
+Official RFC 8785 JCS vectors from
+https://github.com/cyberphone/json-canonicalization/tree/master/testdata
+(input/*.json and output/*.json), fetched 2026-09-03.
+
+rfc8785-appendix-b.json transcribes RFC 8785 Appendix B (IEEE-754 hex → JSON).
+audit-regression.json freezes pre-JCS canonical bytes for ModelBot audit records
+(no integer-index object keys; must stay byte-identical; chain v remains 1).

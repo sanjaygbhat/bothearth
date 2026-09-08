@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="ModelBot">
+  <title>ModelBot</title>
+  <!-- Reduced form for 16-32px, stencils and one-colour print: stones shortened to
+       3.25 and the gaps opened to 2.0 so they never close up at small sizes. -->
+  <rect x="3.5" y="17" width="17" height="3.25" rx="1.4" fill="currentColor"/>
+  <rect x="7" y="11.75" width="11.5" height="3.25" rx="1.4" fill="currentColor"/>
+  <rect x="8.25" y="6.5" width="6.75" height="3.25" rx="1.4" fill="currentColor"/>
+</svg>

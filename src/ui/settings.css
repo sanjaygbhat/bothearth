@@ -1,0 +1,759 @@
+/* ============================================================================
+   ModelBot — Settings sheet
+
+   One sheet over the app: 904x592 clamped to the window, a 212px section rail
+   and a pane. Below 760px it becomes a bottom sheet with a horizontally
+   scrolling rail; below 620px it fills the window.
+
+   Every colour is a token from tokens.css. No hex, no second accent, no card
+   inside a card: rows are separated by hairlines, not by nested surfaces.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. SHEET FRAME
+   Both layers are `position: fixed`, so the sheet covers the whole window,
+   including the titlebar.
+   ------------------------------------------------------------------------ */
+
+.set-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-backdrop);
+  background: var(--color-overlay);
+  animation: set-fade var(--dur-base) var(--ease-out-quart) both;
+}
+
+.set-sheet {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(var(--sheet-w), calc(100vw - 48px));
+  height: min(var(--sheet-h), calc(100vh - 88px));
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-elevated);
+  border: var(--hairline) solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl), var(--hairline-top);
+  animation: set-rise var(--dur-slow) var(--ease-out-quart) both;
+}
+
+@keyframes set-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes set-rise {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.set-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.set-head h2 {
+  margin: 0;
+  font-size: var(--text-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  font-weight: var(--weight-semibold);
+}
+
+.set-head .set-spacer {
+  flex: 1;
+}
+
+.set-cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
+}
+
+/* ---------------------------------------------------------------------------
+   2. SECTION RAIL
+   ------------------------------------------------------------------------ */
+
+.set-rail {
+  border-right: var(--hairline) solid var(--color-border);
+  padding: var(--space-sm);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.set-rail::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.set-rail button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-regular);
+  color: var(--color-muted);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-rail button:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ONE selection idiom — this sheet once carried four at the same time: an ember
+   focus ring, a grey pill, a radio dot and a white pill. "You are here" is a
+   filled ink-tint row with an ember spine, and it is the only thing in the rail
+   that carries the accent. The focus ring is base.css's, it appears only
+   on :focus-visible — so only when a keyboard put it there — and it can sit on
+   the selected row without the two treatments fighting, because one is a fill
+   and the other is an outline. */
+.set-rail button[aria-current="page"] {
+  background: var(--color-accent-wash);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+.set-rail button[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------------
+   3. PANE
+   ------------------------------------------------------------------------ */
+
+.set-pane {
+  padding: var(--space-md) var(--space-lg);
+  overflow: auto;
+}
+
+.set-pane h3 {
+  margin: 0 0 var(--space-2xs);
+  font-size: var(--text-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-heading);
+  font-weight: var(--weight-semibold);
+}
+
+/* Specificity, not order: `.set-pane p { margin: 0 }` below is (0,1,1) and was
+   flattening this margin, so the first hairline landed on the lede's
+   descenders in every section. */
+.set-pane .set-lede {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  color: var(--color-muted);
+  max-width: 58ch;
+}
+
+.set-pane p {
+  margin: 0;
+}
+
+/* Group labels inside a pane get their own air, above and below. */
+.set-pane .caps {
+  display: block;
+  margin: var(--space-md) 0 var(--space-3xs);
+}
+
+/* A hairline-separated stack. Never a card inside a card. */
+.set-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: var(--hairline) solid var(--color-border);
+}
+
+.set-rows > .set-row:last-child {
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.set-row .set-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.set-n {
+  display: block;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.set-w {
+  display: block;
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+.set-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  flex-wrap: wrap;
+  margin-top: var(--space-sm);
+}
+
+.set-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: var(--space-md);
+  font-size: var(--text-ui);
+}
+
+.set-state .set-spacer {
+  flex: 1;
+}
+
+/* Full-bleed: a rule that stops short of the column reads as a mistake, so the
+   measure is held by the pane, not by a narrower box under a hairline. */
+.set-fine {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: var(--hairline) solid var(--color-border);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+}
+
+/* A hairline-closed list already draws the rule; do not draw a second one. */
+.set-rows + .set-fine,
+.set-bars + .set-fine {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.set-note {
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+  max-width: 60ch;
+}
+
+/* A message that reports a refusal or a failure. Tinted ground, and its quiet
+   copy is a tint of that same hue — never grey on colour. */
+.set-msg {
+  margin-top: var(--space-sm);
+  padding: 11px 13px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-ui);
+  line-height: var(--leading-ui);
+  background: var(--color-warn-wash);
+  color: color-mix(in oklch, var(--color-text) 80%, var(--color-warn));
+  max-width: 60ch;
+}
+
+.set-msg[data-tone="danger"] {
+  background: var(--color-danger-wash);
+  color: color-mix(in oklch, var(--color-text) 80%, var(--color-danger));
+}
+
+.set-msg[data-tone="ok"] {
+  background: var(--color-success-wash);
+  color: color-mix(in oklch, var(--color-text) 80%, var(--color-success));
+}
+
+.set-msg:empty {
+  display: none;
+}
+
+/* The Codex device sign-in: the official page, then the one-time code. */
+.set-device a {
+  color: inherit;
+  font-weight: var(--weight-medium);
+}
+
+.set-device p {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-body);
+  letter-spacing: 0.04em;
+}
+
+/* Disclosure — the only place a path or an identifier is ever shown. */
+.set-details {
+  margin-top: var(--space-md);
+}
+
+.set-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  padding: 4px 0;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  list-style: none;
+}
+
+.set-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.set-details > summary::before {
+  content: "›";
+  display: inline-block;
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.set-details > summary:hover {
+  color: var(--color-text);
+}
+
+.set-details dl {
+  margin: var(--space-2xs) 0 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px var(--space-sm);
+  font-size: var(--text-caption);
+}
+
+.set-details dt {
+  color: var(--color-muted);
+}
+
+.set-details dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.set-field {
+  display: block;
+  margin-top: var(--space-sm);
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.set-field input {
+  min-height: var(--tap-target);
+  display: block;
+  margin-top: 4px;
+  width: 100%;
+  max-width: 320px;
+  font-size: var(--text-ui);
+  color: var(--color-text);
+}
+
+/* ---------------------------------------------------------------------------
+   4. AI CONNECTION — two big selectable rows
+   ------------------------------------------------------------------------ */
+
+.set-opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-top: var(--hairline) solid var(--color-border);
+  background: none;
+  cursor: pointer;
+  padding: 14px 6px 14px 0;
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-opt:last-of-type {
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.set-opt:hover {
+  background: var(--color-surface);
+}
+
+.set-opt .set-radio {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--color-border-strong);
+  transition:
+    border-color var(--dur-fast) var(--ease-out-quart),
+    border-width var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-opt[aria-checked="true"] .set-radio {
+  border-color: var(--color-accent);
+  border-width: 5px;
+}
+
+.set-opt .set-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   5. DEVICES — pairing link, QR, countdown
+   ------------------------------------------------------------------------ */
+
+.set-pair {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: var(--hairline) solid var(--color-border);
+}
+
+.set-qr {
+  flex: 0 0 auto;
+  width: 168px;
+  height: 168px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--color-border);
+  /* A code must be dark-on-light to scan; it does not follow the theme, the
+     same rule the live view's remote page follows. */
+  background: var(--color-screen);
+  color: var(--color-screen-ink);
+}
+
+.set-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.set-pair-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.set-link {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2xs);
+  height: 82px;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+  resize: none;
+}
+
+.set-countdown {
+  margin-top: var(--space-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+/* ---------------------------------------------------------------------------
+   6. USAGE — a bar list, no chart library
+   ------------------------------------------------------------------------ */
+
+.set-total {
+  margin-top: var(--space-2xs);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+  margin-bottom: var(--space-sm);
+}
+
+.set-total b {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.set-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.set-bars:last-child > .set-bar:last-child {
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.set-bar {
+  padding: 9px 0;
+  border-top: var(--hairline) solid var(--color-border);
+}
+
+.set-bar .set-bar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: var(--text-ui);
+}
+
+.set-bar .set-bar-head span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-bar .set-amount {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+
+.set-bar .set-sub {
+  margin-top: 2px;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.set-bar .meter {
+  margin-top: 7px;
+  max-width: none;
+}
+
+/* ---------------------------------------------------------------------------
+   7. ABOUT
+   ------------------------------------------------------------------------ */
+
+.set-lockup {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: var(--space-md) 0 var(--space-2xs);
+}
+
+.set-lockup .set-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  background: currentColor;
+  color: var(--color-accent);
+  -webkit-mask-image: url("/brand/mark.svg");
+  mask-image: url("/brand/mark.svg");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.set-lockup .set-wordmark {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: var(--leading-title);
+  letter-spacing: var(--tracking-title);
+  font-weight: 600;
+}
+
+.set-tagline {
+  margin-top: var(--space-sm);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+  max-width: 46ch;
+}
+
+.set-about-note {
+  margin-top: var(--space-2xs);
+}
+
+.set-links {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-lg);
+}
+
+.set-links a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 13px 0;
+  border-top: var(--hairline) solid var(--color-border);
+  font-size: var(--text-ui);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.set-links a:last-child {
+  border-bottom: var(--hairline) solid var(--color-border);
+}
+
+.set-links a:hover {
+  color: var(--color-accent);
+}
+
+/* Was --color-border-strong: 1.8:1, below the 4.5:1 this glyph needs and, more
+   to the point, all but invisible. It carries "this opens outside the app". */
+.set-links a .set-go {
+  color: var(--color-muted);
+  transition:
+    transform var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-links a:hover .set-go {
+  color: var(--color-accent);
+  transform: translateX(3px);
+}
+
+/* ---------------------------------------------------------------------------
+   8. FOOTER — appearance. Always visible, so the choice is never hunted for.
+   ------------------------------------------------------------------------ */
+
+.set-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 10px var(--space-md);
+  border-top: var(--hairline) solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.set-foot .set-foot-label {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.set-seg {
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.set-seg button {
+  position: relative;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+.set-seg button:hover {
+  color: var(--color-text);
+}
+
+.set-seg button[aria-pressed="true"] {
+  background: var(--color-elevated);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------------------------------------------------------------------------
+   9. RESPONSIVE
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  .set-sheet {
+    width: 100vw;
+    height: calc(100vh - var(--titlebar-h));
+    left: 0;
+    top: auto;
+    bottom: 0;
+    transform: none;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation-name: set-rise-bottom;
+  }
+
+  @keyframes set-rise-bottom {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .set-cols {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .set-rail {
+    flex-direction: row;
+    gap: var(--space-3xs);
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: var(--hairline) solid var(--color-border);
+  }
+
+  .set-rail button {
+    width: auto;
+  }
+
+  .set-pane {
+    padding: var(--space-md) var(--space-sm);
+  }
+
+  .set-pair {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 620px) {
+  /* Full-bleed by pinning both edges, never by naming the viewport height:
+     a vh cap inside the frame is what clipped the approval row. */
+  .set-sheet {
+    top: 0;
+    bottom: 0;
+    height: auto;
+    border-radius: 0;
+  }
+
+  .set-seg button {
+    height: var(--control-h-touch);
+  }
+
+  .set-foot {
+    padding: var(--space-2xs) var(--space-sm);
+  }
+}

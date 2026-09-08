@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": ".."
+  },
+  "include": ["stdio.ts", "src/**/*.ts", "../src/protocol/**/*.ts", "../src/types/**/*.ts", "../src/tools/**/*.ts"]
+}

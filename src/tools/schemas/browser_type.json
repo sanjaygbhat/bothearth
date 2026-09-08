@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_type.json",
+  "title": "browser_type",
+  "description": "Type text into an element identified by ref.",
+  "type": "object",
+  "properties": {
+    "snapshot_id": {
+      "type": "string"
+    },
+    "ref": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "submit": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Press Enter after typing."
+    },
+    "slowly": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Per-keystroke typing."
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "ref",
+    "text",
+    "submit",
+    "slowly"
+  ],
+  "additionalProperties": false
+}

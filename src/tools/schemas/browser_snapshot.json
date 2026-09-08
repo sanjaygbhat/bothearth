@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_snapshot.json",
+  "title": "browser_snapshot",
+  "description": "Capture accessibility snapshot with stable refs and snapshot_id.",
+  "type": "object",
+  "properties": {
+    "scope": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional ref to scope under."
+    },
+    "interactive_only": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Prefer interactive nodes; default true."
+    },
+    "depth": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Max tree depth; null = default."
+    },
+    "max_chars": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Cap yaml length; null = config snapshot_max_chars."
+    }
+  },
+  "required": [
+    "scope",
+    "interactive_only",
+    "depth",
+    "max_chars"
+  ],
+  "additionalProperties": false
+}

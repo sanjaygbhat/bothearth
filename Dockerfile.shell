@@ -1,0 +1,121 @@
+# ModelBot shell image — Debian bookworm-slim agent workspace tools.
+# No browser, no profile. Node pin and uid layout match Dockerfile.computer.
+# Target size <= 400MB.
+#
+#   docker build -f Dockerfile.shell --provenance=false --sbom=false \
+#     -t modelbot/shell:dev .
+
+ARG DEBIAN_VERSION=bookworm-slim
+FROM debian:${DEBIAN_VERSION} AS base
+
+ARG TARGETARCH
+ARG NODE_VERSION=22.23.2
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Single RUN: apt + Node tarball + strip/purge so deletions land in the same
+# layer (multi-RUN purge does not shrink prior layers).
+# Node pin method matches Dockerfile.computer (official linux tarball).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      binutils \
+      ca-certificates \
+      curl \
+      xz-utils \
+      jq \
+      python3 \
+      python3-pip \
+      git \
+      ripgrep \
+      unzip \
+      tini \
+      tzdata; \
+    update-ca-certificates; \
+    case "${TARGETARCH}" in \
+      amd64) NODE_ARCH=x64 ;; \
+      arm64) NODE_ARCH=arm64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+      -o /tmp/node.tar.xz; \
+    mkdir -p /usr/local/node; \
+    tar -xJf /tmp/node.tar.xz -C /usr/local/node --strip-components=1; \
+    rm -f /tmp/node.tar.xz; \
+    strip --strip-unneeded /usr/local/node/bin/node; \
+    rm -rf \
+      /usr/local/node/include \
+      /usr/local/node/share \
+      /usr/local/node/lib/node_modules/corepack \
+      /usr/local/node/CHANGELOG* \
+      /usr/local/node/README*; \
+    find /usr/local/node -type f -name '*.map' -delete; \
+    apt-get purge -y --auto-remove binutils xz-utils; \
+    apt-get autoremove -y --purge; \
+    dpkg -l 'binutils*' 'libbinutils*' 'libsframe*' 2>/dev/null | awk '/^ii/{print $2}' | xargs -r apt-get purge -y --auto-remove; \
+    rm -rf \
+      /var/lib/apt/lists/* \
+      /var/cache/apt/* \
+      /usr/share/man \
+      /usr/share/info \
+      /usr/share/lintian \
+      /usr/share/locale \
+      /usr/share/perl \
+      /usr/share/perl5 \
+      /usr/share/gitweb \
+      /usr/share/bash-completion \
+      /usr/lib/aarch64-linux-gnu/gconv \
+      /usr/lib/x86_64-linux-gnu/gconv \
+      /usr/lib/valgrind \
+      /usr/lib/python3.11/test \
+      /usr/lib/python3.11/pydoc_data \
+      /usr/lib/python3.11/ensurepip \
+      /tmp/*; \
+    find /usr -type d -name '__pycache__' -prune -exec rm -rf {} +; \
+    find /usr -name '*.pyc' -delete; \
+    apt-get clean; \
+    node -v; npm -v; \
+    python3 --version; \
+    git --version; \
+    rg --version | head -1; \
+    jq --version; \
+    tini --version
+
+# Unprivileged agent uid 1002 only (no browser user / profile dirs).
+RUN groupadd --gid 1002 agent \
+ && useradd --uid 1002 --gid 1002 --create-home --home-dir /home/agent --shell /bin/bash agent \
+ && mkdir -p /workspace \
+ && chown agent:agent /workspace \
+ && chmod 755 /workspace \
+ && chown -R agent:agent /home/agent
+
+VOLUME ["/workspace"]
+
+USER agent
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]
+
+# Final stage: computer-server. Guarded ARG so `--target base` builds without
+# that tree.
+FROM base AS final
+ARG COMPUTER_SERVER_DIR=computer-server
+USER root
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/modelbot/
+COPY src/protocol /opt/src/protocol
+COPY src/types /opt/src/types
+COPY src/tools /opt/src/tools
+COPY ${COMPUTER_SERVER_DIR}/ /opt/computer-server/
+RUN mkdir -p /opt/computer-server-root \
+ && mv /opt/computer-server /opt/computer-server-root/computer-server \
+ && mv /opt/src /opt/computer-server-root/src \
+ && ln -s /opt/computer-server-root/computer-server /opt/computer-server \
+ && chown -R agent:agent /opt/computer-server-root \
+ && chmod -R a+rX /opt/computer-server-root
+USER agent
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]

@@ -1,0 +1,26 @@
+# ModelBot egress proxy sidecar — Node ≥22, no npm deps.
+# TLS is never terminated (CONNECT passthrough only).
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+# ESM + type-stripping for direct .ts execution
+COPY package.json ./
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/modelbot/
+COPY src/proxy ./src/proxy
+
+ENV PROXY_PORT=3128 \
+    HEALTH_PORT=3129 \
+    NODE_ENV=production \
+    PROXY_ACCESS_LOG_VERBOSE=0 \
+    PROXY_ACCESS_LOG_PATH=/tmp/proxy-access.jsonl \
+    PROXY_ACCESS_LOG_MAX_BYTES=1048576
+
+# Access log: default host:port + decision + bytes (no URL path/query).
+# Set PROXY_ACCESS_LOG_VERBOSE=1 for method + HTTP pathname (still no query).
+# In-process 1 MiB ring at PROXY_ACCESS_LOG_PATH (tmpfs). Docker json-file also capped.
+
+EXPOSE 3128 3129
+
+USER node
+CMD ["node", "src/proxy/proxy.ts"]

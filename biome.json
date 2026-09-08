@@ -1,0 +1,64 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": false },
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "tests/**/*.ts",
+      "scripts/**/*.ts",
+      "scripts/**/*.mjs",
+      "computer-server/src/**/*.ts",
+      "!**/.claude/**",
+      "!**/node_modules/**",
+      "!**/dist/**",
+      "!apps/macos/build/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noBannedTypes": "off",
+        "noExtraBooleanCast": "off",
+        "noUselessEscapeInRegex": "off",
+        "useLiteralKeys": "off",
+        "useOptionalChain": "off"
+      },
+      "correctness": {
+        "noUnsafeOptionalChaining": "off",
+        "noUnusedImports": "off",
+        "noUnusedVariables": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useConst": "off",
+        "useImportType": "off",
+        "useTemplate": "off"
+      },
+      "suspicious": {
+        "noAssignInExpressions": "off",
+        "noConfusingVoidType": "off",
+        "noControlCharactersInRegex": "off",
+        "noExplicitAny": "off",
+        "noImplicitAnyLet": "off",
+        "noShadowRestrictedNames": "off",
+        "noTemplateCurlyInString": "off"
+      }
+    }
+  }
+}

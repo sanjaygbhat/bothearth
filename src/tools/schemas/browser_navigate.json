@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_navigate.json",
+  "title": "browser_navigate",
+  "description": "Navigate the active tab to a URL.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Absolute http(s) URL to load."
+    },
+    "wait_until": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Playwright waitUntil; default load. Null = default.",
+      "enum": [
+        "load",
+        "domcontentloaded",
+        "networkidle",
+        null
+      ]
+    }
+  },
+  "required": [
+    "url",
+    "wait_until"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/computer_mouse.json",
+  "title": "computer_mouse",
+  "description": "Vision/CDP mouse in CSS viewport pixels.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "move",
+        "click",
+        "dblclick",
+        "down",
+        "up",
+        "drag",
+        "wheel"
+      ]
+    },
+    "x": {
+      "type": "number",
+      "description": "CSS px layout viewport."
+    },
+    "y": {
+      "type": "number"
+    },
+    "x2": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Drag end x."
+    },
+    "y2": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "button": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "0 left, 1 middle, 2 right."
+    },
+    "dx": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Wheel delta X."
+    },
+    "dy": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Wheel delta Y."
+    }
+  },
+  "required": [
+    "action",
+    "x",
+    "y",
+    "x2",
+    "y2",
+    "button",
+    "dx",
+    "dy"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Thin Codex launcher: ensure daemon + connect, isolated CODEX_HOME, then exec codex.
+set -euo pipefail
+
+FLAVOUR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$FLAVOUR_ROOT/../.." && pwd)"
+CLI_TS="${REPO_ROOT}/src/cli/index.ts"
+
+run_modelbot() {
+  if [[ -n "${MODELBOT_BIN:-}" ]]; then
+    "$MODELBOT_BIN" "$@"
+  elif command -v modelbot >/dev/null 2>&1; then
+    modelbot "$@"
+  else
+    node --experimental-strip-types "$CLI_TS" "$@"
+  fi
+}
+
+start_daemon_bg() {
+  if [[ -n "${MODELBOT_BIN:-}" ]]; then
+    nohup "$MODELBOT_BIN" start >/dev/null 2>&1 &
+  elif command -v modelbot >/dev/null 2>&1; then
+    nohup modelbot start >/dev/null 2>&1 &
+  else
+    nohup node --experimental-strip-types "$CLI_TS" start >/dev/null 2>&1 &
+  fi
+}
+
+: "${MODELBOT_TOKEN:?set MODELBOT_TOKEN to the daemon /mcp bearer (same as MODELBOT_MCP_TOKEN)}"
+export MODELBOT_MCP_TOKEN="${MODELBOT_MCP_TOKEN:-$MODELBOT_TOKEN}"
+export MODELBOT_ENDPOINT="${MODELBOT_ENDPOINT:-http://127.0.0.1:7777}"
+
+ensure_daemon() {
+  if curl -sf --max-time 2 "${MODELBOT_ENDPOINT}/healthz" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "codex-modelbot: starting modelbot daemon on ${MODELBOT_ENDPOINT}" >&2
+  start_daemon_bg
+  for _ in $(seq 1 50); do
+    if curl -sf --max-time 1 "${MODELBOT_ENDPOINT}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "codex-modelbot: daemon healthz failed at ${MODELBOT_ENDPOINT}/healthz" >&2
+  exit 1
+}
+
+seed_profile() {
+  export CODEX_HOME="${CODEX_HOME:-$HOME/.codex-modelbot}"
+  mkdir -p "$CODEX_HOME/skills/modelbot-computer"
+  cp "$FLAVOUR_ROOT/skills/modelbot-computer/SKILL.md" \
+    "$CODEX_HOME/skills/modelbot-computer/SKILL.md"
+  cp "$FLAVOUR_ROOT/AGENTS.md" "$CODEX_HOME/AGENTS.md"
+}
+
+ensure_daemon
+seed_profile
+run_modelbot connect codex
+echo "codex-modelbot: CODEX_HOME=$CODEX_HOME (modelbot MCP connected)" >&2
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "codex-modelbot: 'codex' not found on PATH" >&2
+  exit 127
+fi
+exec codex "$@"

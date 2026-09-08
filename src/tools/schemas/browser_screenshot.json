@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_screenshot.json",
+  "title": "browser_screenshot",
+  "description": "Viewport JPEG metadata (image delivered out-of-band as MCP image / ImagePart).",
+  "type": "object",
+  "properties": {
+    "full_page": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "max_width": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "max_height": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional element screenshot."
+    }
+  },
+  "required": [
+    "full_page",
+    "max_width",
+    "max_height",
+    "snapshot_id",
+    "ref"
+  ],
+  "additionalProperties": false
+}

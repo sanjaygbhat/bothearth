@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "source": "docs/internal/research/r17-site-tos-antibot.md §4",
+  "entries": [
+    {
+      "id": "linkedin_outreach",
+      "class": "linkedin",
+      "origins": ["*.linkedin.com"],
+      "risk": "block",
+      "note": "Explicit automation ban; outreach/scrape blocked by default"
+    },
+    {
+      "id": "whatsapp_messaging",
+      "class": "whatsapp",
+      "origins": ["web.whatsapp.com", "*.whatsapp.com"],
+      "risk": "block",
+      "note": "Automated messaging bots blocked by default"
+    },
+    {
+      "id": "bank_upi_money",
+      "class": "banks_upi",
+      "origins": ["*.chase.com", "*.bankofamerica.com", "*.paypal.com", "*.venmo.com"],
+      "risk": "block",
+      "note": "Unattended money movement blocked; typed override required"
+    },
+    {
+      "id": "meta_social",
+      "class": "meta",
+      "origins": ["*.facebook.com", "*.instagram.com"],
+      "risk": "warn",
+      "note": "Automated collection ban; warn / takeover-first"
+    },
+    {
+      "id": "x_twitter",
+      "class": "x",
+      "origins": ["x.com", "*.x.com", "twitter.com", "*.twitter.com"],
+      "risk": "warn",
+      "note": "Scrape ban; no bulk scrape"
+    },
+    {
+      "id": "reddit",
+      "class": "reddit",
+      "origins": ["*.reddit.com"],
+      "risk": "warn",
+      "note": "Scrape ban; no unapproved bots"
+    },
+    {
+      "id": "amazon_shopping",
+      "class": "amazon",
+      "origins": ["*.amazon.com", "*.amazon.co.uk", "*.amazon.in"],
+      "risk": "warn",
+      "note": "Purchase confirm required"
+    },
+    {
+      "id": "github",
+      "class": "github",
+      "origins": ["github.com", "*.github.com"],
+      "risk": "allow",
+      "note": "UI OK; scrape constrained"
+    },
+    {
+      "id": "government_portals",
+      "class": "government",
+      "origins": ["*.gov", "*.gov.uk"],
+      "risk": "warn",
+      "note": "Takeover-first for submits; block unattended tax/immigration"
+    }
+  ]
+}

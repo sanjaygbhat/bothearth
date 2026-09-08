@@ -1,0 +1,107 @@
+# Real-image egress bypass suite.
+# Uses prebuilt modelbot/{computer,shell,proxy}:dev — never build or pull.
+# Proxy code is baked into modelbot/proxy:dev (no src bind-mount).
+# Networks: internal (internal:true, DNS pinned to proxy) + egress.
+
+services:
+  proxy:
+    image: modelbot/proxy:dev
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    environment:
+      PROXY_DNSZ: "1"
+    networks:
+      modelbot-internal:
+        ipv4_address: 10.233.77.2
+      modelbot-egress:
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3129/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+
+  browser:
+    image: modelbot/computer:dev
+    user: "1001:1001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+    shm_size: 1g
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    dns:
+      - 10.233.77.2
+    extra_hosts:
+      - "proxy:10.233.77.2"
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      http_proxy: http://proxy:3128
+      https_proxy: http://proxy:3128
+      MODELBOT_PROXY_SERVER: http://proxy:3128
+      NO_PROXY: proxy,localhost,127.0.0.1
+      no_proxy: proxy,localhost,127.0.0.1
+      NODE_PATH: /opt/playwright/node_modules
+      PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    volumes:
+      - ${EGRESS_WORKSPACE}:/workspace:rw
+    networks:
+      - modelbot-internal
+    depends_on:
+      proxy:
+        condition: service_healthy
+    command: ["sleep", "infinity"]
+
+  shell:
+    image: modelbot/shell:dev
+    user: "1002:1002"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    dns:
+      - 10.233.77.2
+    extra_hosts:
+      - "proxy:10.233.77.2"
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      http_proxy: http://proxy:3128
+      https_proxy: http://proxy:3128
+      MODELBOT_PROXY_SERVER: http://proxy:3128
+      NO_PROXY: proxy,localhost,127.0.0.1
+      no_proxy: proxy,localhost,127.0.0.1
+    volumes:
+      - ${EGRESS_WORKSPACE}:/workspace:rw
+    networks:
+      - modelbot-internal
+    depends_on:
+      proxy:
+        condition: service_healthy
+    command: ["sleep", "infinity"]
+
+networks:
+  modelbot-internal:
+    name: modelbot-egress-test-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.233.77.0/24
+  modelbot-egress:
+    name: modelbot-egress-test-egress

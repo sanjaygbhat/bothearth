@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "defaults": {
+    "max_steps": 60,
+    "timeout_sec": 300,
+    "spend_cap_usd": 2.0
+  },
+  "tasks": [
+    {
+      "id": "saucedemo-login-cart",
+      "name": "Sauce Demo login + cart",
+      "sites": ["https://www.saucedemo.com"],
+      "goal": "Open https://www.saucedemo.com, log in with the public standard_user / secret_sauce credentials, add Sauce Labs Backpack to the cart, open the cart, and confirm the backpack line item is present. Call done with a short summary.",
+      "acceptance": "Cart shows Sauce Labs Backpack after login.",
+      "expect": {
+        "min_tool_calls": 3,
+        "final_text_regex": "backpack"
+      },
+      "tags": ["auth", "cart", "public-demo"],
+      "max_steps": 40,
+      "timeout_sec": 240,
+      "artifacts": [],
+      "stand_in": {
+        "on": "password_field",
+        "username": "standard_user",
+        "password": "secret_sauce",
+        "submit": "Enter"
+      }
+    },
+    {
+      "id": "the-internet-auth-download",
+      "name": "the-internet form auth + file download",
+      "sites": [
+        "https://the-internet.herokuapp.com/login",
+        "https://the-internet.herokuapp.com/download"
+      ],
+      "goal": "On https://the-internet.herokuapp.com/login authenticate with tomsmith / SuperSecretPassword!, then open /download, download any .txt file into the computer workspace, and confirm it appears under /workspace. Call done.",
+      "acceptance": "Login success flash and a downloaded .txt under /workspace.",
+      "expect": {
+        "min_tool_calls": 3,
+        "artifact_glob": "/workspace/*.txt",
+        "artifact_min_bytes": 1
+      },
+      "tags": ["auth", "download"],
+      "max_steps": 50,
+      "timeout_sec": 300,
+      "artifacts": ["/workspace/*.txt"],
+      "stand_in": {
+        "on": "password_field",
+        "username": "tomsmith",
+        "password": "SuperSecretPassword!",
+        "submit": "Enter"
+      }
+    },
+    {
+      "id": "demoqa-forms-upload",
+      "name": "DemoQA practice form + upload",
+      "sites": ["https://demoqa.com/automation-practice-form"],
+      "goal": "Open the DemoQA practice form, fill required fields with plausible fake data, upload a small text file from /workspace (create one first if needed), submit the form, and confirm the modal summary. Call done.",
+      "acceptance": "Submit modal shows filled name/email; upload attached.",
+      "expect": {
+        "min_tool_calls": 4,
+        "final_text_regex": "@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+      },
+      "tags": ["forms", "upload"],
+      "max_steps": 50,
+      "timeout_sec": 300,
+      "artifacts": []
+    },
+    {
+      "id": "books-toscrape-csv",
+      "name": "books.toscrape extract to CSV",
+      "sites": ["https://books.toscrape.com"],
+      "goal": "Crawl the first page of https://books.toscrape.com, extract book title and price for every listed book, write a CSV to /workspace/books.csv with header title,price, and call done.",
+      "acceptance": "/workspace/books.csv exists with header + ≥10 data rows.",
+      "expect": {
+        "min_tool_calls": 2,
+        "artifact_glob": "/workspace/books.csv",
+        "artifact_min_bytes": 120
+      },
+      "tags": ["extract", "csv", "workspace"],
+      "max_steps": 40,
+      "timeout_sec": 240,
+      "artifacts": ["/workspace/books.csv"]
+    },
+    {
+      "id": "quotes-toscrape-pagination",
+      "name": "quotes.toscrape pagination",
+      "sites": ["https://quotes.toscrape.com"],
+      "goal": "Open https://quotes.toscrape.com, follow Next across at least 2 pages, collect ≥15 unique quotes (text + author), write /workspace/quotes.jsonl (one JSON object per line), and call done.",
+      "acceptance": "quotes.jsonl has ≥15 lines spanning ≥2 pages.",
+      "expect": {
+        "min_tool_calls": 3,
+        "artifact_glob": "/workspace/quotes.jsonl",
+        "artifact_min_bytes": 400,
+        "artifact_jsonl_min_lines": 15
+      },
+      "tags": ["pagination", "extract"],
+      "max_steps": 50,
+      "timeout_sec": 300,
+      "artifacts": ["/workspace/quotes.jsonl"]
+    },
+    {
+      "id": "recaptcha-takeover",
+      "name": "reCAPTCHA demo → takeover",
+      "sites": ["https://www.google.com/recaptcha/api2/demo"],
+      "goal": "Open the Google reCAPTCHA v2 demo page. Do not attempt to solve the captcha. Call request_takeover with a clear reason so a human can complete it.",
+      "acceptance": "request_takeover succeeds; agent pauses for human.",
+      "expect": {
+        "min_tool_calls": 1,
+        "event": "takeover_request"
+      },
+      "tags": ["captcha", "takeover"],
+      "max_steps": 15,
+      "timeout_sec": 120,
+      "artifacts": []
+    },
+    {
+      "id": "multi-tab-compare",
+      "name": "Multi-tab price/title compare",
+      "sites": [
+        "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+        "https://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html"
+      ],
+      "goal": "Open two product pages in separate tabs (or sequential navigations with browser_tabs), read each title and price, write /workspace/compare.md with both rows and which is cheaper, then call done.",
+      "acceptance": "compare.md lists both titles/prices and a cheaper verdict.",
+      "expect": {
+        "min_tool_calls": 3,
+        "artifact_glob": "/workspace/compare.md",
+        "artifact_min_bytes": 40,
+        "final_text_regex": "cheaper"
+      },
+      "tags": ["tabs", "compare"],
+      "max_steps": 40,
+      "timeout_sec": 240,
+      "artifacts": ["/workspace/compare.md"]
+    },
+    {
+      "id": "spa-click-flow",
+      "name": "JS-heavy SPA click flow",
+      "sites": ["https://demoqa.com/dynamic-properties"],
+      "goal": "Open DemoQA dynamic properties. Wait until the 'Will enable 5 seconds' button becomes enabled, click it (or Visible After 5 Seconds), then navigate to /buttons and perform a double-click on the double-click button. Confirm the success message. Call done.",
+      "acceptance": "Dynamic enable/visible handled; double-click success message seen.",
+      "expect": {
+        "min_tool_calls": 3,
+        "final_text_regex": "double.?click"
+      },
+      "tags": ["spa", "js-heavy", "wait"],
+      "max_steps": 40,
+      "timeout_sec": 240,
+      "artifacts": []
+    },
+    {
+      "id": "table-sort-read",
+      "name": "Table sort and read",
+      "sites": ["https://the-internet.herokuapp.com/tables"],
+      "goal": "Open the sortable table example, sort Example 1 by Due column, read the top row after sort, and write /workspace/table-top.json with lastName, firstName, due. Call done.",
+      "acceptance": "table-top.json matches the first data row after Due sort.",
+      "expect": {
+        "min_tool_calls": 2,
+        "artifact_glob": "/workspace/table-top.json",
+        "artifact_min_bytes": 30,
+        "final_text_regex": "(Smith|Bach|Doe|Conway)"
+      },
+      "tags": ["table", "sort"],
+      "max_steps": 30,
+      "timeout_sec": 180,
+      "artifacts": ["/workspace/table-top.json"]
+    },
+    {
+      "id": "search-summarize",
+      "name": "Search + summarize",
+      "sites": ["https://quotes.toscrape.com"],
+      "goal": "On quotes.toscrape.com use the tag or search UX to find quotes tagged 'humor' (or filter via /tag/humor/), read at least 3 quotes, write a 2–3 sentence summary to /workspace/humor-summary.md, and call done.",
+      "acceptance": "humor-summary.md exists and references ≥3 humor quotes.",
+      "expect": {
+        "min_tool_calls": 2,
+        "artifact_glob": "/workspace/humor-summary.md",
+        "artifact_min_bytes": 40
+      },
+      "tags": ["search", "summarize"],
+      "max_steps": 40,
+      "timeout_sec": 240,
+      "artifacts": ["/workspace/humor-summary.md"]
+    },
+    {
+      "id": "dropdown-datepicker",
+      "name": "Dropdown + date picker",
+      "sites": ["https://demoqa.com/date-picker"],
+      "goal": "Open DemoQA date picker, set Select Date to 15 March 2030 via the calendar UI (not only typing if a picker is available), confirm the input shows that date, and call done.",
+      "acceptance": "Date input reflects 03/15/2030 (or locale equivalent).",
+      "expect": {
+        "min_tool_calls": 2,
+        "final_text_regex": "(03[/.-]15[/.-]2030|15\\s*March\\s*2030|2030-03-15)"
+      },
+      "tags": ["dropdown", "datepicker"],
+      "max_steps": 35,
+      "timeout_sec": 200,
+      "artifacts": []
+    },
+    {
+      "id": "spend-cap-negative",
+      "name": "Stop when spend cap hit",
+      "sites": ["https://example.com"],
+      "goal": "NEGATIVE CASE: begin browsing example.com and keep taking tool steps. The run must stop because the per-task spend_cap_usd is hit — do not call done. This validates the cost meter kill switch.",
+      "acceptance": "Task pauses with reason spend_cap before calling done.",
+      "expect": {
+        "min_tool_calls": 1,
+        "event": "spend_cap"
+      },
+      "tags": ["negative", "spend_cap"],
+      "max_steps": 20,
+      "timeout_sec": 120,
+      "spend_cap_usd": 0.01,
+      "artifacts": []
+    }
+  ]
+}

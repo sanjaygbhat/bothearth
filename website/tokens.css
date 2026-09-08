@@ -1,0 +1,178 @@
+/* ============================================================================
+   ModelBot — design tokens, website subset
+   Plain CSS custom properties. No Tailwind, no preprocessor, no build step.
+   Only what style.css and index.html read; the app carries the full set in
+   src/ui/tokens.css.
+
+   Colour space: OKLCH throughout. Every value is inside the sRGB gamut and
+   contrast-checked against the ground it is used on.
+
+   Theming contract, in this order:
+     :root                                     -> complete light palette
+     @media (prefers-color-scheme: dark)        -> guarded by :not([data-theme="light"])
+     :root[data-theme="dark"]                   -> explicit override wins
+   Only the semantic layer is redefined per theme. Sizes, spacing and radii are
+   theme-independent and are declared once.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. COLOUR — light (default)
+   ------------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces. Warm paper, never pure white. Tinted toward the brand green. */
+  --color-bg:            oklch(98.4% 0.006 106);   /* #FAFAF5 page ground    */
+  --color-surface:       oklch(96.6% 0.009 108);   /* #F4F4ED wells          */
+  --color-elevated:      oklch(99.4% 0.004 106);   /* #FDFDFA cards          */
+
+  /* Text. Deep evergreen ink, never pure black. */
+  --color-text:          oklch(26% 0.032 165);     /* #142920  14.67:1 on bg */
+  --color-muted:         oklch(48% 0.024 162);     /* #526259   6.17:1 on bg */
+  --color-border:        oklch(89.5% 0.014 130);   /* #D9DED5  decorative    */
+  --color-border-strong: oklch(80% 0.018 140);     /* dividers that must read */
+
+  /* Accent — ember. The only warm hue in the system; keep it to ~10% of
+     visual weight. It carries white text. */
+  --color-accent:        oklch(53% 0.135 48);      /* #A84E13   5.32:1 on bg */
+  --color-accent-hover:  oklch(47% 0.118 46);      /* #8E4116   6.85:1 on bg */
+  --color-on-accent:     oklch(99% 0.006 100);     /* #FDFCF7  5.42:1 on accent */
+
+  /* Focus. Distinct from accent by lightness so a focused primary button
+     still shows its ring. Verified >=3:1 against bg and surface. */
+  --color-focus:         oklch(55% 0.132 50);      /* #AD561B   4.87:1 on bg */
+
+  /* Layered and tinted with the ink hue, never neutral black: a tight contact
+     shadow plus a wide soft one. */
+  --shadow-lg:
+    0 4px 8px -2px oklch(26% 0.032 165 / 0.05),
+    0 14px 30px -6px oklch(26% 0.032 165 / 0.10);
+}
+
+/* ---------------------------------------------------------------------------
+   2. COLOUR — dark
+   Not an inversion. Depth comes from surfaces getting *lighter*, shadows do
+   almost nothing, and the accent flips to a light ember carrying dark text.
+   ------------------------------------------------------------------------ */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-bg:            oklch(17.5% 0.014 168);  /* #0A130F               */
+    --color-surface:       oklch(21.5% 0.015 168);  /* #131C18  "higher"     */
+    --color-elevated:      oklch(25.5% 0.014 168);  /* #1C2521  "higher yet" */
+
+    --color-text:          oklch(94% 0.010 108);    /* #EBECE4 15.88:1 on bg */
+    --color-muted:         oklch(73% 0.016 140);    /* #A3AAA1  7.96:1 on bg */
+    --color-border:        oklch(31% 0.016 166);    /* #29332E               */
+    --color-border-strong: oklch(40% 0.018 166);
+
+    --color-accent:        oklch(74% 0.135 60);     /* #E8954A  7.93:1 on bg */
+    --color-accent-hover:  oklch(79% 0.130 62);     /* #F6A65D  9.51:1 on bg */
+    --color-on-accent:     oklch(20% 0.030 60);     /* #201308  7.62:1 on accent */
+
+    --color-focus:         oklch(78% 0.140 58);     /* #F99F55  9.12:1 on bg */
+
+    /* Dark elevation reads through surface lightness, so the shadow shrinks. */
+    --shadow-lg: 0 8px 20px -4px oklch(0% 0 0 / 0.55);
+  }
+}
+
+/* Explicit dark choice must win in both directions. Values duplicated on
+   purpose: a token whose only definition lives in a media query breaks the
+   in-app theme switch. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg:            oklch(17.5% 0.014 168);
+  --color-surface:       oklch(21.5% 0.015 168);
+  --color-elevated:      oklch(25.5% 0.014 168);
+
+  --color-text:          oklch(94% 0.010 108);
+  --color-muted:         oklch(73% 0.016 140);
+  --color-border:        oklch(31% 0.016 166);
+  --color-border-strong: oklch(40% 0.018 166);
+
+  --color-accent:        oklch(74% 0.135 60);
+  --color-accent-hover:  oklch(79% 0.130 62);
+  --color-on-accent:     oklch(20% 0.030 60);
+
+  --color-focus:         oklch(78% 0.140 58);
+
+  --shadow-lg: 0 8px 20px -4px oklch(0% 0 0 / 0.55);
+}
+
+/* ---------------------------------------------------------------------------
+   3. TYPE
+   Two families, real contrast between them: a warm variable serif for the few
+   display moments, the system sans for everything else.
+   Fixed rem scale, ratio 1.25 (major third), anchored at 1rem = 16px.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --font-display: "Fraunces", ui-serif, Georgia, "Times New Roman", serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+             "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  --text-caption:  0.8rem;      /* 12.8px  timestamps, legal, meta          */
+  --text-ui:       0.875rem;    /* 14px    labels, buttons                  */
+  --text-body:     1rem;        /* 16px    prose                            */
+  --text-heading:  1.25rem;     /* 20px    section headings                 */
+
+  --leading-display: 1.08;
+  --leading-title:   1.2;
+  --leading-body:    1.55;
+
+  --measure: 68ch;              /* max line length for prose                */
+}
+
+/* Light-on-dark type needs more air. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --leading-body: 1.62;
+  }
+}
+:root[data-theme="dark"] {
+  --leading-body: 1.62;
+}
+
+/* ---------------------------------------------------------------------------
+   4. SPACE — 4pt base. Section rhythm (24/48/96) is a multiple of the body
+   line box (16px * 1.5 = 24px), so type and space share one grid.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --space-2xs: 0.5rem;    /*  8px */
+  --space-xs:  0.75rem;   /* 12px */
+  --space-sm:  1rem;      /* 16px */
+  --space-md:  1.5rem;    /* 24px */
+  --space-lg:  2rem;      /* 32px */
+  --space-xl:  3rem;      /* 48px */
+  --space-2xl: 4rem;      /* 64px */
+  --space-3xl: 6rem;      /* 96px */
+
+  --tap-target: 44px;     /* minimum hit area, visual size may be smaller   */
+}
+
+/* ---------------------------------------------------------------------------
+   5. RADII
+   ------------------------------------------------------------------------ */
+
+:root {
+  --radius-xs:   4px;    /* tags, inline code                               */
+  --radius-md:  10px;    /* buttons                                         */
+  --radius-lg:  14px;    /* cards, screenshots                              */
+}
+
+/* ---------------------------------------------------------------------------
+   6. FOCUS
+   Pair with :focus-visible, never remove it.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --focus-width:  2px;
+  --focus-offset: 2px;
+}

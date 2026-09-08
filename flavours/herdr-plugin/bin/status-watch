@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pane entry: modelbot status --watch (refresh every 2s).
+set -euo pipefail
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
+CLI_TS="${REPO_ROOT}/src/cli/index.ts"
+
+run_status() {
+  if [[ -n "${MODELBOT_BIN:-}" ]]; then
+    exec "$MODELBOT_BIN" status --watch
+  elif command -v modelbot >/dev/null 2>&1; then
+    exec modelbot status --watch
+  else
+    exec node --experimental-strip-types "$CLI_TS" status --watch
+  fi
+}
+
+run_status

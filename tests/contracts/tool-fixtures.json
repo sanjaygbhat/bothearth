@@ -1,0 +1,357 @@
+{
+  "browser_navigate": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "url": "https://example.com",
+      "wait_until": null
+    },
+    "bad": {
+      "url": 1,
+      "wait_until": null
+    }
+  },
+  "browser_snapshot": {
+    "sideEffect": "read",
+    "driver": "a11y",
+    "example": {
+      "scope": null,
+      "interactive_only": true,
+      "depth": null,
+      "max_chars": null
+    },
+    "bad": {
+      "scope": 1,
+      "interactive_only": true,
+      "depth": null,
+      "max_chars": null
+    }
+  },
+  "browser_click": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "snapshot_id": "snap_1",
+      "ref": "e7",
+      "button": "left",
+      "double_click": false
+    },
+    "bad": {
+      "snapshot_id": "snap_1",
+      "ref": "e7",
+      "button": "left",
+      "double_click": false,
+      "extra": true
+    }
+  },
+  "browser_type": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "snapshot_id": "snap_1",
+      "ref": "e3",
+      "text": "hello",
+      "submit": false,
+      "slowly": false
+    },
+    "bad": {
+      "snapshot_id": "snap_1",
+      "ref": "e3",
+      "text": 9,
+      "submit": false,
+      "slowly": false
+    }
+  },
+  "browser_press": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "key": "Enter",
+      "snapshot_id": null,
+      "ref": null
+    },
+    "bad": {
+      "key": null,
+      "snapshot_id": null,
+      "ref": null
+    }
+  },
+  "browser_scroll": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "snapshot_id": null,
+      "ref": null,
+      "dx": 0,
+      "dy": 400,
+      "direction": null,
+      "amount": null
+    },
+    "bad": {
+      "snapshot_id": null,
+      "ref": null,
+      "dx": "x",
+      "dy": 400,
+      "direction": null,
+      "amount": null
+    }
+  },
+  "browser_select": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "snapshot_id": "snap_1",
+      "ref": "e9",
+      "values": [
+        "us"
+      ]
+    },
+    "bad": {
+      "snapshot_id": "snap_1",
+      "ref": "e9",
+      "values": "us"
+    }
+  },
+  "browser_upload": {
+    "sideEffect": "gated",
+    "driver": "a11y",
+    "example": {
+      "snapshot_id": "snap_1",
+      "ref": "e2",
+      "paths": [
+        "/workspace/a.pdf"
+      ]
+    },
+    "bad": {
+      "snapshot_id": "snap_1",
+      "ref": "e2",
+      "paths": []
+    }
+  },
+  "browser_tabs": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {
+      "action": "list",
+      "tab_id": null,
+      "url": null
+    },
+    "bad": {
+      "action": "explode",
+      "tab_id": null,
+      "url": null
+    }
+  },
+  "browser_screenshot": {
+    "sideEffect": "read",
+    "driver": "vision",
+    "example": {
+      "full_page": false,
+      "max_width": 1280,
+      "max_height": 720,
+      "snapshot_id": null,
+      "ref": null
+    },
+    "bad": {
+      "full_page": "yes",
+      "max_width": 1280,
+      "max_height": 720,
+      "snapshot_id": null,
+      "ref": null
+    }
+  },
+  "browser_wait": {
+    "sideEffect": "read",
+    "driver": "a11y",
+    "example": {
+      "timeout_ms": 5000,
+      "ms": null,
+      "text": "Welcome",
+      "url_glob": null,
+      "load_state": null
+    },
+    "bad": {
+      "timeout_ms": "soon",
+      "ms": null,
+      "text": null,
+      "url_glob": null,
+      "load_state": null
+    }
+  },
+  "computer_mouse": {
+    "sideEffect": "act",
+    "driver": "vision",
+    "example": {
+      "action": "click",
+      "x": 100,
+      "y": 200,
+      "x2": null,
+      "y2": null,
+      "button": 0,
+      "dx": null,
+      "dy": null
+    },
+    "bad": {
+      "action": "click",
+      "x": "100",
+      "y": 200,
+      "x2": null,
+      "y2": null,
+      "button": 0,
+      "dx": null,
+      "dy": null
+    }
+  },
+  "computer_key": {
+    "sideEffect": "act",
+    "driver": "vision",
+    "example": {
+      "key": "Enter",
+      "mods": 0
+    },
+    "bad": {
+      "key": 1,
+      "mods": 0
+    }
+  },
+  "computer_type": {
+    "sideEffect": "act",
+    "driver": "vision",
+    "example": {
+      "text": "hello"
+    },
+    "bad": {
+      "text": 1
+    }
+  },
+  "shell_exec": {
+    "sideEffect": "gated",
+    "driver": "system",
+    "example": {
+      "command": "ls -la",
+      "cwd": "/workspace",
+      "timeout_ms": 30000
+    },
+    "bad": {
+      "command": [
+        "ls"
+      ],
+      "cwd": null,
+      "timeout_ms": null
+    }
+  },
+  "files_list": {
+    "sideEffect": "read",
+    "driver": "system",
+    "example": {
+      "path": "/workspace"
+    },
+    "bad": {
+      "path": 1
+    }
+  },
+  "files_read": {
+    "sideEffect": "read",
+    "driver": "system",
+    "example": {
+      "path": "/workspace/a.txt",
+      "offset": 0,
+      "limit": 100
+    },
+    "bad": {
+      "path": "/workspace/a.txt",
+      "offset": "0",
+      "limit": 100
+    }
+  },
+  "files_write": {
+    "sideEffect": "act",
+    "driver": "system",
+    "example": {
+      "path": "/workspace/out.txt",
+      "content": "hi",
+      "mkdir": true
+    },
+    "bad": {
+      "path": "/workspace/out.txt",
+      "content": 1,
+      "mkdir": true
+    }
+  },
+  "files_delete": {
+    "sideEffect": "gated",
+    "driver": "system",
+    "example": {
+      "path": "/workspace/tmp.bin"
+    },
+    "bad": {
+      "path": null
+    }
+  },
+  "write_file": {
+    "sideEffect": "act",
+    "driver": "system",
+    "example": {
+      "path": "invoices.csv",
+      "content": "date,amount\n2026-08-01,12.00\n",
+      "encoding": "utf8",
+      "mode": "overwrite"
+    },
+    "bad": {
+      "path": "invoices.csv",
+      "content": "x",
+      "encoding": "rot13",
+      "mode": "overwrite"
+    }
+  },
+  "request_takeover": {
+    "sideEffect": "gated",
+    "driver": "system",
+    "example": {
+      "reason": "login form",
+      "category": "password"
+    },
+    "bad": {
+      "reason": 1,
+      "category": null
+    }
+  },
+  "takeover_status": {
+    "sideEffect": "read",
+    "driver": "system",
+    "example": {
+      "takeover_id": "tk_1"
+    },
+    "bad": {
+      "takeover_id": 1
+    }
+  },
+  "connector_call": {
+    "sideEffect": "gated",
+    "driver": "system",
+    "example": {
+      "connector_id": "gmail",
+      "tool": "send",
+      "arguments": {
+        "to": "a@b.c"
+      }
+    },
+    "bad": {
+      "connector_id": "gmail",
+      "tool": 1,
+      "arguments": null
+    }
+  },
+  "done": {
+    "sideEffect": "act",
+    "driver": "system",
+    "example": {
+      "summary": "form submitted",
+      "status": "success"
+    },
+    "bad": {
+      "summary": 1,
+      "status": "success"
+    }
+  }
+}

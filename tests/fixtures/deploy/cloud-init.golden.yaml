@@ -1,0 +1,26 @@
+#cloud-config
+hostname: modelbot
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+write_files:
+  - path: /etc/modelbot/README.deploy
+    permissions: '0644'
+    content: |
+      ModelBot remote bootstrap.
+      Daemon binds 127.0.0.1:7777 only — never publish UI ports.
+      Installer scripts below are digest-pin TODO before production:
+      - Docker: https://download.docker.com/linux/ubuntu/gpg
+      - Node 22: nodesource setup_22.x (replace with digest-pinned node binary)
+      - Tailscale: https://tailscale.com/install.sh (pin digest; one-off auth key via SSH)
+      Image/version placeholder: 0.0.1
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings /var/lib/modelbot /etc/modelbot
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
