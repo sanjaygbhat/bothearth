@@ -56,6 +56,10 @@ Sitemap dates describe the actual content review, not each rebuild. Update `revi
 
 After the site is live, verify its Search Console property, submit the sitemap, inspect indexing, and check current generative-AI inclusion/reporting settings. Keep claim evidence and reproducible example results current. The [Google AI optimization guide](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide) is the primary reference; discoverability is not a promise of ranking or citation.
 
+The [IndexNow verification file](70df6a3860a46a46f4485513292e8249.txt) is deliberately public proof of host control, separate from any account credential. After deployment, confirm that `https://bothearth.com/70df6a3860a46a46f4485513292e8249.txt` serves the exact key `70df6a3860a46a46f4485513292e8249` over HTTPS. Then submit one JSON POST to `https://api.indexnow.org/indexnow` with `host: "bothearth.com"`, that `key`, the public file URL as `keyLocation`, and a `urlList` containing only added, changed, or deleted canonical BotHearth URLs. The initial launch can submit the seven canonical page URLs in the sitemap. Use `Content-Type: application/json; charset=utf-8`.
+
+Submit after the public change is deployed; unchanged URLs need no repeated notification. HTTP 200 acknowledges receipt, while 202 means key validation is pending. Neither proves crawling, indexing, ranking, or AI citation. Follow the [IndexNow protocol](https://www.indexnow.org/documentation) and its [official endpoint guidance](https://www.indexnow.org/faq).
+
 ## Licence and privacy
 
 Project code and artwork follow the repository licence and notices. Fraunces retains its [SIL Open Font License](fonts/Fraunces-OFL.txt). This release is source-available for permitted noncommercial purposes; it includes no commercial-use grant.

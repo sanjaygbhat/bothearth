@@ -15,6 +15,9 @@ function fakeExec(afterEof: number | null) {
   const child = new EventEmitter() as unknown as ChildProcess & { kills: string[] };
   const stdin = new PassThrough();
   const stdout = new PassThrough();
+  // A real child has a referenced process handle until exit. The fake needs
+  // the same lifetime while production's shutdown timers remain unref'ed.
+  const lifetime = setInterval(() => {}, 1_000);
   Object.assign(child, {
     exitCode: null,
     signalCode: null,
@@ -27,7 +30,9 @@ function fakeExec(afterEof: number | null) {
   });
   const exit = (code: number | null, signal: NodeJS.Signals | null) => {
     if (child.exitCode != null || child.signalCode != null) return;
+    clearInterval(lifetime);
     Object.assign(child, { exitCode: code, signalCode: signal });
+    stdout.end();
     child.emit("exit", code, signal);
   };
   stdin.on("finish", () => {

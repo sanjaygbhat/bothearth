@@ -1,11 +1,11 @@
 # Real-image egress bypass suite.
-# Uses prebuilt modelbot/{computer,shell,proxy}:dev — never build or pull.
-# Proxy code is baked into modelbot/proxy:dev (no src bind-mount).
+# Uses prebuilt images, with explicit test image overrides — never build or pull.
+# Proxy code is baked into its image (no src bind-mount).
 # Networks: internal (internal:true, DNS pinned to proxy) + egress.
 
 services:
   proxy:
-    image: modelbot/proxy:dev
+    image: ${MODELBOT_TEST_PROXY_IMAGE:-modelbot/proxy:dev}
     user: "1000:1000"
     read_only: true
     tmpfs:
@@ -20,7 +20,7 @@ services:
       PROXY_DNSZ: "1"
     networks:
       modelbot-internal:
-        ipv4_address: 10.233.77.2
+        ipv4_address: ${INTERNAL_PROXY_IP:-10.233.77.2}
       modelbot-egress:
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3129/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -30,7 +30,7 @@ services:
       start_period: 3s
 
   browser:
-    image: modelbot/computer:dev
+    image: ${MODELBOT_TEST_COMPUTER_IMAGE:-modelbot/computer:dev}
     user: "1001:1001"
     read_only: true
     tmpfs:
@@ -41,10 +41,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - seccomp=./sandbox/seccomp-chromium.json
     dns:
-      - 10.233.77.2
+      - ${INTERNAL_PROXY_IP:-10.233.77.2}
     extra_hosts:
-      - "proxy:10.233.77.2"
+      - "proxy:${INTERNAL_PROXY_IP:-10.233.77.2}"
     environment:
       HTTP_PROXY: http://proxy:3128
       HTTPS_PROXY: http://proxy:3128
@@ -66,7 +67,7 @@ services:
     command: ["sleep", "infinity"]
 
   shell:
-    image: modelbot/shell:dev
+    image: ${MODELBOT_TEST_SHELL_IMAGE:-modelbot/shell:dev}
     user: "1002:1002"
     read_only: true
     tmpfs:
@@ -76,9 +77,9 @@ services:
     security_opt:
       - no-new-privileges:true
     dns:
-      - 10.233.77.2
+      - ${INTERNAL_PROXY_IP:-10.233.77.2}
     extra_hosts:
-      - "proxy:10.233.77.2"
+      - "proxy:${INTERNAL_PROXY_IP:-10.233.77.2}"
     environment:
       HTTP_PROXY: http://proxy:3128
       HTTPS_PROXY: http://proxy:3128
@@ -98,10 +99,10 @@ services:
 
 networks:
   modelbot-internal:
-    name: modelbot-egress-test-internal
+    name: ${EGRESS_PROJECT:-modelbot-egress-test}-internal
     internal: true
     ipam:
       config:
-        - subnet: 10.233.77.0/24
+        - subnet: ${INTERNAL_SUBNET:-10.233.77.0/24}
   modelbot-egress:
-    name: modelbot-egress-test-egress
+    name: ${EGRESS_PROJECT:-modelbot-egress-test}-egress

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "5f3286fdbb0b5f179b05a2ca236c633e76cb7e305402e71ef670c3bab4466756",
+  "tree_sha256": "316e1352bab9bf3e1f3b216378197932612695e69c3581cf1b4ddad4a45807ec",
   "files": [
     {
       "path": ".dockerignore",
@@ -467,9 +467,9 @@
     },
     {
       "path": "docker-compose.egress-test.yml",
-      "bytes": 2855,
+      "bytes": 3162,
       "mode": "644",
-      "sha256": "b15158eaaa34745a8c603bc1d23b555b5cb9dc68d18b208c5e48ca19c1c3c21f"
+      "sha256": "bc4067103bcdff787f1afe8cea9c4e77d7cfa1c299a9abec8d5603b1e453840a"
     },
     {
       "path": "docker-compose.yml",
@@ -893,9 +893,9 @@
     },
     {
       "path": "scripts/build-site.mjs",
-      "bytes": 5779,
+      "bytes": 5819,
       "mode": "644",
-      "sha256": "cb4369859131112c6403f34e387a70e186a7c3c2628beb360f29ff85ceb269e4"
+      "sha256": "328462f654e2ea9ce12f01c3374abf216f35c5f336401f6c27c8cee4f00c8284"
     },
     {
       "path": "scripts/check-site.mjs",
@@ -917,9 +917,15 @@
     },
     {
       "path": "scripts/egress-bypass.sh",
-      "bytes": 14885,
+      "bytes": 4432,
       "mode": "755",
-      "sha256": "f2269e5a7c45e004bae8bb8fcd83117802c06cf98b5faa15f80c42eacb351b2e"
+      "sha256": "e39ff882af4579185a35f5f846f6b352f22c706e8269fc69bbc3e12523d1b9a2"
+    },
+    {
+      "path": "scripts/egress-probe.mjs",
+      "bytes": 7221,
+      "mode": "644",
+      "sha256": "5a03650e1fb65358c80e81e46dc83e9730dfa2ba7fafad3b1227125da5511500"
     },
     {
       "path": "scripts/export-public.mjs",
@@ -2483,9 +2489,9 @@
     },
     {
       "path": "tests/unit/cli/configured-stores.test.ts",
-      "bytes": 2347,
+      "bytes": 3266,
       "mode": "644",
-      "sha256": "15a78a5477d2ff1e21fbbd765ddd44c277a214e35af40411b59f932273491410"
+      "sha256": "c9fb59401327d42e29e042677cc1b379069f086b3e0e3fa9a01650dd4c02e8df"
     },
     {
       "path": "tests/unit/cli/connect.test.ts",
@@ -2555,9 +2561,9 @@
     },
     {
       "path": "tests/unit/computer-client/live-transport.test.ts",
-      "bytes": 5185,
+      "bytes": 5446,
       "mode": "644",
-      "sha256": "1d4f0b3845a896520c7de3c7ca37a68317440cc29f0859f1f37a2403f69769f7"
+      "sha256": "6b4ab85f46a1aff090bcc707ddec02230146555f7e8bde4193f75684801cfa37"
     },
     {
       "path": "tests/unit/computer-client/takeover-split.test.ts",
@@ -2741,9 +2747,9 @@
     },
     {
       "path": "tests/unit/daemon/computer-close.test.ts",
-      "bytes": 2629,
+      "bytes": 2877,
       "mode": "644",
-      "sha256": "eaf4b654b4fa05fada3256f867a1f839679062f2ff1c2f2b81ad74e29b22a49c"
+      "sha256": "6ccb9e34f501b19e291c2e7289111c6137685e9b8de7e3911277a7130356578b"
     },
     {
       "path": "tests/unit/daemon/default-workspace.test.ts",
@@ -3526,10 +3532,16 @@
       "sha256": "65e70ecb757bc3c275f57572abc4072770a55082244684faedd6ac45a3fc1028"
     },
     {
-      "path": "website/README.md",
-      "bytes": 6138,
+      "path": "website/70df6a3860a46a46f4485513292e8249.txt",
+      "bytes": 33,
       "mode": "644",
-      "sha256": "e4652b8e8f35a6ca23ad095d010a3ef5e474867b951f4010510e519d4a1c4c06"
+      "sha256": "06de6e577acfa4a916b63e9d07eba02f169edc7fa32ea76a72a7d4b9fd48bc51"
+    },
+    {
+      "path": "website/README.md",
+      "bytes": 7177,
+      "mode": "644",
+      "sha256": "b5ecdbab335ace6ed856c51a3c0ffdb60ebf9be98965178b9b4a854b2e465de0"
     },
     {
       "path": "website/about.html",

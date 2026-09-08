@@ -58,7 +58,7 @@ for (const page of pages) {
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, "index.html"), render(template));
 }
-for (const file of ["tokens.css", "style.css", "favicon.svg", "social-preview.png",
+for (const file of ["tokens.css", "style.css", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
   "fonts/fraunces-latin-wght.woff2", "fonts/Fraunces-OFL.txt",
   "screenshots/task-running.png", "screenshots/needs-you.png"]) {
   mkdirSync(dirname(join(output, file)), { recursive: true });

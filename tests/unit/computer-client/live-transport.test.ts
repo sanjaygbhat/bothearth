@@ -9,6 +9,21 @@ import type { LiveFrameEvent } from "../../../src/computer-client/types.ts";
 import { decodeStdioBody, encodeLiveStdioFrame, encodeRpcFrame } from "../../../src/protocol/stdio.ts";
 import type { ScreencastFrameHeader } from "../../../src/types/contracts.ts";
 
+/** Model EOF/exit as well as pipes; an EventEmitter alone never exits. */
+function fakeExec(stdout: PassThrough, stdin: Writable): ChildProcess {
+  const child = new EventEmitter() as ChildProcess;
+  const exit = () => {
+    if (child.exitCode !== null) return;
+    Object.assign(child, { exitCode: 0 });
+    stdout.end();
+    child.emit("exit", 0, null);
+  };
+  Object.assign(child, { stdout, stdin, exitCode: null, kill() { exit(); return true; } });
+  stdin.once("finish", exit);
+  stdout.once("end", exit);
+  return child;
+}
+
 test("multiplexed operator frames arrive separately from RPC results and stop on unsubscribe", async () => {
   const stdout = new PassThrough();
   const methods: string[] = [];
@@ -17,12 +32,7 @@ test("multiplexed operator frames arrive separately from RPC results and stop on
   const bytes = new Uint8Array([1, 2, 3]);
   let opens = 0;
   let failSubscription = false;
-  const child = new EventEmitter() as ChildProcess;
-  Object.assign(child, {
-    stdout,
-    exitCode: null,
-    kill() { stdout.end(); return true; },
-    stdin: new Writable({ write(chunk, _encoding, callback) {
+  const child = fakeExec(stdout, new Writable({ write(chunk, _encoding, callback) {
       const frame = decodeStdioBody(chunk.subarray(4));
       assert.equal(frame.type, 0);
       const request = frame.message as { id: number; method: string };
@@ -33,8 +43,7 @@ test("multiplexed operator frames arrive separately from RPC results and stop on
         ? { ok: false, error: { code: "E_IO", message: "capture unavailable" } }
         : { ok: true, data: { method: request.method } } }));
       callback();
-    }}),
-  });
+    }}));
   const client = new ExecComputerClient("live_transport", {
     capabilities: ["browser"],
     cli: { binary: "fixture", run: async () => "", runSync: () => "", spawn: () => { opens++; return child; } },
@@ -71,9 +80,7 @@ test("a dead RPC is replaced on the next call without replaying the failed actio
     cli: { binary: "fixture", run: async () => "", runSync: () => "", spawn: () => {
       const attempt = ++opens;
       const stdout = new PassThrough();
-      const child = new EventEmitter() as ChildProcess;
-      Object.assign(child, { stdout, exitCode: null, kill() { stdout.end(); return true; },
-        stdin: new Writable({ write(chunk, _encoding, callback) {
+      const child = fakeExec(stdout, new Writable({ write(chunk, _encoding, callback) {
           const frame = decodeStdioBody(chunk.subarray(4));
           assert.equal(frame.type, 0);
           const request = frame.message as { id: number; method: string };
@@ -82,8 +89,7 @@ test("a dead RPC is replaced on the next call without replaying the failed actio
           else stdout.write(encodeRpcFrame({ jsonrpc: "2.0", id: request.id,
             result: { ok: true, data: { method: request.method } } }));
           callback();
-        }}),
-      });
+        }}));
       return child;
     } },
   });
