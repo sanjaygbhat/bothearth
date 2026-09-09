@@ -36,7 +36,7 @@ The website uses a text/SVG BotHearth wordmark, the existing warm palette, a loc
 
 The main page introduces BotHearth through a task, the agent's visible work, and its saved result. Keep setup requirements beside the entry point and detailed implementation/licence answers in the linked guides. The reading-log illustration is labeled as an example and uses the exact sample totals from the examples page.
 
-The homepage and repository README use `reading-summary-detail.png`, an actual 1200×540 viewport capture of the reading-log result on 8 September 2026, linked to the complete `reading-summary.png` capture. The task saved a correct 70-minute summary and the original three-row CSV. The approval screenshot `needs-you.png` and retained `task-running.png` asset are pre-rename app captures from 7 September. All image bytes are unretouched; captions link to provenance and usage-meter details. Other historical screenshots are not deployed assets.
+The homepage and repository README use `reading-summary-detail.png`, an actual 1200×540 viewport capture taken on 9 September 2026 of the completed 8 September reading-log task, re-opened with the simplified total-cost UI without rerunning or changing task data, linked to the complete `reading-summary.png` capture. The task saved a correct 70-minute summary and the original three-row CSV. The approval screenshot `needs-you.png` and retained `task-running.png` asset are pre-rename app captures from 7 September. All image bytes are unretouched; captions link to provenance and usage-meter details. Other historical screenshots are not deployed assets.
 
 ## Publish the informational site with GitHub Pages
 

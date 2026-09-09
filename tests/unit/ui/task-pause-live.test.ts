@@ -174,7 +174,7 @@ describe("a pause on the open page", () => {
       );
       assert.equal(
         page.root.querySelector(".task-bar .spend")?.textContent,
-        `Paused ${clockTime(PAUSED_AT)} · $0.05 of $0.05 used`,
+        `Paused ${clockTime(PAUSED_AT)}`,
       );
     } finally {
       page.stop();

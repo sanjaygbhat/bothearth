@@ -157,18 +157,8 @@ test("Usage renders a bar list with no chart library and an empty state that rea
   const empty = emptyWorld();
   const first = await mountSection("usage", empty);
   try {
-    // A setting you can read and not change is not a setting, so the budget is
-    // a label, an input carrying the current figure, and a Save beside it.
-    // `Kept on this Mac` is the honest scope: the daemon has no settings
-    // endpoint, so this figure travels with each task rather than rewriting a
-    // server-side default.
-    assert.match(text(first.pane), /Budget for one task/);
-    assert.match(text(first.pane), /Kept on this Mac/);
-    const budgetInput = all(first.pane).find(
-      (n) => n.tagName === "INPUT" && n.getAttribute("inputmode") === "decimal",
-    );
-    assert.ok(budgetInput, "the budget is editable");
-    assert.equal(budgetInput.value, "2.00");
+    assert.doesNotMatch(text(first.pane), /Budget for one task|Kept on this Mac/);
+    assert(!all(first.pane).some(n => n.tagName === "INPUT"));
     assert.match(text(first.pane), /Nothing to show yet/);
     assert.equal(all(first.pane).some((n) => n.tagName === "CANVAS"), false);
   } finally {

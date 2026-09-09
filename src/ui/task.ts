@@ -22,7 +22,7 @@ import { currentDeviceId, currentSession, type SessionInfo } from "./session.ts"
 import { navigate, registerView, setTitle, toast, type Tone } from "./shell.ts";
 import { bindCommand } from "./palette.ts";
 import { limitTime } from "./runtime.ts";
-import { formatUsd, readBudgetPreference } from "./usage.ts";
+import { formatUsd } from "./usage.ts";
 import {
   decideApproval,
   renderApproval,
@@ -152,53 +152,11 @@ export function clockTime(iso: string): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-export type Spend = {
-  /** Dollars this run is known to have spent. */
-  usd: number;
-  capUsd: number | null;
-  /** Tool calls it has made, and how many it is allowed. */
-  calls: number;
-  callsCap: number | null;
-};
-
-/**
- * What the budget meter says, and what its bar is a fraction of.
- *
- * Dollars while the run is priced; tool calls while it is not. A proxy-metered
- * run reports no dollar figure at all, and "$0.00 of $2.00" beside a task that
- * is spending its way to a hard stop is the lie that hid a whole failure — so
- * the moment there is a call to count, the count is what is shown.
- */
-export function budgetMeter(spend: Spend): {
-  /** The compact figure, for the status bar and the running facts. */
-  used: string;
-  /** The same figure written out, for the receipt. */
-  long: string;
-  /** What the bar is a fraction of, for its label. */
-  of: string;
-  ratio: number | null;
-} {
-  const cap = spend.capUsd !== null && Number.isFinite(spend.capUsd) ? spend.capUsd : null;
-  if (spend.usd > 0 || spend.calls === 0) {
-    const amount = formatUsd(spend.usd);
-    if (cap === null) return { used: amount, long: amount, of: "", ratio: null };
-    return {
-      used: `${amount} of ${formatUsd(cap)}`,
-      long: `${amount} of your ${formatUsd(cap)} budget`,
-      of: `your ${formatUsd(cap)} budget`,
-      ratio: cap > 0 ? Math.min(1, spend.usd / cap) : null,
-    };
-  }
-  const callsCap =
-    spend.callsCap !== null && Number.isFinite(spend.callsCap) ? spend.callsCap : null;
-  const calls = `${spend.calls} tool call${spend.calls === 1 ? "" : "s"}`;
-  if (callsCap === null) return { used: calls, long: calls, of: "", ratio: null };
-  return {
-    used: `${spend.calls} of ${callsCap} tool calls`,
-    long: `${spend.calls} of the ${callsCap} tool calls it was allowed`,
-    of: `its ${callsCap} tool calls`,
-    ratio: callsCap > 0 ? Math.min(1, spend.calls / callsCap) : null,
-  };
+/** Show the recorded total, never the configured ceiling or a fabricated price. */
+export function taskCost(spend: { usd: number; calls: number }): string {
+  if (!Number.isFinite(spend.usd) || spend.usd < 0 || (spend.usd === 0 && spend.calls > 0))
+    return "Not reported";
+  return formatUsd(spend.usd);
 }
 
 export function elapsedText(from: string, to: string): string {
@@ -1051,15 +1009,12 @@ type Facts = {
   capUsd: number | null;
   /** The most one task may be given, when the daemon says. */
   maxUsd: number | null;
-  /** Tool calls the daemon has counted, and the cap it counts them against. */
+  /** Tool calls the daemon has counted. */
   calls: number | null;
-  callsCap: number | null;
   usageSteps: number;
   asks: number;
   files: Map<string, string>;
   sites: Set<string>;
-  budgetKind: string | null;
-  provider: string;
 };
 
 function emptyFacts(): Facts {
@@ -1069,13 +1024,10 @@ function emptyFacts(): Facts {
     capUsd: null,
     maxUsd: null,
     calls: null,
-    callsCap: null,
     usageSteps: 0,
     asks: 0,
     files: new Map(),
     sites: new Set(),
-    budgetKind: null,
-    provider: "Claude",
   };
 }
 
@@ -1223,8 +1175,6 @@ class TaskView {
     if (!this.alive) return;
     this.facts.capUsd = info?.spend_cap_usd ?? null;
     this.facts.maxUsd = info?.budget?.max_usd ?? null;
-    this.facts.budgetKind = info?.budget_kind ?? null;
-    this.facts.provider = info?.execution_mode === "codex" ? "Codex" : "Claude";
     await this.load();
     if (!this.alive) return;
     this.connectEvents();
@@ -1258,9 +1208,7 @@ class TaskView {
     this.factsEl = null;
     const capUsd = this.facts.capUsd;
     const maxUsd = this.facts.maxUsd;
-    const budgetKind = this.facts.budgetKind;
-    const provider = this.facts.provider;
-    this.facts = { ...emptyFacts(), capUsd, maxUsd, budgetKind, provider };
+    this.facts = { ...emptyFacts(), capUsd, maxUsd };
     this.host.replaceChildren();
     this.buildFrame(this.host);
     void this.load();
@@ -1414,7 +1362,6 @@ class TaskView {
       if (steps !== null) this.facts.usageSteps = Math.max(this.facts.usageSteps, steps);
       const calls = number(body.calls);
       if (calls !== null) this.facts.calls = Math.max(this.facts.calls ?? 0, calls);
-      this.facts.callsCap = number(body.calls_cap) ?? this.facts.callsCap;
       return;
     }
     // A refusal names what the run had actually spent when it was refused. It
@@ -1502,7 +1449,6 @@ class TaskView {
     this.facts.capUsd = number(task.spend_cap_usd) ?? this.facts.capUsd;
     const calls = number(task.calls);
     if (calls !== null) this.facts.calls = Math.max(this.facts.calls ?? 0, calls);
-    this.facts.callsCap = number(task.calls_cap) ?? this.facts.callsCap;
   }
 
   /** Tool calls made: the daemon's count when it keeps one, else this page's. */
@@ -1510,13 +1456,11 @@ class TaskView {
     return Math.max(this.facts.calls ?? 0, this.countKind("tool.call"));
   }
 
-  /** The one place the budget figures are assembled, so nothing can disagree. */
-  private currentSpend(): Spend {
+  /** Use the same recorded total for live and completed tasks. */
+  private currentSpend(): { usd: number; calls: number } {
     return {
       usd: this.facts.usedUsd,
-      capUsd: this.facts.capUsd,
       calls: this.callCount(),
-      callsCap: this.facts.callsCap,
     };
   }
 
@@ -1810,7 +1754,7 @@ class TaskView {
    * nothing left to spend, so a bigger figure has to travel with it (W3).
    */
   private async resumeWithMore(): Promise<void> {
-    const raise = raisedCap(this.facts.capUsd, readBudgetPreference(), this.facts.maxUsd);
+    const raise = raisedCap(this.facts.capUsd, null, this.facts.maxUsd);
     if (raise === null) {
       toast(
         "warn",
@@ -1934,17 +1878,15 @@ class TaskView {
     const finished = task ? isFinished(task.status) : false;
     // A paused task has a receipt on screen too, and can still be stopped.
     const settled = finished || (task?.status === "paused" && !this.pausedForTakeover());
-    const spend = `${budgetMeter(this.currentSpend()).used} used`;
+
     // The span never ends before the last thing that happened.
     const at = task ? this.span(task)?.to : undefined;
     // The verb comes from the outcome, so a run that did not finish may not
     // read "Finished 15:36".
     const verb = task && settled ? this.outcome(task).barVerb : null;
-    // While a task runs the receipt panel states the cost with its cap and its
-    // meter — the fuller answer — so the bar speaks only once that panel is
-    // gone, which is when the run ends.
+    // The total appears once, in the task facts or result receipt.
     this.spend.textContent =
-      settled && at && verb ? `${verb} ${clockTime(at)} · ${spend}` : "";
+      settled && at && verb ? `${verb} ${clockTime(at)}` : "";
     this.stopBtn.hidden = finished;
     // The receipt is built once, but a usage event can still land after it.
     // Two different totals for the same task on one screen is a trust bug.
@@ -1981,14 +1923,8 @@ class TaskView {
     return this.facts.partial ? `At least ${asks}` : String(asks);
   }
 
-  /**
-   * What it cost, on the receipt. The frozen `cost_usd` is the daemon's own
-   * total and outranks anything counted here; when the run was never priced the
-   * figure is the tool calls it made, because "$0.00" on a receipt for a task
-   * that stopped ON its budget is the one number that must never appear.
-   */
   private receiptCostText(): string {
-    return budgetMeter(this.currentSpend()).long;
+    return taskCost(this.currentSpend());
   }
 
   /**
@@ -2155,25 +2091,10 @@ class TaskView {
     if (!this.factsEl) return;
     this.factsEl.replaceChildren();
 
-    const spend = budgetMeter(this.currentSpend());
-    const budget = appendTextChild(this.factsEl, "div", "", "r");
-    appendTextChild(
-      budget,
-      "span",
-      this.facts.budgetKind === "tool_proxy" ? "Tool budget used" : "Budget used",
-    );
-    appendTextChild(budget, "b", spend.used);
-
-    if (spend.ratio !== null) {
-      const meter = appendTextChild(this.factsEl, "div", "", "meter");
-      if (spend.ratio >= 0.8) meter.classList.add("warn");
-      meter.setAttribute("role", "img");
-      meter.setAttribute(
-        "aria-label",
-        `${Math.round(spend.ratio * 100)} percent of ${spend.of} used`,
-      );
-      appendTextChild(meter, "i", "").style.transform = `scaleX(${spend.ratio.toFixed(3)})`;
-    }
+    const cost = appendTextChild(this.factsEl, "div", "", "r");
+    appendTextChild(cost, "span", "Total cost");
+    appendTextChild(cost, "b", this.receiptCostText()).title =
+      "Estimated task cost, not your provider bill. Native model connections meter computer-tool calls.";
 
     const steps = appendTextChild(this.factsEl, "div", "", "r");
     appendTextChild(steps, "span", "Steps so far");
@@ -2663,9 +2584,7 @@ class TaskView {
           ?? "Not recorded for this task",
       ],
       [
-        this.facts.budgetKind === "tool_proxy"
-          ? "Tool cost"
-          : `Cost, on your ${this.facts.provider} plan`,
+        "Total cost",
         this.receiptCostText(),
       ],
       ["Sites it visited", this.receiptSitesText()],
@@ -2688,7 +2607,10 @@ class TaskView {
       const row = appendTextChild(list, "div", "");
       appendTextChild(row, "dt", term);
       const dd = appendTextChild(row, "dd", value);
-      if (term.startsWith("Cost") || term === "Tool cost") this.receiptCost = dd;
+      if (term === "Total cost") {
+        this.receiptCost = dd;
+        dd.title = "Estimated task cost, not your provider bill. Native model connections meter computer-tool calls.";
+      }
     }
 
     const view = panel.root.querySelector<HTMLElement>(".view");

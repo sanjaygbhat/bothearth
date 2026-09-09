@@ -7,8 +7,8 @@
     {
       "slug": "",
       "file": "index.html",
-      "title": "BotHearth \u2014 your AI agent, with a computer",
-      "description": "Give BotHearth a task. Your AI agent browses websites, works with files, and saves results for you to review. Watch it work and take control when it needs you."
+      "title": "BotHearth \u2014 your AI agent, your infrastructure",
+      "description": "Self-host an AI agent with its own computer. Choose your infrastructure and model access, watch work, review requests and take human control. Read the privacy boundaries."
     },
     {
       "slug": "quickstart",

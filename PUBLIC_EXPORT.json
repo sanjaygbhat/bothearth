@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "db217538bb0d31ee2ddf51ceda2e3b56ca4d24d955bb3a231211f4894ebcc67d",
+  "tree_sha256": "14e43b4bec075c345e687ebab0d2c90868bef72fdff5161d6d71ec3f2daf725f",
   "files": [
     {
       "path": ".dockerignore",
@@ -502,6 +502,12 @@
       "sha256": "efb39688ce8f6b050e690a79208d019ded2117512080ac00ea9d7059af415d39"
     },
     {
+      "path": "docs/COMPETITOR-POSITIONING-2026-09-09.md",
+      "bytes": 25746,
+      "mode": "644",
+      "sha256": "637d8fb3feeb6ef76db52c8553b968d73e92f2da66f0602544bd64d61a42b5a8"
+    },
+    {
       "path": "docs/COMPOSE.md",
       "bytes": 6265,
       "mode": "644",
@@ -527,9 +533,9 @@
     },
     {
       "path": "docs/HARNESS-INTEGRATIONS.md",
-      "bytes": 4603,
+      "bytes": 5819,
       "mode": "644",
-      "sha256": "d7b27d1c63dc7e9b87856528e53199b93db41668fd3666b65ce7e17b68c1f7ec"
+      "sha256": "24269fda0267f425ac993d737325ff68f767b1c6570c23841e6bc62ef04c5064"
     },
     {
       "path": "docs/PROVIDERS.md",
@@ -557,9 +563,15 @@
     },
     {
       "path": "docs/REMOTE-DEPLOY.md",
-      "bytes": 12324,
+      "bytes": 15338,
       "mode": "644",
-      "sha256": "675ae34f5e5799f2ddd800b6cd75c89d9f882b6c5ee33ccd679600fd8428185e"
+      "sha256": "e4b0131e8803225a86049455afc36e5e5d4f543c2fbe22097f699b66cb16739c"
+    },
+    {
+      "path": "docs/REMOTE-VM-TRIAL-2026-09-09.md",
+      "bytes": 8858,
+      "mode": "644",
+      "sha256": "c87b220b792e26b81ab5c5ec936dc134eff16d2e8c81c926304da51e735b7e47"
     },
     {
       "path": "docs/SECURITY-CHECKLIST.md",
@@ -569,9 +581,9 @@
     },
     {
       "path": "docs/SECURITY-REVIEW-2026-09-09.md",
-      "bytes": 5480,
+      "bytes": 7667,
       "mode": "644",
-      "sha256": "21796efb5a31fdf3c8f1055e40452f11ea71421f25203c0ad2c755f89848e0b8"
+      "sha256": "e1b62d1e0b3ebe54aef12c0ec5636216cc2612d0edf7b11aa5309d7d8ef12f9b"
     },
     {
       "path": "docs/TROUBLESHOOTING.md",
@@ -1877,9 +1889,9 @@
     },
     {
       "path": "src/ui/home.ts",
-      "bytes": 46769,
+      "bytes": 46053,
       "mode": "644",
-      "sha256": "532445380c7f66047a37dc10e1acc44a76a4deb77bfed7fe5335c5cbb6a64794"
+      "sha256": "f10afe2e4f9c010c88194bc7eff895b82a5e41647fed1931972eab190834aa47"
     },
     {
       "path": "src/ui/index.html",
@@ -2003,15 +2015,15 @@
     },
     {
       "path": "src/ui/task.css",
-      "bytes": 28408,
+      "bytes": 28379,
       "mode": "644",
-      "sha256": "5dd88165a605768cfad97924410a929c34f59f447361d1f820f4cfe1e9d1168b"
+      "sha256": "20464e2671357d71574dd7f4f84918f1aa78be83b3b304a464525c874d79fabd"
     },
     {
       "path": "src/ui/task.ts",
-      "bytes": 109871,
+      "bytes": 106603,
       "mode": "644",
-      "sha256": "8ee8324e2b10d9faf0568919dd69454f216e0ef586fdcd706c122f5e81b5c066"
+      "sha256": "39725453b8d78ce6cabdc22a77a547a20fd16b6bde9d7525fcb713bae61e2ca3"
     },
     {
       "path": "src/ui/tasks.ts",
@@ -2027,9 +2039,9 @@
     },
     {
       "path": "src/ui/usage.ts",
-      "bytes": 13807,
+      "bytes": 6910,
       "mode": "644",
-      "sha256": "91d2e574ed46485e6a98026e873392f98bd225dcd769371a06f03b9486268d67"
+      "sha256": "06b4a43f54cb13107a7b2b1b568b36b43d7f4eb7ed21fea3750d98beaac3f4ee"
     },
     {
       "path": "src/vault/KEYCHAIN.md",
@@ -3395,9 +3407,9 @@
     },
     {
       "path": "tests/unit/ui/settings-copy.test.ts",
-      "bytes": 2763,
+      "bytes": 1173,
       "mode": "644",
-      "sha256": "38deafa48319b63e2756ad6f5c345e3abc83fc23906c86e343959227b93e6406"
+      "sha256": "ddba9edb73762d43a4b8277ad36e946804df0e0b411340474cde0dc851ec8ed4"
     },
     {
       "path": "tests/unit/ui/settings-qr.test.ts",
@@ -3413,9 +3425,9 @@
     },
     {
       "path": "tests/unit/ui/settings-sections.test.ts",
-      "bytes": 9958,
+      "bytes": 9419,
       "mode": "644",
-      "sha256": "f7db08f005422da0556d1f7cfadf683cbe4c2d1fdf7bf1f9816ab0cf7663abf8"
+      "sha256": "d024b5f89337e4a5bfde4eaa5c92e40d9c3afd31f2e2252189c14c314c1d874b"
     },
     {
       "path": "tests/unit/ui/settings-sheet.test.ts",
@@ -3455,9 +3467,9 @@
     },
     {
       "path": "tests/unit/ui/task-budget.test.ts",
-      "bytes": 16321,
+      "bytes": 15965,
       "mode": "644",
-      "sha256": "50828c2b6f6f00f90df04802a89ffec5427a615b8169f2956fd51fada2859fba"
+      "sha256": "81f84f0e697c27f5ecb870e3b5c9723c551f4073a528f27150d5b60861bd1cd4"
     },
     {
       "path": "tests/unit/ui/task-feed.test.ts",
@@ -3473,9 +3485,9 @@
     },
     {
       "path": "tests/unit/ui/task-pause-live.test.ts",
-      "bytes": 7682,
+      "bytes": 7659,
       "mode": "644",
-      "sha256": "bb8a96cbc6d51dcf91e8b4bdc39b45b6744fff9952c8f9ccda5a70d7400baf13"
+      "sha256": "20dddfb2c6e2a36609d06e9699566c32b14423ce2617f2caaac202466bc0323c"
     },
     {
       "path": "tests/unit/ui/task-paused-takeover.test.ts",
@@ -3503,9 +3515,9 @@
     },
     {
       "path": "tests/unit/ui/task.test.ts",
-      "bytes": 67051,
+      "bytes": 65469,
       "mode": "644",
-      "sha256": "06df19f681f912bf0fd3166c65a77e1b1c597f5f156270058a7fe3cc842ee53b"
+      "sha256": "1b99cabcaf7888171fe4d044275b73606b80dcd907f05dbbec85e4611bc5cd84"
     },
     {
       "path": "tests/unit/ui/tasks.test.ts",
@@ -3521,9 +3533,9 @@
     },
     {
       "path": "tests/unit/ui/usage-budget.test.ts",
-      "bytes": 5536,
+      "bytes": 1326,
       "mode": "644",
-      "sha256": "3a4495b096642497b4f345a5fd683b29f65756d62a54cab149fe4a591b0b41d7"
+      "sha256": "b10042d4ef4a83302d8db955eefae87d2f721dc8e09c77f421598cf0e71ffa82"
     },
     {
       "path": "tests/unit/vault/envelope.test.ts",
@@ -3587,15 +3599,15 @@
     },
     {
       "path": "website/README.md",
-      "bytes": 9087,
+      "bytes": 9198,
       "mode": "644",
-      "sha256": "7c8bd2de32aa8c8a20d8cf14678227bc2ce38fed7be3af7790f9d6e1a0677e58"
+      "sha256": "cb33ece80969082b85b05f2399979944ba4fc46fc7e9236904af7b6cb6d3d6c7"
     },
     {
       "path": "website/about.html",
-      "bytes": 5710,
+      "bytes": 5858,
       "mode": "644",
-      "sha256": "69d9e2cdd9d1632c0a9a3d4ea2cb9ea5df9d4c3c711f163d8d4bafddceea581c"
+      "sha256": "0e1e4008da94dcbd52c158ba50165a4ffa1c79224e8cb69f06cdfcc10656d26e"
     },
     {
       "path": "website/apple-touch-icon.png",
@@ -3665,9 +3677,9 @@
     },
     {
       "path": "website/index.html",
-      "bytes": 7212,
+      "bytes": 9019,
       "mode": "644",
-      "sha256": "3ff1bd6446e1c62eedb42f75b28451ab0008d9846279dbb9bbdd995aede11efb"
+      "sha256": "49125ab3ed80dca304ce632fe472f789eb1ae29e5646b48dcdbf168c0f5ef1e6"
     },
     {
       "path": "website/layout.html",
@@ -3695,15 +3707,15 @@
     },
     {
       "path": "website/screenshots/reading-summary-detail.png",
-      "bytes": 81602,
+      "bytes": 77510,
       "mode": "644",
-      "sha256": "437909a0e38cd3871c758e60dde03c5acfddf196e78cdd25fa1be07a88690cae"
+      "sha256": "a4cf57f5b70964160e46a7b5ef824ed0401ca771c49909ca99e49324283da71c"
     },
     {
       "path": "website/screenshots/reading-summary.png",
-      "bytes": 95484,
+      "bytes": 91368,
       "mode": "644",
-      "sha256": "5c5582a0b7305a42f680896ac0e6ef97a5228e42f592b393a33e5127e8f655e4"
+      "sha256": "222b23853a57a92db1cc30ab2b0719fa10f7fc6409a9a6a8f0eb47379c71359b"
     },
     {
       "path": "website/screenshots/task-running.png",
@@ -3713,9 +3725,9 @@
     },
     {
       "path": "website/security-review.html",
-      "bytes": 3183,
+      "bytes": 3703,
       "mode": "644",
-      "sha256": "24fc5d500177166b380edca004bcf3cbabcc1b0937c152b67e02b6a297d22332"
+      "sha256": "0881208bd68c32a1d89a1dd983884f7a3a9f27bf7f70853bccd54c59f3751a50"
     },
     {
       "path": "website/security.html",
@@ -3725,9 +3737,9 @@
     },
     {
       "path": "website/site.json",
-      "bytes": 4044,
+      "bytes": 4059,
       "mode": "644",
-      "sha256": "88cb105d661fe470d24d28045681e8523a70e1e051bcbfbe2c89002136aac447"
+      "sha256": "538d140e11d7eb4a4fc1d8271b7bca5202b3d1715895d0492ba3f130d4df383b"
     },
     {
       "path": "website/social-preview.png",

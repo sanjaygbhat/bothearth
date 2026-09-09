@@ -2,7 +2,7 @@
 
 The daemon runs on the Linux host; browser, optional shell, and proxy run in containers. UI and MCP stay on `127.0.0.1:7777`. Reach them through SSH or private HTTPS. A VPS runs the daemon and browsers independently of the laptop; phones require their own private-network connection. See the [remote client contract](REMOTE-CLIENT.md).
 
-**Validation:** a real Debian 13 x86-64 VM trial is in progress. It exposed fixes for the version check, credential ACL handling and retry after a failed vault initialization. The user-service credential path failed on systemd 257.13; a non-root system service with a root-managed encrypted credential started successfully. This does not validate an unattended one-command installation, Secret Service unlock or other CPU architectures.
+**Validation:** the [9 September 2026 Debian 13 x86-64 trial](REMOTE-VM-TRIAL-2026-09-09.md) completed a real browser research task. After correcting the cloud startup script, a real reboot automatically restarted the daemon with its encrypted credential and preserved report files. The model harness ran on a connected Mac. Fresh-host preparation required troubleshooting; this does not validate unattended one-command installation, VM-native provider login, phone/cellular access or other CPU architectures.
 
 ## Prepare the host
 
@@ -57,7 +57,7 @@ On the desktop dashboard, choose **Settings → Connected devices → Connect a 
 
 ## Cloud provisioning and removal
 
-`deploy hetzner --dry-run` previews cloud and SSH steps. Creating a VM is a paid action. The cloud bootstrap installs Docker; the prepared-host Node, images, user-session, and vault prerequisites above still apply. A newly created headless VM does not automatically satisfy them. This path is not validated as an unattended one-command installation.
+`deploy hetzner --dry-run` previews cloud and SSH steps. Creating a VM is a paid action. Make cloud provisioning scripts idempotent or remove a completed one-time startup script before reboot: rerunning a distro-package install can replace a deliberately upgraded Docker Engine. The cloud bootstrap installs Docker; the prepared-host Node, images, user-session, and vault prerequisites above still apply. A newly created headless VM does not automatically satisfy them. This path is not validated as an unattended one-command installation.
 
 `deploy destroy <name> --dry-run` previews removal. For SSH deployments, destruction stops/removes the user service and preserves workspace, profile, and vault data. For a managed cloud deployment, destruction can delete the VM. Read [PRIVACY.md](../PRIVACY.md) before removing data or backups.
 
@@ -77,6 +77,55 @@ Add `--systemd-credential /home/modelbot/.config/modelbot/vault.cred` to the SSH
 
 Enable user lingering using the host administrator's normal `loginctl enable-linger modelbot` policy so the user service survives logout and starts at boot. Verify a real reboot with SSH disconnected before relying on unattended operation. Back up the encrypted vault and the required host/user credential recovery material securely; replacing a host can make a machine-bound credential undecryptable. Existing vault migration and automatic credential rotation are not provided: a mismatched key fails closed, and the vault rotate action refuses to silently change a key that systemd cannot persist.
 
+## System-service alternative tested on Debian 13
+
+On systemd 257, an administrator can instead use a **system** unit that executes as the dedicated `modelbot` account. This is a manual host-administration path; the `deploy ssh` command above creates a user service and does not install this unit.
+
+After installing Node, the same application revision and images, generate a **new** encrypted credential as root (never overwrite a credential belonging to an existing vault):
+
+```sh
+sudo install -d -m 0700 /etc/credstore.encrypted
+sudo sh -c 'test ! -e /etc/credstore.encrypted/modelbot.vault && umask 077 && openssl rand -hex 32 | systemd-creds encrypt --with-key=host --name=modelbot-vault - /etc/credstore.encrypted/modelbot.vault'
+```
+
+Initialize once under the same service identity and credential. Paths below assume a dedicated `modelbot` account and Node installed in `/usr/local/bin`; adjust to the prepared host. Do not add `--force` to an existing installation:
+
+```sh
+sudo systemd-run --wait --pipe --collect --uid=modelbot \
+  --setenv=HOME=/home/modelbot --setenv=PATH=/usr/local/bin:/usr/bin:/bin \
+  -p LoadCredentialEncrypted=modelbot-vault:/etc/credstore.encrypted/modelbot.vault \
+  /usr/local/bin/node /home/modelbot/.local/share/modelbot/node_modules/modelbot/dist/cli/index.js \
+  init --skip-detect --skip-images --port 7777
+```
+
+Create `/etc/systemd/system/modelbot.service` as an administrator:
+
+```ini
+[Unit]
+Description=BotHearth
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=modelbot
+Group=modelbot
+SupplementaryGroups=docker
+UMask=0077
+WorkingDirectory=/home/modelbot/ModelBot
+Environment=HOME=/home/modelbot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=MODELBOT_CONFIG=/home/modelbot/.modelbot/modelbot.yaml
+LoadCredentialEncrypted=modelbot-vault:/etc/credstore.encrypted/modelbot.vault
+ExecStart=/usr/local/bin/node /home/modelbot/.local/share/modelbot/node_modules/modelbot/dist/cli/index.js start --host 127.0.0.1 --port 7777 --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Run `sudo systemctl daemon-reload` and `sudo systemctl enable --now modelbot.service`, then check loopback `/healthz` and the private SSH connection. Protect `journalctl -u modelbot.service`: bootstrap links grant operator access. Root manages the decrypted credential's ACL; do not change it to world-readable or copy its plaintext into an environment file. Docker-group access grants substantial host authority despite the daemon's non-root UID. A successful start is not a substitute for an actual reboot and harmless browser task on your chosen host.
+
 ## Provider login on the VPS
 
 Use the provider CLI's official login on the VPS under the service account; never copy a laptop's authentication files or pool users' credentials. For Codex without a browser callback, the [official authentication guide](https://learn.chatgpt.com/docs/auth) recommends `codex login --device-auth` (beta). Device-code login must be enabled in the user's ChatGPT security settings or workspace permissions. Complete only the official verification page and one-time code, then run `codex login status`. If that flow is unavailable, the documented SSH forwarding of the localhost callback is an alternative; do not invent a token exchange.
@@ -89,6 +138,6 @@ Credentials remain owned by the native provider CLI. Select the same existing lo
 
 ## Acceptance before relying on a remote instance
 
-Local tests cover real HTTPS/WSS session exchange and revocation, immutable origin/device authority, daemon restart, inherited idle pause, cancellation, and encrypted-vault reopen with the protected credential file. The deployment planner is syntax checked and validates the prepared-host prerequisites. These checks do **not** establish real VPS cold boot, systemd credential decryption on every distribution, off-LAN cellular reachability, or iOS/Android background delivery.
+Local tests cover real HTTPS/WSS session exchange and revocation, immutable origin/device authority, daemon restart, inherited idle pause, cancellation, and encrypted-vault reopen with the protected credential file. The deployment planner is syntax checked and validates the prepared-host prerequisites. The linked trial adds a real Debian VM reboot and system-service credential check. These checks do **not** establish systemd credential decryption on every distribution, uninterrupted browser/model sessions, off-LAN cellular reachability, or iOS/Android background delivery.
 
 On the chosen VPS, verify the installed images match the application revision, complete a harmless task, turn off the laptop and use the phone over cellular, acquire/return HUMAN control, revoke a second device, restart the service and finally reboot the host. Confirm the same browser profile survives, stale input is rejected, HUMAN remains private, and all public ports remain closed. Do not replay a failed task with external side effects merely to test connectivity.

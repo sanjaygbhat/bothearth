@@ -24,7 +24,7 @@
   overflow: hidden;
 }
 
-/* The task's own chrome row. The budget and Stop belong in the titlebar, but
+/* The task's own chrome row. The completion time and Stop belong in the titlebar, but
    the shell owns that markup and a view may not write into it, so they sit on
    the first row of the view instead — same right edge, same reading order,
    36px below. */
@@ -523,7 +523,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   5. THE FACTS BLOCK — budget, steps, files. Pinned to the column foot.
+   5. THE FACTS BLOCK — cost, steps, files. Pinned to the column foot.
    ------------------------------------------------------------------------ */
 
 .facts {
@@ -552,9 +552,7 @@
   text-align: right;
 }
 
-.facts .meter {
-  max-width: none;
-}
+
 
 .facts .files {
   display: flex;

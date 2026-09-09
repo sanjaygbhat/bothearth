@@ -27,7 +27,6 @@ import { attention, modelbotNative, type AttentionItem } from "./native.ts";
 import { countdownText } from "./needs-you.ts";
 import { navigate, registerView, setStatusPill, setTitle } from "./shell.ts";
 import { markTaskStarted } from "./task.ts";
-import { budgetRejected, readBudgetPreference } from "./usage.ts";
 import type { TaskRow } from "./task-view.ts";
 
 /* -------------------------------------------------------------------------
@@ -918,17 +917,7 @@ class HomeView {
     this.paintComposer();
 
     try {
-      // The per-task budget the person set in Settings -> Usage. Omitted
-      // entirely when nothing has been set, so a default never travels as if it
-      // were a choice.
-      const budget = readBudgetPreference();
-      // `max_steps` is the daemon's to decide (config `agent.max_steps`); a
-      // number from here would override whatever the owner set in modelbot.yaml.
-      const body = {
-        goal,
-        capabilities: ["browser"],
-        ...(budget === null ? {} : { spend_cap_usd: budget }),
-      };
+      const body = { goal, capabilities: ["browser"] };
       const response = (await apiPost("/api/v1/tasks", body)) as { task: TaskRow };
       writeDraft("");
       if (this.box) this.box.value = "";
@@ -952,9 +941,7 @@ class HomeView {
 
     if (error instanceof ApiError) {
       const body = error.body as { task_id?: unknown } | null;
-      // The daemon refuses a budget above its own ceiling by naming a wire
-      // field. Its message is replaced with one that says where to change it.
-      target.appendChild(document.createTextNode(budgetRejected(error) ?? error.message));
+      target.appendChild(document.createTextNode(error.message));
       if (typeof body?.task_id === "string") {
         const link = element("a", "taskbox-message-link", "Open it");
         link.setAttribute("href", `#/tasks/${body.task_id}`);

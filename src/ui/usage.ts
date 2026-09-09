@@ -1,4 +1,4 @@
-import { ApiError, apiGet, humanApiError } from "./api.ts";
+import { apiGet, humanApiError } from "./api.ts";
 import { appendTextChild } from "./safe.ts";
 import type { TaskRow } from "./task-view.ts";
 
@@ -88,84 +88,6 @@ export function spendByDay(rows: readonly SpendRow[], now = new Date()): SpendRo
   return [...days.values()].sort((a, b) => Date.parse(b.when) - Date.parse(a.when));
 }
 
-/**
- * The per-task budget. The daemon has no settings endpoint, so the figure is
- * kept on this Mac and sent with every task this window starts. The copy on
- * screen says exactly that and claims nothing more.
- */
-
-const BUDGET_KEY = "modelbot.task-budget";
-
-/** The figure this Mac prefers, or null when none has been set. */
-export function readBudgetPreference(): number | null {
-  try {
-    const raw = localStorage.getItem(BUDGET_KEY);
-    if (!raw) return null;
-    const value = Number.parseFloat(raw);
-    return Number.isFinite(value) && value > 0 ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeBudgetPreference(usd: number | null): void {
-  try {
-    if (usd === null) localStorage.removeItem(BUDGET_KEY);
-    else localStorage.setItem(BUDGET_KEY, String(usd));
-  } catch {
-    // Storage off: the figure applies to this window and is not remembered.
-  }
-}
-
-/** What the box accepts: a positive amount, at most four figures, 2dp. */
-export function parseBudget(raw: string): number | null {
-  const value = Number.parseFloat(raw.replace(/[$,\s]/g, ""));
-  if (!Number.isFinite(value) || value <= 0 || value > 1000) return null;
-  return Math.round(value * 100) / 100;
-}
-
-/**
- * The box's answer: the amount to keep, or the sentence to put under it.
- *
- * A figure above what the daemon accepts is refused here, naming that figure.
- * Storing it and letting the server clamp it silently is how the field came to
- * read $10.00 while every task it started ran on $2.00.
- */
-export function budgetEntry(raw: string, max: number | null): { usd: number } | { error: string } {
-  const usd = parseBudget(raw);
-  if (usd === null) return { error: "Put in an amount between $0.01 and $1000.00." };
-  if (max !== null && Number.isFinite(max) && usd > max) {
-    return { error: `One task can have at most ${formatUsd(max)}. Put in that or less.` };
-  }
-  return { usd };
-}
-
-/** The line under the box: what a task gets by default, and the ceiling. */
-export function budgetNoteText(defaultUsd: number | null, max: number | null): string {
-  const first =
-    defaultUsd === null
-      ? "A task stops when it reaches this."
-      : `A task gets ${formatUsd(defaultUsd)} unless you change it, and stops when it reaches it.`;
-  const most = max === null ? "" : ` The most one task can have is ${formatUsd(max)}.`;
-  return `${first}${most} Kept on this Mac and sent with every task you start here.`;
-}
-
-/**
- * The daemon refusing a task's budget (`E_LIMIT` on `POST /api/v1/tasks`). Its
- * own message names a wire field, so it is replaced with the sentence that says
- * where the figure came from and where to change it.
- */
-export function budgetRejected(error: unknown): string | null {
-  if (!(error instanceof ApiError)) return null;
-  const body = error.body as { error?: unknown; message?: unknown } | null;
-  if (body?.error !== "E_LIMIT") return null;
-  const message = typeof body.message === "string" ? body.message : "";
-  if (!message.includes("spend_cap_usd")) return null;
-  const cap = /cap of ([\d.]+)/.exec(message)?.[1];
-  const most = cap ? `One task can have at most ${formatUsd(Number(cap))}. ` : "";
-  return `${most}Change the budget in Settings → Usage, then start it again.`;
-}
-
 /** Render the Usage section into `pane`. Returns a disposer. */
 export function renderUsage(pane: HTMLElement): () => void {
   let disposed = false;
@@ -175,45 +97,12 @@ export function renderUsage(pane: HTMLElement): () => void {
   appendTextChild(
     pane,
     "p",
-    "An estimate of task work on this machine. Native model connections count computer-tool calls; API estimates use configured prices. This meter does not measure or cap your provider bill.",
+    "An estimate of task work on this machine. Native model connections count computer-tool calls; API estimates use configured prices. These totals are estimates, not your provider bill.",
     "set-lede",
   );
 
   const body = document.createElement("div");
   pane.append(body);
-
-  // The budget, as a control rather than a sentence.
-  const budgetRow = document.createElement("div");
-  budgetRow.className = "set-row";
-  const budgetText = document.createElement("div");
-  budgetText.className = "set-grow";
-  const budgetField = document.createElement("label");
-  budgetField.className = "set-field";
-  budgetField.textContent = "Budget for one task";
-  const budgetInput = document.createElement("input");
-  budgetInput.type = "text";
-  budgetInput.setAttribute("inputmode", "decimal");
-  budgetInput.setAttribute("autocomplete", "off");
-  budgetInput.setAttribute("aria-describedby", "usage-budget-note");
-  budgetField.append(budgetInput);
-  budgetText.append(budgetField);
-  const budgetNote = appendTextChild(budgetText, "span", budgetNoteText(null, null), "set-w");
-  budgetNote.id = "usage-budget-note";
-  const budgetActions = document.createElement("div");
-  budgetActions.className = "set-actions";
-  const budgetSave = document.createElement("button");
-  budgetSave.type = "button";
-  budgetSave.className = "btn sm";
-  budgetSave.textContent = "Save";
-  budgetSave.hidden = true;
-  budgetActions.append(budgetSave);
-  budgetRow.append(budgetText, budgetActions);
-  pane.append(budgetRow);
-
-  const budget = document.createElement("p");
-  budget.className = "set-msg";
-  budget.setAttribute("role", "status");
-  pane.append(budget);
 
   const draw = (title: string, rows: readonly SpendRow[], withSteps: boolean) => {
     appendTextChild(body, "p", title, "caps");
@@ -250,65 +139,13 @@ export function renderUsage(pane: HTMLElement): () => void {
     body.append(bars);
   };
 
-  // The control is drawn AND wired before anything is fetched: the figure lives
-  // on this Mac, so a session read that is slow or fails must not leave a box
-  // whose Save button does nothing. The fetch only fills in the daemon's own
-  // default and ceiling.
-  let maxUsd: number | null = null;
-  let saved = readBudgetPreference();
-  // The stored figure is what this Mac sends, so it is what the box shows —
-  // never the daemon's clamped answer, which would hide the fact that the two
-  // disagree.
-  let original = saved === null ? "" : saved.toFixed(2);
-  budgetInput.value = original;
-  budgetInput.placeholder = "2.00";
-  budgetInput.addEventListener("input", () => {
-    budgetSave.hidden = budgetInput.value.trim() === original;
-    budget.textContent = "";
-  });
-  budgetSave.addEventListener("click", () => {
-    const entry = budgetEntry(budgetInput.value, maxUsd);
-    if ("error" in entry) {
-      budget.dataset.tone = "danger";
-      budget.textContent = entry.error;
-      budgetInput.focus();
-      return;
-    }
-    writeBudgetPreference(entry.usd);
-    saved = entry.usd;
-    original = entry.usd.toFixed(2);
-    budgetInput.value = original;
-    budgetSave.hidden = true;
-    budget.dataset.tone = "ok";
-    budget.textContent = `Saved. Tasks you start from this Mac stop at ${formatUsd(entry.usd)}.`;
-  });
-
   void (async () => {
     try {
-      const [session, audit, tasks] = await Promise.all([
-        apiGet("/api/v1/session") as Promise<{
-          spend_cap_usd?: number | null;
-          budget?: { default_usd?: number | null; max_usd?: number | null } | null;
-        }>,
+      const [audit, tasks] = await Promise.all([
         apiGet("/api/v1/audit?limit=500") as Promise<{ records?: AuditRecord[] }>,
         apiGet("/api/v1/tasks") as Promise<{ tasks?: TaskRow[] }>,
       ]);
       if (!live()) return;
-      const number = (value: unknown): number | null =>
-        typeof value === "number" && Number.isFinite(value) ? value : null;
-      const defaultUsd = number(session.budget?.default_usd) ?? number(session.spend_cap_usd);
-      maxUsd = number(session.budget?.max_usd);
-      if (defaultUsd !== null) {
-        budgetInput.placeholder = defaultUsd.toFixed(2);
-        // Nothing chosen on this Mac: the box states what a task actually gets.
-        // A figure typed while the fetch was in flight is left alone.
-        if (saved === null && budgetInput.value === original) {
-          original = defaultUsd.toFixed(2);
-          budgetInput.value = original;
-        }
-      }
-      budgetNote.textContent = budgetNoteText(defaultUsd, maxUsd);
-
       const perTask = spendByTask(audit.records ?? [], tasks.tasks ?? []);
       body.replaceChildren();
       if (perTask.length === 0) {

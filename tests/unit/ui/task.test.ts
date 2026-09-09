@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  budgetMeter,
+  taskCost,
   clockTime,
   collapseFeed,
   elapsedPrecise,
@@ -356,33 +356,13 @@ describe("markdown — asterisks never reach the DOM", () => {
 });
 
 describe("numbers a person can check", () => {
-  it("states the units, never a bare percentage", () => {
-    assert.equal(formatUsd(0.184), "$0.18");
-    const priced = budgetMeter({ usd: 0.18, capUsd: 2, calls: 40, callsCap: 200 });
-    assert.equal(priced.used, "$0.18 of $2.00");
-    assert.equal(priced.long, "$0.18 of your $2.00 budget");
-    assert.equal(priced.of, "your $2.00 budget");
-    assert.equal(Number(priced.ratio!.toFixed(2)), 0.09);
-    assert.equal(budgetMeter({ usd: 0.18, capUsd: null, calls: 0, callsCap: null }).used, "$0.18");
-  });
-
-  it("counts tool calls when the run is not priced, and never says $0.00 mid-run", () => {
-    // A proxy-metered run reports no dollars at all. "$0.00 of $2.00" sat on
-    // screen for 23 minutes while the run spent its way to a hard stop.
-    const unpriced = budgetMeter({ usd: 0, capUsd: 2, calls: 200, callsCap: 200 });
-    assert.equal(unpriced.used, "200 of 200 tool calls");
-    assert.equal(unpriced.long, "200 of the 200 tool calls it was allowed");
-    assert.equal(unpriced.of, "its 200 tool calls");
-    assert.equal(unpriced.ratio, 1);
-    assert.equal(
-      budgetMeter({ usd: 0, capUsd: 2, calls: 1, callsCap: null }).used,
-      "1 tool call",
-      "no cap to count against is still a count, not a dollar figure",
-    );
-    // Nothing has happened yet: $0.00 is the truth, and the cap is the point.
-    assert.equal(budgetMeter({ usd: 0, capUsd: 2, calls: 0, callsCap: 200 }).used, "$0.00 of $2.00");
-    // A priced run keeps its dollars even once calls are being counted.
-    assert.equal(budgetMeter({ usd: 1.5, capUsd: 2, calls: 90, callsCap: 200 }).used, "$1.50 of $2.00");
+  it("shows only total cost and does not invent a price for unpriced calls", () => {
+    assert.equal(taskCost({ usd: 0.18, calls: 40 }), "$0.18");
+    assert.equal(taskCost({ usd: 0, calls: 200 }), "Not reported");
+    assert.equal(taskCost({ usd: 0, calls: 0 }), "$0.00");
+    assert.equal(taskCost({ usd: Number.NaN, calls: 0 }), "Not reported");
+    assert.equal(taskCost({ usd: -1, calls: 0 }), "Not reported");
+    assert.equal(taskCost({ usd: 0.001, calls: 1 }), "less than $0.01");
   });
 
   it("says how long it took in words a person would use", () => {
@@ -544,32 +524,19 @@ describe("task view, driven by synthetic events", () => {
     }
   });
 
-  it("shows the budget with its units, and warns once at 80 per cent", async () => {
+  it("shows a single live total without a budget meter or limit", async () => {
     const t = await mountRunning();
     try {
       t.view.onEvent(event("usage", { usd_est: 0.18, steps: 8, tokens_in: 1, tokens_out: 1 }, ts(4)));
-      // The cost used to be stated twice on one screen,
-      // in two phrasings. While a task runs the receipt panel owns it — it is
-      // the one with the cap and the meter — and the bar stays quiet until the
-      // panel is gone, which is when the run ends.
       assert.equal(t.root.querySelector(".task-bar .spend")!.textContent, "");
-      const facts = t.root.querySelectorAll(".facts .r").map((r) => r.textContent);
-      assert.deepEqual(facts, [
-        "Budget used$0.18 of $2.00",
-        "Steps so far8",
-        "Files it has savedNone yet",
+      assert.deepEqual(t.root.querySelectorAll(".facts .r").map(r => r.textContent), [
+        "Total cost$0.18", "Steps so far8", "Files it has savedNone yet",
       ]);
-      assert.equal(t.root.querySelector(".meter")!.classList.contains("warn"), false);
-
+      assert.equal(t.root.querySelector(".facts .meter"), null);
       t.view.onEvent(event("usage", { usd_est: 1.7, steps: 20, tokens_in: 1, tokens_out: 1 }, ts(5)));
-      assert.equal(t.root.querySelector(".meter")!.classList.contains("warn"), true);
-      assert.match(
-        t.root.querySelector(".meter")!.getAttribute("aria-label")!,
-        /85 percent of your \$2\.00 budget used/,
-      );
-    } finally {
-      t.restore();
-    }
+      assert.equal(t.root.querySelector(".facts .r")!.textContent, "Total cost$1.70");
+      assert.equal(t.root.querySelector(".facts .meter"), null);
+    } finally { t.restore(); }
   });
 
   it("counts the files it saved, by name, once the write comes back", async () => {
@@ -842,14 +809,14 @@ describe("task view — finished", () => {
       const receipt = t.root.querySelectorAll(".receipt dt").map((d) => d.textContent);
       assert.deepEqual(receipt, [
         "Time",
-        "Cost, on your Claude plan",
+        "Total cost",
         "Sites it visited",
         "Things it asked you",
         "Files it saved",
         "Browser profile",
       ]);
       assert.equal(t.root.querySelectorAll(".receipt dd")[0]!.textContent, "4 min 12 s");
-      assert.match(t.root.querySelectorAll(".receipt dd")[1]!.textContent, /of your \$2\.00 budget/);
+      assert.doesNotMatch(t.root.querySelectorAll(".receipt dd")[1]!.textContent, /budget|allowed|of \$/);
 
       // Nothing on this screen can still act on a task that is over.
       assert.equal(t.root.querySelector(".task-bar button")!.hidden, true);

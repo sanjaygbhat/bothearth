@@ -99,18 +99,18 @@ async function mount(routes: Record<string, Json>) {
 const event = (type: string, body: Json, at: string): UiEvent =>
   ({ type, ts: at, task_id: "t_1", body }) as UiEvent;
 
-describe("the budget meter while a task runs", () => {
-  it("counts tool calls the moment the run is spending and nothing is priced", async () => {
+describe("the total cost while a task runs", () => {
+  it("shows an unreported price until a cost is available", async () => {
     const t = await mount(detail({ status: "running", spend_usd: 0, spend_cap_usd: 2 }));
     try {
-      assert.deepEqual(t.facts()[0], "Budget used$0.00 of $2.00", "nothing has happened yet");
+      assert.deepEqual(t.facts()[0], "Total cost$0.00", "nothing has happened yet");
 
       for (let i = 0; i < 3; i += 1) {
         t.view.onEvent(event("tool.call", { name: "browser_snapshot" }, ts(1, i)));
       }
       assert.equal(
         t.facts()[0],
-        "Budget used3 tool calls",
+        "Total costNot reported",
         "$0.00 beside a run that is spending is the lie that hid a whole failure",
       );
 
@@ -118,14 +118,12 @@ describe("the budget meter while a task runs", () => {
       t.view.onEvent(
         event("usage", { usd_est: 0, steps: 3, calls: 160, calls_cap: 200 }, ts(2)),
       );
-      assert.equal(t.facts()[0], "Budget used160 of 200 tool calls");
-      const meter = t.root.querySelector(".meter")!;
-      assert.equal(meter.classList.contains("warn"), true, "80 per cent of the calls is a warning");
-      assert.match(meter.getAttribute("aria-label")!, /80 percent of its 200 tool calls used/);
+      assert.equal(t.facts()[0], "Total costNot reported");
+      assert.equal(t.root.querySelector(".facts .meter"), null);
 
       // A real price outranks the count again the moment one exists.
       t.view.onEvent(event("usage", { usd_est: 1.4, steps: 4, calls: 170 }, ts(3)));
-      assert.equal(t.facts()[0], "Budget used$1.40 of $2.00");
+      assert.equal(t.facts()[0], "Total cost$1.40");
     } finally {
       t.restore();
     }
@@ -136,11 +134,11 @@ describe("the budget meter while a task runs", () => {
     // on events this page may never have seen.
     const t = await mount(detail({ status: "running", spend_usd: 1.25, spend_cap_usd: 4 }));
     try {
-      assert.equal(t.facts()[0], "Budget used$1.25 of $4.00");
+      assert.equal(t.facts()[0], "Total cost$1.25");
       t.view.onEvent(event("policy.denied", { reason: "spend_cap", cap_usd: 4, proxy_estimate_usd: 4 }, ts(9)));
       assert.equal(
         t.facts()[0],
-        "Budget used$4.00 of $4.00",
+        "Total cost$4.00",
         "the refusal names what it had actually spent when it was refused",
       );
     } finally {
@@ -183,7 +181,7 @@ describe("a run that stopped on its budget", () => {
       assert.doesNotMatch(t.root.textContent, /Something on this machine/);
       // The receipt totals what it really spent, not the $0.00 the usage
       // events reported while the proxy was metering it.
-      assert.equal(t.receipt()["Cost, on your Claude plan"], "$2.00 of your $2.00 budget");
+      assert.equal(t.receipt()["Total cost"], "$2.00");
       assert.deepEqual(t.buttons(), [
         "Resume with a higher budget",
         "Run again",
@@ -212,7 +210,7 @@ describe("a run that stopped on its budget", () => {
     }
   });
 
-  it("states the tool calls on the receipt when the run was never priced", async () => {
+  it("does not invent a price on an unpriced receipt", async () => {
     const t = await mount(
       detail({ status: "failed", spend_cap_usd: 2, failure_kind: "spend_cap" }, [
         { kind: "usage", body: { usd_est: 0, steps: 200, calls: 200, calls_cap: 200 }, created_at: ts(22) },
@@ -220,8 +218,8 @@ describe("a run that stopped on its budget", () => {
     );
     try {
       assert.equal(
-        t.receipt()["Cost, on your Claude plan"],
-        "200 of the 200 tool calls it was allowed",
+        t.receipt()["Total cost"],
+        "Not reported",
       );
     } finally {
       t.restore();

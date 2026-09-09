@@ -58,3 +58,12 @@ The MCP token cannot approve requests, create computers, or open operator live v
 Use [troubleshooting](TROUBLESHOOTING.md) for connection failures and [release checks](SECURITY-CHECKLIST.md) for the real model/account workflow gate. A generated configuration or mock test pass does not demonstrate task success on that harness.
 
 For sequential tasks on one computer, finish with `done` or cancel the task through the operator API, then POST a new, unique task ID to `/api/v1/harness-bindings`. Active tasks cannot be rebound. Prior budgets and approvals remain in task history; domain consent does not carry into the next task.
+
+
+## Non-interactive research harnesses
+
+The 9 September 2026 VM trial used the locally signed-in Codex CLI through an SSH tunnel; provider authentication files were not copied to the VM. The daemon, Chromium and task files ran on the VM. This topology needs the local harness and tunnel to remain running; it does not demonstrate laptop-independent model execution.
+
+Recent Codex versions can require their own MCP tool approval before a call reaches BotHearth. For an explicitly authorised, unattended research job, configure only the browser-reading and output-writing tools needed by that job through `mcp_servers.<id>.enabled_tools` and the corresponding per-tool approval settings. Keep BotHearth's operator domain/action approvals enabled. Do not blindly grant an arbitrary MCP server all tools or disable the harness's host sandbox. See the [official configuration reference](https://developers.openai.com/codex/config-reference/). No user-wide configuration change is required for a one-off `codex exec -c ...` invocation.
+
+MCP HTTP request bodies are limited to 1 MiB, including JSON/base64 overhead. Write larger deliverables in smaller `write_file` append chunks within the tool's total file-size limit.
