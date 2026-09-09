@@ -14,7 +14,7 @@
 
 [![BotHearth organising the actual test inbox, with account identity, senders and message content blurred.](website/screenshots/email-inbox-redacted.png)](website/screenshots/email-inbox-redacted.png)
 
-*Real email organisation test, 8 September 2026: **51 min 6 s across two runs**. Private inbox details blurred. [Completed result and test record](docs/EMAIL-ORGANISATION-TEST-2026-09-08.md).*
+*Real email organisation test, 8 September 2026: **51 min 6 s across two runs**. Private inbox details blurred. [View the completed result](website/screenshots/email-organised-redacted.png).*
 
 ## Run it
 
@@ -105,4 +105,4 @@ Source-available under [PolyForm Noncommercial 1.0.0](LICENSE). The unchanged re
 
 `npm ci && npm run build`, then `npm run typecheck` and `npm test`. The `computer-server` package carries its own dependencies — `npm ci --prefix computer-server --ignore-scripts` — which its unit tests and its own typecheck need; building and running BotHearth does not, because the image installs Playwright itself. Tests that touch containers need the images built. Start at [CONTRIBUTING.md](CONTRIBUTING.md).
 
-[Security model and how to report a vulnerability](SECURITY.md) · [Privacy and retention](PRIVACY.md) · [Documentation](docs/README.md)
+[Security model and how to report a vulnerability](SECURITY.md) · [Privacy and retention](PRIVACY.md) · [Setup guide](docs/QUICKSTART.md)

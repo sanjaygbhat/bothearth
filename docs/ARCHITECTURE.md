@@ -69,7 +69,7 @@ The daemon/computer stream uses a four-byte big-endian body length, then a type 
 
 For full request validation, read [daemon/server.ts](https://github.com/sanjaygbhat/bothearth/blob/main/src/daemon/server.ts). This pre-release API is not a version-stability promise. Runtime readiness checks the actual Node version, runtime, stamped images, browser, and configured model connection; the home screen can open before task execution is ready. [Troubleshooting](TROUBLESHOOTING.md) maps the visible blockers to recovery actions.
 
-Each vault file has its own OS-store key identity derived from its real path, so resetting one installation does not intentionally rotate another's key. [Keychain and recovery details](https://github.com/sanjaygbhat/bothearth/blob/main/src/vault/KEYCHAIN.md) cover legacy keys and host ACL limits. [Compose](COMPOSE.md), [security](../SECURITY.md), and [release verification](SECURITY-CHECKLIST.md) retain the sandbox invariants and checks.
+Each vault file has its own OS-store key identity derived from its real path, so resetting one installation does not intentionally rotate another's key. [Keychain and recovery details](https://github.com/sanjaygbhat/bothearth/blob/main/src/vault/KEYCHAIN.md) cover legacy keys and host ACL limits. [Compose](COMPOSE.md) and [security](../SECURITY.md) describe the sandbox configuration and boundaries.
 
 ## Code map
 
@@ -84,4 +84,4 @@ Each vault file has its own OS-store key identity derived from its real path, so
 | `src/vault/`, `src/audit/` | Encrypted vault and audit chain |
 | `src/ui/`, `apps/macos/`, `mobile/` | Browser UI and optional native clients |
 
-Read [security](../SECURITY.md) before changing a trust boundary, [current decisions](DECISIONS.md) for constraints, and [contributing](../CONTRIBUTING.md) for validation.
+Read [security](../SECURITY.md) before changing a trust boundary, and [contributing](../CONTRIBUTING.md) for validation.

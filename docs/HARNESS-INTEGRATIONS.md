@@ -55,7 +55,7 @@ After creating the operator task binding, give the harness its task and computer
 
 The MCP token cannot approve requests, create computers, or open operator live view. Keep bootstrap URLs, UI cookies, and credentials out of harness prompts and configuration. An MCP connection does not restrict the harness's separate host shell or filesystem privileges.
 
-Use [troubleshooting](TROUBLESHOOTING.md) for connection failures and [release checks](SECURITY-CHECKLIST.md) for the real model/account workflow gate. A generated configuration or mock test pass does not demonstrate task success on that harness.
+Use [troubleshooting](TROUBLESHOOTING.md) for connection failures; test a small task through your actual model connection before relying on the integration. A generated configuration or mock test pass does not demonstrate task success on that harness.
 
 For sequential tasks on one computer, finish with `done` or cancel the task through the operator API, then POST a new, unique task ID to `/api/v1/harness-bindings`. Active tasks cannot be rebound. Prior budgets and approvals remain in task history; domain consent does not carry into the next task.
 

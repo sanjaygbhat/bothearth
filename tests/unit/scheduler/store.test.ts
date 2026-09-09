@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import {
   MAX_ENABLED_ROUTINES,
   RoutinesStore,
@@ -44,13 +41,4 @@ describe("routines store", () => {
     store.close();
   });
 
-  it("MAX_ENABLED_ROUTINES=20 is recorded in DECISIONS", () => {
-    assert.equal(MAX_ENABLED_ROUTINES, 20);
-    const decisions = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "../../../docs/DECISIONS.md"),
-      "utf8",
-    );
-    assert.match(decisions, /MAX_ENABLED_ROUTINES/);
-    assert.match(decisions, /20 enabled routines/);
-  });
 });

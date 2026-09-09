@@ -2,7 +2,7 @@
 
 The daemon runs on the Linux host; browser, optional shell, and proxy run in containers. UI and MCP stay on `127.0.0.1:7777`. Reach them through SSH or private HTTPS. A VPS runs the daemon and browsers independently of the laptop; phones require their own private-network connection. See the [remote client contract](REMOTE-CLIENT.md).
 
-**Validation:** the [9 September 2026 Debian 13 x86-64 trial](REMOTE-VM-TRIAL-2026-09-09.md) completed a real browser research task. After correcting the cloud startup script, a real reboot automatically restarted the daemon with its encrypted credential and preserved report files. The model harness ran on a connected Mac. Fresh-host preparation required troubleshooting; this does not validate unattended one-command installation, VM-native provider login, phone/cellular access or other CPU architectures.
+A model harness running on your laptop still needs that laptop and its connection during execution. To run tasks independently, configure model access on the remote host. Fresh headless-host preparation requires system administration; plan for platform-specific setup.
 
 ## Prepare the host
 

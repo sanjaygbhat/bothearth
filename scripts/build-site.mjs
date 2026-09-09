@@ -80,6 +80,9 @@ const urls = pages.map((page) => new URL(page.slug ? `${page.slug}/` : "", site)
 writeFileSync(join(output, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((url) => `  <url><loc>${escape(url)}</loc><lastmod>${config.reviewed}</lastmod></url>`).join("\n")}\n</urlset>\n`);
 writeFileSync(join(output, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${site.href}sitemap.xml\n`);
 writeFileSync(join(output, ".nojekyll"), "");
+// Keep old bookmarks usable after retiring the separate review page.
+mkdirSync(join(output, "security-review"), { recursive: true });
+writeFileSync(join(output, "security-review/index.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0;url=${escape(site.pathname)}security/"><title>BotHearth security</title><p><a href="${escape(site.pathname)}security/">Security and privacy</a></p></html>\n`);
 // CNAME is useful for branch hosts; Actions Pages still needs repository domain settings.
 const cname = join(output, "CNAME");
 if (site.pathname === "/" && !site.hostname.endsWith(".github.io")) {

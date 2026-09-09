@@ -124,7 +124,4 @@ Do **not** open a public issue that includes exploit details for unpatched vulne
 ## Related docs
 
 - [PRIVACY.md](./PRIVACY.md) — data residency, retention, purge
-- [Release verification](docs/SECURITY-CHECKLIST.md) — checks to record for the released revision
 - [Architecture](docs/ARCHITECTURE.md) — current component and data flow
-
-- [Dated engineering security review](docs/SECURITY-REVIEW-2026-09-09.md) — findings, fixes, public test receipts and limits
