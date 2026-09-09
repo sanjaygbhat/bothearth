@@ -69,7 +69,7 @@ test("a section in the hash opens that section, and update swaps panes without r
     await settle();
     assert.equal(rail.querySelector('[aria-current="page"]')?.textContent, "About");
     assert.equal(sheet, dom.root.querySelector(".set-sheet"), "the sheet itself is not rebuilt");
-    assert.ok(byText(sheet, "Source-available · free for personal use."));
+    assert.ok(byText(sheet, "Source-available · one business bot free under the offer."));
   } finally {
     view.unmount();
     dom.restore();
