@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "805608380f4a35b93c2ec3346d69345c8fdef75d2288a5b5b842d173e91fafe8",
+  "tree_sha256": "db217538bb0d31ee2ddf51ceda2e3b56ca4d24d955bb3a231211f4894ebcc67d",
   "files": [
     {
       "path": ".dockerignore",
@@ -59,9 +59,9 @@
     },
     {
       "path": "COMMERCIAL.md",
-      "bytes": 7190,
+      "bytes": 7431,
       "mode": "644",
-      "sha256": "70dcedacc0cbc7d50a7b9256c28313ef643fe7dadc5a74b048b19ac20b57975d"
+      "sha256": "20dbf1c0dc37a85aa11441f26062d7e1eb46b47a58bcff6de647cb4fd756543b"
     },
     {
       "path": "CONTRIBUTING.md",
@@ -593,9 +593,9 @@
     },
     {
       "path": "enterprise/server.mjs",
-      "bytes": 23246,
+      "bytes": 23477,
       "mode": "644",
-      "sha256": "9c4a54b85ff386b3c2bf025cd64d27cb51ca3c26828b113c7a5a6dde9c5036e9"
+      "sha256": "e685ad7ca82b1adbddbf8f70b51f5120875717a3ca10aafb9316de60b8d98afe"
     },
     {
       "path": "flavours/claude-modelbot/.claude-plugin/marketplace.json",
@@ -3569,9 +3569,9 @@
     },
     {
       "path": "tests/unit/website/site.test.ts",
-      "bytes": 4090,
+      "bytes": 4202,
       "mode": "644",
-      "sha256": "c1efeb41d17b85ae002e0734e1caeeee0c4b9f52c7c16fecc521fd42a3079dd2"
+      "sha256": "b1e1bf661cc03062788ab0864df6aceac9a6ec1d4afcd1d6e29c5dd59d29814a"
     },
     {
       "path": "tsconfig.json",
@@ -3605,15 +3605,15 @@
     },
     {
       "path": "website/contact.html",
-      "bytes": 1769,
+      "bytes": 1963,
       "mode": "644",
-      "sha256": "449a1e2ae7a6d7e6f6a657ce2cf18870f50608700f297e2495c75d43faccd615"
+      "sha256": "563b8bc7bdf62e5aa1aba2e2c854e0dae81f20f2ce6701fc57dbbdaaa31f0c53"
     },
     {
       "path": "website/enterprise.html",
-      "bytes": 6616,
+      "bytes": 7014,
       "mode": "644",
-      "sha256": "a4ff0695bb10fcf5ce326ecbca9161d97096b6cc93986888cf87b440a8be8d9d"
+      "sha256": "430f5f3f92b144ba6e200a1d741408460e0652ebaad4456eb3afb6c13676939a"
     },
     {
       "path": "website/examples.html",
@@ -3623,9 +3623,9 @@
     },
     {
       "path": "website/faq.html",
-      "bytes": 9156,
+      "bytes": 9226,
       "mode": "644",
-      "sha256": "cfce4de909a84aec0b89e47150bcf73d33c1ac52de66bc59abc8cbff74426ecb"
+      "sha256": "53ffc2853477ddb4a578af8caeb13f5424f6bf517b4b4e2df376a0b828e22046"
     },
     {
       "path": "website/favicon-32.png",
@@ -3665,9 +3665,9 @@
     },
     {
       "path": "website/index.html",
-      "bytes": 7097,
+      "bytes": 7212,
       "mode": "644",
-      "sha256": "d35e0b6353b3a76c590d366f7f30ab3c41e58a03c1dae78ed5779db36c874a98"
+      "sha256": "3ff1bd6446e1c62eedb42f75b28451ab0008d9846279dbb9bbdd995aede11efb"
     },
     {
       "path": "website/layout.html",
@@ -3725,9 +3725,9 @@
     },
     {
       "path": "website/site.json",
-      "bytes": 4021,
+      "bytes": 4044,
       "mode": "644",
-      "sha256": "927f267abe9cd94cbb3b9fc9dedd6933435f9b41de844723be2b1f5154f80432"
+      "sha256": "88cb105d661fe470d24d28045681e8523a70e1e051bcbfbe2c89002136aac447"
     },
     {
       "path": "website/social-preview.png",
@@ -3749,9 +3749,9 @@
     },
     {
       "path": "website/terms.html",
-      "bytes": 7491,
+      "bytes": 7926,
       "mode": "644",
-      "sha256": "c230cd380272a9135125cac812a13130abc0e390e3bbaee04d9194356e809521"
+      "sha256": "d877af206575c3ac0544fc9c7a307a495d43e6c5c7d2b42c0879a9e5d47996ed"
     },
     {
       "path": "website/tokens.css",

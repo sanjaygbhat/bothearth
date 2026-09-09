@@ -21,7 +21,9 @@ test("static site builds and checks both the custom domain and a Pages project p
     }
     const terms = readFileSync(new URL("../../../.site-build/terms/index.html", import.meta.url), "utf8");
     assert.match(terms, /US\$49/);
-    assert(!terms.includes("US$99"));
+    assert.match(terms, /<del>US\$99<\/del>/);
+    assert.match(terms, /limited-time introductory price/i);
+    assert.match(terms, /over 50% off/i);
     assert.match(terms, /modified, rebranded/);
     assert.match(terms, /never grants resale or sublicensing/);
     assert.match(terms, /without output royalties/);
