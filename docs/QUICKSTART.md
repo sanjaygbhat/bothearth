@@ -70,7 +70,7 @@ BotHearth remembers the connection. Provider terms, plan eligibility, usage limi
 
 Type what you want in plain language and press `⌘↩` (`Ctrl↩` on Linux), or click **Start task**. Pick something small you can check yourself the first time — one of the examples under **TRY** is a good start.
 
-The task view puts the activity feed on the left and the live view of its computer on the right, under **ITS COMPUTER**. **Full screen** makes the live view bigger; `Esc` leaves it. Underneath, **Budget used**, **Steps so far** and **Files it has saved** update as it works. **Stop** ends the task.
+The task view puts the activity feed on the left and the live view of its computer on the right, under **ITS COMPUTER**. **Full screen** makes the live view bigger; `Esc` leaves it. Underneath, **Total cost**, **Steps so far** and **Files it has saved** update as it works. **Stop** ends the task.
 
 ### Building your bot's computer, once
 
@@ -80,15 +80,15 @@ The first task needs container images that do not exist yet, and there are no pr
 bothearth image build
 ```
 
-It downloads Chromium and its Linux dependencies, so it takes several minutes and a few GB of disk. It happens once. Build the images this way rather than by hand — BotHearth stamps them at build time and treats an unstamped image as out of date.
+It downloads Chromium and its Linux dependencies, so it takes several minutes and a few GB of disk. Build again when a source update makes the images stale. Build the images this way rather than by hand — BotHearth stamps them at build time and treats an unstamped image as out of date.
 
-## What a task is allowed to spend
+## What the task cost means
 
-Every task gets a usage allowance and pauses when its meter reaches it. The default is **$20**, with a default per-task ceiling of **$100**. Change it under **Settings → Usage**, in **Budget for one task**; the figure is kept on this machine and applies to the tasks you start after it.
+The task view shows **Total cost**, an estimate of work recorded for that task. **Settings → Usage** shows recorded estimates by task and day. The normal task and settings views do not ask you to choose a spending maximum. Internal task limits remain and can pause work.
 
-For Claude Code and Codex tasks, BotHearth counts each computer tool call as an estimated cent, so $20 represents 2,000 tool calls. This is a work allowance, not a reading of your provider bill. Standalone API estimates depend on reported usage and configured prices; an in-flight request can exceed an estimate. Provider spending controls must be configured with the provider.
+For Claude Code and Codex tasks, BotHearth counts each computer tool call as an estimated cent by default. This is a work estimate, not a reading of your provider bill. Standalone API estimates depend on reported usage and configured prices; an in-flight request can exceed an estimate. Provider spending controls must be configured with the provider.
 
-When a task reaches its budget it **pauses** — it does not fail, and nothing it had already done is lost. The task offers **Resume with a higher budget**, which raises the cap and carries on from the step it stopped at. A task that runs out of steps offers **Resume with more steps** the same way.
+When a task reaches its budget it **pauses**. Recorded task history and saved files remain available. The task offers **Resume with a higher budget** to permit more work; resumption is not a guarantee that every external website action continues exactly where it stopped. A task that runs out of steps offers **Resume with more steps** the same way.
 
 ### Long tasks
 

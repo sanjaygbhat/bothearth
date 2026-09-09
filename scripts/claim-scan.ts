@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * WP20 — fail on banned marketing claims in launch surfaces.
- * Patterns: unlimited | any subscription | already pay for
- * Also flags: any model or subscription
+ * Guard known copy regressions across every configured website page.
+ * This is a drift check, not proof that arbitrary prose is true.
  *
  * Usage: node --experimental-strip-types scripts/claim-scan.ts
  */
@@ -15,7 +14,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGETS = [
   "README.md",
   "docs/QUICKSTART.md",
-  "website/index.html",
+  "website/site.json",
+  ...JSON.parse(readFileSync(join(ROOT, "website/site.json"), "utf8")).pages
+    .map((page: { file: string }) => `website/${page.file}`),
 ];
 
 const PATTERNS: Array<{ name: string; re: RegExp }> = [
@@ -23,6 +24,9 @@ const PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "any subscription", re: /\bany subscription\b/i },
   { name: "already pay for", re: /\balready pay for\b/i },
   { name: "any model or subscription", re: /\bany model or subscription\b/i },
+  { name: "obsolete budget input", re: /Budget for one task|ceiling[^.]*configurable under Settings/i },
+  { name: "unqualified screenshot claim", re: /\bunretouched\b/i },
+  { name: "retired featured screenshot", re: /screenshots\/reading-(?:completed|summary)/i },
 ];
 
 function main(): void {

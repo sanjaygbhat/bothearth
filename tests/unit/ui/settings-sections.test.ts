@@ -192,7 +192,7 @@ test("About states the version it is actually running and links out safely", asy
     assert.match(text(pane), /Version 0\.4\.2 · running on this machine/);
     // ModelBot is source-available under PolyForm Noncommercial, not open
     // source; the About pane is a licensing claim, so the wording is asserted.
-    assert.match(text(pane), /Source-available · free for personal use\./);
+    assert.match(text(pane), /Source-available · one business bot free under the offer\./);
     assert.doesNotMatch(text(pane), /open source|Apache/i);
     const links = all(pane).filter((n) => n.tagName === "A");
     assert.deepEqual(links.map((l) => l.textContent.replace("↗", "")), [

@@ -50,11 +50,13 @@ for (const page of pages) {
   const values = { TITLE: escape(page.title), DESCRIPTION: escape(page.description),
     CANONICAL: escape(canonical), SITE: escape(site.href), BASE: escape(site.pathname),
     REPOSITORY: escape(repo), VERSION: escape(version), DATE: escape(config.reviewed),
-    ENTERPRISEACTION: enterprise ? `<a class="button" href="${escape(enterprise.href)}">Claim your free licence →</a>` : `<p class="qualification">Online claims are not open yet. <a href="${escape(site.pathname)}contact/">Contact us about the limited-time offer</a>.</p>`,
+    ENTERPRISEACTION: enterprise ? `<a class="button" href="${escape(enterprise.href)}">Claim your free licence →</a>` : `<p class="qualification">Online claims are not open yet. <a href="${escape(site.pathname)}quickstart/">Use the free business permission now</a>.</p>`,
+    CLAIMINTRO: enterprise ? '<p>Use your work email to record the organisation’s existing free allowance. Verification proves mailbox access, not legal authority.</p>' : '<p>Online certificate claims are not open yet. You can use the published free business permission now, without registration. The steps below describe the certificate flow when enabled.</p>',
+    SERVICESTATUS: `<p><strong>Current availability:</strong> online certificate claims ${enterprise ? 'are enabled' : 'are not open yet'}; contact submission ${contact ? 'is enabled' : 'is not open yet'}. The following describes the service data flows when enabled.</p>`,
     ENTERPRISECONTACT: `<a class="button" href="${escape(site.pathname)}contact/">Contact us</a>`,
     CONTACTACTION: contact ? `action="${escape(contact.href)}"` : '',
     CONTACTSTATE: contact ? '' : 'disabled',
-    CONTACTNOTICE: contact ? '<p>We’ll reply to the email you provide.</p>' : '<p role="status">The contact form is being connected. Sending is temporarily unavailable; please check back shortly.</p>',
+    CONTACTNOTICE: contact ? '<p>We’ll reply to the email you provide.</p>' : '<p role="status">Contact submission is not open yet. This form cannot send a message. The free business permission is available without contacting us.</p>',
     NAV: nav.map(([slug, label]) => `<a href="${escape(`${site.pathname}${slug}/`)}"${slug === page.slug ? ' aria-current="page"' : ""}>${label}</a>`).join(""),
     SCHEMA: JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c") };
   const render = (html) => html.replace(/\{\{([A-Z]+)\}\}/g, (_, key) => {

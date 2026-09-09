@@ -292,10 +292,8 @@ function renderAbout(pane: HTMLElement): () => void {
   const version = appendTextChild(pane, "p", "Checking version", "set-note");
   version.setAttribute("role", "status");
 
-  // ModelBot is source-available, not open source: PolyForm Noncommercial 1.0.0
-  // is free for personal use and a commercial licence is a separate agreement.
-  // Saying "open source" here would be a licensing claim, not a slogan.
-  appendTextChild(pane, "p", "Source-available · free for personal use.", "set-tagline");
+  // The additional business permission covers one free business bot and outputs.
+  appendTextChild(pane, "p", "Source-available · one business bot free under the offer.", "set-tagline");
   appendTextChild(
     pane,
     "p",
