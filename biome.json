@@ -8,10 +8,10 @@
       "scripts/**/*.ts",
       "scripts/**/*.mjs",
       "computer-server/src/**/*.ts",
-      "!**/.claude/**",
-      "!**/node_modules/**",
-      "!**/dist/**",
-      "!apps/macos/build/**"
+      "!**/.claude",
+      "!**/node_modules",
+      "!**/dist",
+      "!apps/macos/build"
     ]
   },
   "formatter": {

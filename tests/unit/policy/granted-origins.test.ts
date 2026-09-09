@@ -34,6 +34,9 @@ describe("grantedOriginsFor: www sibling is public-suffix aware", () => {
       "www.pages.dev",
       "www.s3.amazonaws.com",
       "www.glitch.me",
+      "www.co.il",
+      "www.com.sg",
+      "www.appspot.com",
     ]) {
       assert.deepEqual(
         grantedOriginsFor(`https://${host}/`),

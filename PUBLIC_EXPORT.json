@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "10d8e062efed16868ca5573f5a00493efe43df2f80163b4927618921f49d7e15",
+  "tree_sha256": "e8a7951fc3d6a4dd3171d6309cdd7f2e90a664adfd043a4d0027a3cf24da4062",
   "files": [
     {
       "path": ".dockerignore",
@@ -32,6 +32,12 @@
       "bytes": 1887,
       "mode": "644",
       "sha256": "fa65c05a1456d0e743ac5d7c4b9da42f9f1e1113d8f5dffc51274f823c5a418c"
+    },
+    {
+      "path": ".github/workflows/security-runtime.yml",
+      "bytes": 1157,
+      "mode": "644",
+      "sha256": "635bc86e4a046e8c71e6a5b278a637bff873f0ca1aef9f311eb0f006d6bf0a2e"
     },
     {
       "path": ".gitignore",
@@ -365,9 +371,9 @@
     },
     {
       "path": "biome.json",
-      "bytes": 1605,
+      "bytes": 1593,
       "mode": "644",
-      "sha256": "9cab2265ec8a11c28fb1120c3c43986719e34992716c6a41ea7cb6d131ec01c3"
+      "sha256": "d1982ba1efcc88acd3c7c044f67a229c3cbafd09ffa0908db65097bf0239f069"
     },
     {
       "path": "computer-server/package-lock.json",
@@ -947,9 +953,9 @@
     },
     {
       "path": "scripts/export-public.mjs",
-      "bytes": 8670,
+      "bytes": 8712,
       "mode": "644",
-      "sha256": "b202d70a7c91baec20f714e8e7fc6c4993f60352842dec86b607e83a9648e5a1"
+      "sha256": "b99d7c0b776a94498ded455997335f2fa415091c4a1899d63a8c91ae1b0b543e"
     },
     {
       "path": "scripts/gen-cli-doc.ts",
@@ -1307,9 +1313,9 @@
     },
     {
       "path": "src/daemon/server.ts",
-      "bytes": 125025,
+      "bytes": 125012,
       "mode": "644",
-      "sha256": "f271b362933642160e8ac75a6ef501a6dd6121070f2bc0cff53a135763dfd513"
+      "sha256": "af843c21ccc716fc0b49bd7a09fbb455f4b051259b67e4310f3a0fd935231526"
     },
     {
       "path": "src/daemon/store.ts",
@@ -1427,9 +1433,9 @@
     },
     {
       "path": "src/mcp/server.ts",
-      "bytes": 6126,
+      "bytes": 6870,
       "mode": "644",
-      "sha256": "98e687e40c3257492394198bd7d105380e3dd8d62a7cf2cab0680b5aaf9312cc"
+      "sha256": "9e90aa3435fc1933eafb03f6012816bf87a66d11e7cf379400cbde873c96ea88"
     },
     {
       "path": "src/mcp/stdio-bridge.ts",
@@ -1463,9 +1469,9 @@
     },
     {
       "path": "src/policy/approvals.ts",
-      "bytes": 7309,
+      "bytes": 7187,
       "mode": "644",
-      "sha256": "4adc5700ad2a6b7cce242ecc00e782b51223f88e069f00a6859f0d2490f3b967"
+      "sha256": "cfe19f8e769e3f7558f2e26a2ffdd5ec3f7113fa9048b9ae677862b0bf9b69fa"
     },
     {
       "path": "src/policy/categories.ts",
@@ -2987,9 +2993,9 @@
     },
     {
       "path": "tests/unit/daemon/task-files.test.ts",
-      "bytes": 2912,
+      "bytes": 3848,
       "mode": "644",
-      "sha256": "4aee33fac178687a97fbc4c93810b09d159fe63e3148562b2d5ca1c0c6b1b19c"
+      "sha256": "0f8c96d065813c643e994146874cdb22d06d902f09d58b63ab65f7b658a6592f"
     },
     {
       "path": "tests/unit/daemon/task-max-steps.test.ts",
@@ -3088,6 +3094,12 @@
       "sha256": "e57eb5c49d6603ebd4f93a2de1b7958db7df53af529da815d2adae75f0e3a076"
     },
     {
+      "path": "tests/unit/mcp/http-limits.test.ts",
+      "bytes": 2400,
+      "mode": "644",
+      "sha256": "695d03818963512dbe87928a69b802a6f4ebb6b09d34e740c23f08e2ad8aa26d"
+    },
+    {
       "path": "tests/unit/mcp/result-text.test.ts",
       "bytes": 2092,
       "mode": "644",
@@ -3119,9 +3131,9 @@
     },
     {
       "path": "tests/unit/policy/granted-origins.test.ts",
-      "bytes": 3678,
+      "bytes": 3742,
       "mode": "644",
-      "sha256": "4c619a4417a69f9f93145d4ca03540bf065424e6104c21fd764adaabc8c2f40b"
+      "sha256": "db5fb54484fb3b15b8d6036b55fab05187aa299cf8117be621fb0ab8f38c5d76"
     },
     {
       "path": "tests/unit/policy/payment-observation.test.ts",

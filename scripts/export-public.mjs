@@ -14,7 +14,7 @@ const ROOT_FILES = new Set([
   "docker-compose.egress-test.yml", "Dockerfile.computer", "Dockerfile.shell", "Dockerfile.proxy",
   "README.md", "CHANGELOG.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md",
   "CLA.md", "COMMERCIAL.md", "CONTRIBUTING.md", "PRIVACY.md", "SECURITY.md", "TRADEMARK.md",
-  ".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/ci.yml", ".github/workflows/pages.yml",
+  ".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/ci.yml", ".github/workflows/pages.yml", ".github/workflows/security-runtime.yml",
   "flavours/claude-modelbot/.mcp.json", "flavours/claude-modelbot/.claude-plugin/plugin.json",
   "flavours/claude-modelbot/.claude-plugin/marketplace.json",
 ]);

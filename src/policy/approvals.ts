@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { parse } from "tldts";
 import {
   APPROVAL_TTL_SEC,
   type ApprovalBind,
@@ -77,11 +78,8 @@ export function createApproval(opts: {
 }
 
 /**
- * A floor, not the Public Suffix List. The real PSL is ~10k rules that change
- * weekly and would mean a new dependency plus a refresh job for one alias rule.
- * An unlisted suffix costs at most one extra *exact* origin — the registry host
- * itself, never a subdomain and never another party's site — so the residual is
- * bounded. Swap in a real PSL if the sibling rule ever widens beyond one origin.
+ * Keep historical hosting boundaries even when retired services leave the PSL.
+ * The installed PSL parser below supplies current ICANN and private suffixes.
  */
 const PUBLIC_SUFFIX_FLOOR = new Set([
   "co.uk", "org.uk", "ac.uk", "gov.uk",
@@ -97,7 +95,8 @@ const PUBLIC_SUFFIX_FLOOR = new Set([
 
 /** A host someone can actually register: at least two labels, and not itself a public suffix. */
 function isRegistrableDomain(host: string): boolean {
-  return host.split(".").length >= 2 && !PUBLIC_SUFFIX_FLOOR.has(host);
+  const parsed = parse(host, { allowPrivateDomains: true });
+  return Boolean(parsed.domain && (parsed.isIcann || parsed.isPrivate) && !PUBLIC_SUFFIX_FLOOR.has(host));
 }
 
 /**

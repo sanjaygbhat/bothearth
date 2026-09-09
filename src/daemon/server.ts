@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants, existsSync, statSync } from "node:fs";
 import { mkdir, open, realpath } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { AddressInfo } from "node:net";
 import type {
   ApprovalDecision,
@@ -1941,30 +1942,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           return;
         }
         const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
-        let data: Buffer | null = null;
-        let length: number;
         try {
           const stat = await handle.stat();
           if (!stat.isFile()) throw new Error("not a file");
-          if (method === "HEAD") length = stat.size;
-          else {
-            data = await handle.readFile();
-            length = data.length;
-          }
+          res.writeHead(200, {
+            "content-type": "application/octet-stream",
+            "content-length": stat.size,
+            "content-disposition": contentDisposition(rel),
+            "x-content-type-options": "nosniff",
+          });
+          // Guest-created files can be large. Stream with backpressure and
+          // stop at the advertised length even if the guest appends data.
+          if (method === "HEAD" || stat.size === 0) res.end();
+          else await pipeline(handle.createReadStream({ autoClose: false, end: stat.size - 1 }), res);
         } finally {
           await handle.close();
         }
-        res.writeHead(200, {
-          "content-type": "application/octet-stream",
-          "content-length": length,
-          // Without this, clicking "Open" on a saved file navigated
-          // the app's own window to the bytes. A download leaves the app where
-          // it was; an octet-stream body has no other sensible destination.
-          "content-disposition": contentDisposition(rel),
-        });
-        res.end(data ?? undefined);
       } catch {
-        fileGone(req, res);
+        if (res.headersSent) res.destroy();
+        else fileGone(req, res);
       }
       return;
     }

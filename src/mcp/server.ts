@@ -22,6 +22,8 @@ type Session = {
   server: McpSdkServer;
 };
 
+export const MAX_MCP_REQUEST_BODY_BYTES = 1024 * 1024;
+
 function buildSdkServer(
   options: McpServerOptions,
 ): McpSdkServer {
@@ -61,10 +63,14 @@ export function createMcpHttpHandler(options: McpServerOptions): {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<boolean> {
-    const url = new URL(
-      req.url ?? "/",
-      `http://${req.headers.host ?? "127.0.0.1"}`,
-    );
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+    } catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid request URL or Host" }));
+      return true;
+    }
     if (url.pathname !== (options.path ?? "/mcp")) return false;
 
     const denied = authorizeMcpRequest(req, {
@@ -106,7 +112,14 @@ export function createMcpHttpHandler(options: McpServerOptions): {
     }
 
     const chunks: Buffer[] = [];
+    let bytes = 0;
     for await (const chunk of req) {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > MAX_MCP_REQUEST_BODY_BYTES) {
+        res.writeHead(413, { "content-type": "application/json", connection: "close" });
+        res.end(JSON.stringify({ error: "request body too large" }));
+        return true;
+      }
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     let body: unknown;
@@ -187,6 +200,10 @@ export async function mcpStandalone(
         res.writeHead(404);
         res.end("not found");
       }
+    }).catch(() => {
+      if (res.headersSent) { res.destroy(); return; }
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "internal request error" }));
     });
   });
 

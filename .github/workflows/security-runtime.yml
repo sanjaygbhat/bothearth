@@ -1,0 +1,36 @@
+name: Security runtime checks
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: '1'
+      MODELBOT_NO_OPEN: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm ci --prefix computer-server --ignore-scripts
+      - name: Record the tested revision and runtime
+        run: |
+          git rev-parse HEAD
+          node --version
+          docker version
+          uname -a
+      - name: Browser image and Chromium sandbox
+        run: bash scripts/image-smoke.sh
+      - name: Shell image and profile separation
+        run: bash scripts/shell-image-smoke.sh
+      - name: Build proxy from this revision
+        run: docker build -f Dockerfile.proxy -t modelbot/proxy:dev .
+      - name: Container integration tests
+        run: npm run test:docker-int
+      - name: Network egress probes
+        run: bash scripts/egress-bypass.sh
