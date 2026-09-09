@@ -48,4 +48,4 @@ This source launch does not claim that prebuilt image, signed native-app, or app
 
 BotHearth does not distribute Codex, Claude Code, Docker Desktop, OrbStack, model weights, cloud accounts, or a paid model entitlement. Their own licenses, account terms, and usage policies apply. See [provider requirements](docs/PROVIDERS.md) and [license and costs](COMMERCIAL.md). Preserve provider authentication and do not pool or resell end-user accounts.
 
-Report an attribution omission privately to [Sanjay Bhat](mailto:sanjaygbhat@gmail.com), identifying the file, original source, license, and relevant version.
+Report an attribution omission privately to [the contact form](https://bothearth.com/contact/), identifying the file, original source, license, and relevant version.

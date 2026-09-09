@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "3ff52c7fe4b2dc782f091970d79e441a2958935605476f5ada99019dc04352f9",
+  "tree_sha256": "d174bdb076783e12aadfa37f40fbaea9afd21864442c0d74267cb3d6c73dbd85",
   "files": [
     {
       "path": ".dockerignore",
@@ -53,9 +53,9 @@
     },
     {
       "path": "COMMERCIAL.md",
-      "bytes": 3375,
+      "bytes": 3381,
       "mode": "644",
-      "sha256": "8291f0009ad58bd8cd430f8d86b48ce5b004802d6d155d948473a404dd9405b8"
+      "sha256": "62db9d5925b4241899a2d77d6f1760d12380d04f02e0e84919a82254856e261d"
     },
     {
       "path": "CONTRIBUTING.md",
@@ -95,9 +95,9 @@
     },
     {
       "path": "PRIVACY.md",
-      "bytes": 6765,
+      "bytes": 7150,
       "mode": "644",
-      "sha256": "90c37ff6b31ecb6a12029377ae700774c8b89572d21e474dc8c61c2b15917ebc"
+      "sha256": "9a80fbc0f0524b6e23b1585cdba65513d6bc21862e8da147d55e5bf313113cc9"
     },
     {
       "path": "README.md",
@@ -107,21 +107,21 @@
     },
     {
       "path": "SECURITY.md",
-      "bytes": 13613,
+      "bytes": 13615,
       "mode": "644",
-      "sha256": "d6cf142736f77e0fcf7fdb08b860612bfbeafa0bfe48f8ff5f2c8ddcb379ef44"
+      "sha256": "f389dc1b83300db605df2f831fd8d412ff62e22add845889cd77bd64d7e7e913"
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
-      "bytes": 5306,
+      "bytes": 5313,
       "mode": "644",
-      "sha256": "8bd40e366d8fa8943e4609e3ec74df7bf850c642dcba997b30489ff4dc5b10c9"
+      "sha256": "8b9d0b2d6ff97df57d3ae2513e932f8e70d74af30d83e8c104f5202c1641305e"
     },
     {
       "path": "TRADEMARK.md",
-      "bytes": 1513,
+      "bytes": 1489,
       "mode": "644",
-      "sha256": "6e9f522ad4bfd47bdeb23a0d30ff86d5a894e631a0f25eed056738c06b59ecdb"
+      "sha256": "23500baa25c1077c6ac3fef867a9888a6767c116705f904f477a3e019eeaad13"
     },
     {
       "path": "apps/macos/Info.plist",
