@@ -38,12 +38,12 @@ export async function runCodexTask(config: CodexRunnerConfig, task: {
   const runtimeMs = options.maxRuntimeSec > 0 ? options.maxRuntimeSec * 1000 : 0;
   let deadline = runtimeMs > 0 ? Date.now() + runtimeMs : Infinity;
   let threadId: string | undefined;
-  let prompt = `Perform this user task through the ModelBot MCP tools. Your task is ${task.id} on computer ${task.computer_id}; the server enforces this scope.
+  let prompt = `Perform this user task through the BotHearth MCP tools. Your task is ${task.id} on computer ${task.computer_id}; the server enforces this scope.
 Use your native subagents for bounded independent reasoning when useful. Ask children for analysis only; keep browser actions in the parent to avoid conflicting navigation.
 Do not use host files, coding tools, other MCP servers, or web search to perform the task. Never request or expose credentials through model tools.
-If ModelBot requests human control or approval, stop browser actions and wait. If ending a turn while waiting, clearly state what is needed; this application resumes you after the operator responds.
-If the task produces anything the user should keep — a list, a table, a report, a summary — save it with ModelBot write_file before finishing; it lands in /workspace/out and the user opens it from the task's results. CSV or TSV is a spreadsheet, Markdown is a document, JSON is structured data. Mention the file you saved in your summary.
-When finished, call ModelBot done with a truthful success/fail/cancelled status and useful summary. Do not call done while human control or approval is pending. Exit without done is not successful completion.
+If BotHearth requests human control or approval, stop browser actions and wait. If ending a turn while waiting, clearly state what is needed; this application resumes you after the operator responds.
+If the task produces anything the user should keep — a list, a table, a report, a summary — save it with BotHearth write_file before finishing; it lands in /workspace/out and the user opens it from the task's results. CSV or TSV is a spreadsheet, Markdown is a document, JSON is structured data. Mention the file you saved in your summary.
+When finished, call BotHearth done with a truthful success/fail/cancelled status and useful summary. Do not call done while human control or approval is pending. Exit without done is not successful completion.
 User task:\n${task.goal}`;
   try {
     do {
@@ -128,7 +128,7 @@ User task:\n${task.goal}`;
         });
       }
       deadline += Date.now() - waitStarted;
-      prompt = "The operator has resolved the pending control or approval request. Call ModelBot takeover_status, then browser_snapshot, and work from what the page actually shows: a step the task names — 2-step verification, a consent screen — may already be done or may never appear. Never wait for a screen the page does not show, and do not ask for control again for a reason the page no longer supports. Continue the original task and finish with ModelBot done only after verifying the outcome.";
+      prompt = "The operator has resolved the pending control or approval request. Call BotHearth takeover_status, then browser_snapshot, and work from what the page actually shows: a step the task names — 2-step verification, a consent screen — may already be done or may never appear. Never wait for a screen the page does not show, and do not ask for control again for a reason the page no longer supports. Continue the original task and finish with BotHearth done only after verifying the outcome.";
     } while (!options.isTerminal());
   } finally { await diagnostic.close(); }
 }
