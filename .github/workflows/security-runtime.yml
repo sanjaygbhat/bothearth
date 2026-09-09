@@ -24,6 +24,8 @@ jobs:
           node --version
           docker version
           uname -a
+      - name: Root-managed credential permission checks
+        run: sudo "$(command -v node)" --test tests/unit/vault/systemd-credential.test.ts
       - name: Browser image and Chromium sandbox
         run: bash scripts/image-smoke.sh
       - name: Shell image and profile separation

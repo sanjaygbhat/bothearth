@@ -2,18 +2,18 @@
 
 The daemon runs on the Linux host; browser, optional shell, and proxy run in containers. UI and MCP stay on `127.0.0.1:7777`. Reach them through SSH or private HTTPS. A VPS runs the daemon and browsers independently of the laptop; phones require their own private-network connection. See the [remote client contract](REMOTE-CLIENT.md).
 
-**Validation:** deployment plans are covered by local tests. A real remote Linux deployment, Secret Service unlock, user-service persistence, and each advertised CPU architecture still require end-to-end verification before release.
+**Validation:** a real Debian 13 x86-64 VM trial is in progress. It exposed fixes for the version check, credential ACL handling and retry after a failed vault initialization. The user-service credential path failed on systemd 257.13; a non-root system service with a root-managed encrypted credential started successfully. This does not validate an unattended one-command installation, Secret Service unlock or other CPU architectures.
 
 ## Prepare the host
 
 Use a dedicated SSH account with:
 
 - Node.js 22.18 or newer and npm on its path.
-- Docker access and the three images already built/loaded for the host architecture: `modelbot/computer:dev`, `modelbot/shell:dev`, `modelbot/proxy:dev`.
+- Docker Engine from its supported upstream packages and the three images already built/loaded for the host architecture: `modelbot/computer:dev`, `modelbot/shell:dev`, `modelbot/proxy:dev`.
 - A running systemd user manager and either an unlocked Linux Secret Service accessible through `secret-tool`, or the encrypted systemd credential setup below. BotHearth does not write a plaintext vault master key into the unit.
 - `curl`, a verified SSH host key, and enough disk/memory for Chromium. Enable user lingering if the service must survive logout, according to your host's account policy.
 
-Build images from the same revision as the packed application using [QUICKSTART.md](QUICKSTART.md). The npm tarball contains the daemon and runtime assets; it is not an image build context. Development tags must be replaced with verified release digests before a production security audit can pass.
+Build images from the same revision as the packed application using [QUICKSTART.md](QUICKSTART.md). On Linux, run `bash scripts/image-smoke.sh` before deployment. Debian 13’s Docker 26.1.5 package was observed to deny Chromium user-namespace creation through its `docker-default` AppArmor profile despite the correct seccomp rules. Use [Docker’s supported Debian installation](https://docs.docker.com/engine/install/debian/) and verify the smoke check on your kernel; do not disable AppArmor globally or add `--no-sandbox`. The npm tarball contains the daemon and runtime assets; it is not an image build context. Development tags must be replaced with verified release digests before a production security audit can pass.
 
 ## Preview and deploy to a prepared SSH host
 
@@ -63,7 +63,7 @@ On the desktop dashboard, choose **Settings → Connected devices → Connect a 
 
 ## Headless vault across host restart
 
-The existing Secret Service path remains supported. For a dedicated host without an unlocked desktop keyring, the optional encrypted-credential path requires **systemd 257 or newer**, a working user service manager and user-scoped encrypted credentials. It uses `LoadCredentialEncrypted=modelbot-vault:PATH`; the daemon reads only the named private runtime credential, never a plaintext key embedded in a unit or process argument. See [systemd credentials](https://systemd.io/CREDENTIALS/) and [systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html).
+The existing Secret Service path remains supported. For a dedicated host without an unlocked desktop keyring, the optional encrypted-credential path requires **systemd 258 or newer**, a working user service manager and user-scoped encrypted credentials. A real Debian 13 trial on systemd 257.13 could encrypt the credential but its user service failed to decrypt it with `243/CREDENTIALS`; the old version-only preflight was insufficient. Do not weaken credential-file permissions to work around that failure. It uses `LoadCredentialEncrypted=modelbot-vault:PATH`; the daemon reads only the named private runtime credential, never a plaintext key embedded in a unit or process argument. See [systemd credentials](https://systemd.io/CREDENTIALS/) and [systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html).
 
 Prepare a **new instance** as its dedicated account. Generate the key on that VPS, piping directly into systemd encryption; do not overwrite an existing credential:
 
@@ -73,7 +73,7 @@ test ! -e "$HOME/.config/modelbot/vault.cred" && \
   (umask 077; openssl rand -hex 32 | systemd-creds encrypt --user --with-key=host --name=modelbot-vault - "$HOME/.config/modelbot/vault.cred")
 ```
 
-Add `--systemd-credential /home/modelbot/.config/modelbot/vault.cred` to the SSH deploy preview. Initialization runs in a transient user unit with the same encrypted credential as the persistent service. The plan checks the minimum version; an actual decrypt/start must succeed on that host. Never use `--with-key=null`. This command deliberately uses systemd’s protected host secret and user/machine binding, so it does not require a TPM or promise hardware binding. Root or a compromised service account can access runtime secrets; this is not protection from the machine's administrator.
+Add `--systemd-credential /home/modelbot/.config/modelbot/vault.cred` to the SSH deploy preview. Initialization runs in a transient user unit with the same encrypted credential as the persistent service. The plan checks the minimum version and runs a transient user unit with the encrypted credential before installation; an actual decrypt/start must succeed on that host. Never use `--with-key=null`. This command deliberately uses systemd’s protected host secret and user/machine binding, so it does not require a TPM or promise hardware binding. Root or a compromised service account can access runtime secrets; this is not protection from the machine's administrator.
 
 Enable user lingering using the host administrator's normal `loginctl enable-linger modelbot` policy so the user service survives logout and starts at boot. Verify a real reboot with SSH disconnected before relying on unattended operation. Back up the encrypted vault and the required host/user credential recovery material securely; replacing a host can make a machine-bound credential undecryptable. Existing vault migration and automatic credential rotation are not provided: a mismatched key fails closed, and the vault rotate action refuses to silently change a key that systemd cannot persist.
 

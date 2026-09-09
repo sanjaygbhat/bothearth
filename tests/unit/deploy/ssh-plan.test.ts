@@ -81,6 +81,9 @@ it("headless credential and existing tailnet are explicit, private and ordered b
   assert.match(all, /LoadCredentialEncrypted=modelbot-vault:/);
   assert.match(steps.find(s => s.id === "init-config")!.command, /systemd-run --user --wait/);
   assert.doesNotMatch(steps.find(s => s.id === "preflight")!.command, /secret-tool/);
+  assert.match(steps.find(s => s.id === "preflight")!.command, /systemctl --version[^\n]*-ge 258/);
+  assert.match(steps.find(s => s.id === "preflight")!.command, /LoadCredentialEncrypted=modelbot-vault:[^\n]+ \/usr\/bin\/true/);
+  assert.doesNotMatch(steps.find(s => s.id === "preflight")!.command, /\$\(systemd --version/);
   for (const step of steps) assert.equal(spawnSync("/bin/sh", ["-n"], {input:step.command, encoding:"utf8"}).status, 0, step.id);
   assert.throws(() => planSshSteps({ user:"modelbot", host:"server.example", tailscaleServe:true }), /public-origin/);
   assert.throws(() => planSshSteps({ user:"modelbot", host:"server.example", systemdCredential:"/tmp/key%h" }), /absolute remote path/);

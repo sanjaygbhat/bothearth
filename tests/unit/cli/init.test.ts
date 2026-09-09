@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -90,4 +90,25 @@ test("init writes no limit values, so the daemon defaults apply", async () => {
   assert.equal(cfg.policy.approval_ttl_sec, 900);
   assert.equal(cfg.agent.spend_cap_usd, 20);
   assert.equal(cfg.takeover.ttl_sec, 600);
+});
+
+
+test("failed vault setup leaves init retryable without force", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mb-init-retry-"));
+  const previous = process.env.MODELBOT_VAULT_KEY_HEX;
+  const flags = ["--home", home, "--data-dir", join(home, "data"), "--skip-detect", "--skip-images", "--quiet"];
+  try {
+    process.env.MODELBOT_VAULT_KEY_HEX = "invalid-key";
+    await assert.rejects(runInit(flags), /vault|hex|key/i);
+    assert.equal(existsSync(join(home, "modelbot.yaml")), false);
+    assert.equal(existsSync(join(home, "tokens.json")), false);
+    process.env.MODELBOT_VAULT_KEY_HEX = "42".repeat(32);
+    await runInit(flags);
+    assert.ok(existsSync(join(home, "data", "vault.enc")));
+    assert.ok(existsSync(join(home, "modelbot.yaml")));
+  } finally {
+    if (previous === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX;
+    else process.env.MODELBOT_VAULT_KEY_HEX = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

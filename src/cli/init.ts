@@ -225,18 +225,6 @@ export async function runInit(argv: string[] = []): Promise<void> {
 
   assertValid(loadModelbotSchema(), withDefaults(doc));
 
-  const yamlText = stringifyYaml(doc, { lineWidth: 0 });
-  writeMode0600(cfgFile, yamlText.endsWith("\n") ? yamlText : `${yamlText}\n`);
-
-  const tokens = {
-    mcp_token: mintRandomToken(32),
-    bootstrap_token: mintRandomToken(32),
-  };
-  writeTokensFile(tokFile, tokens);
-
-  // Also drop a copy under data_dir for operators who look there.
-  writeTokensFile(join(dataDir, "tokens.json"), tokens);
-
   let passphrase = opts.passphrase;
   if (!passphrase && keychain === "passphrase") {
     passphrase = await maybePromptPassphrase();
@@ -262,6 +250,19 @@ export async function runInit(argv: string[] = []): Promise<void> {
   } else {
     await createVault({ path: vaultPath, keychain: "auto" });
   }
+
+  // A failed vault setup must not leave an apparently initialized installation.
+  const yamlText = stringifyYaml(doc, { lineWidth: 0 });
+  writeMode0600(cfgFile, yamlText.endsWith("\n") ? yamlText : `${yamlText}\n`);
+
+  const tokens = {
+    mcp_token: mintRandomToken(32),
+    bootstrap_token: mintRandomToken(32),
+  };
+  writeTokensFile(tokFile, tokens);
+
+  // Also drop a copy under data_dir for operators who look there.
+  writeTokensFile(join(dataDir, "tokens.json"), tokens);
 
   if (!opts.quiet) {
     console.log(`config: ${cfgFile}`);

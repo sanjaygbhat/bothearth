@@ -83,8 +83,9 @@ export function planSshSteps(input: SshPlanInput): DeployStep[] {
       command: remote(`set -eu
 node -e 'const [major,minor]=process.versions.node.split(".").map(Number); if (major<22 || (major===22 && minor<18)) { console.error("Node >=22.18 required"); process.exit(1); }'
 command -v npm >/dev/null
-${credential ? `command -v systemd-creds >/dev/null; test "$(systemd --version | head -1 | cut -d " " -f 2)" -ge 257; test -r ${credential}` : "command -v secret-tool >/dev/null"}
+${credential ? `command -v systemd-creds >/dev/null; test "$(systemctl --version | head -1 | cut -d " " -f 2)" -ge 258; test -r ${credential}` : "command -v secret-tool >/dev/null"}
 systemctl --user show-environment >/dev/null
+${credential ? `systemd-run --user --wait --pipe --collect -p LoadCredentialEncrypted=modelbot-vault:${credential} /usr/bin/true` : ""}
 docker info >/dev/null
 docker image inspect modelbot/computer:dev modelbot/shell:dev modelbot/proxy:dev >/dev/null`),
     },

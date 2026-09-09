@@ -55,3 +55,27 @@ test("production init and daemon reopen use the protected service credential wit
       env: { PATH: process.env.PATH, HOME: dir, CREDENTIALS_DIRECTORY: dir, MODELBOT_TEST_FAKE_COMPUTER: "1" } });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+
+test("root-managed systemd credential ACL layout accepts read-only files but rejects shared or writable substitutes", {
+  skip: process.platform !== "linux" || process.getuid?.() !== 0,
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "modelbot-root-credential-"));
+  const file = join(dir, "modelbot-vault");
+  try {
+    await writeFile(file, "42".repeat(32), { mode: 0o440 });
+    await chmod(dir, 0o550);
+    const provider = systemdCredentialProvider(dir);
+    assert.equal((await provider.resolve(false)).key.toString("hex"), "42".repeat(32));
+    for (const mode of [0o444, 0o640, 0o460]) {
+      await chmod(file, mode);
+      await assert.rejects(provider.resolve(false), /permissions or size/);
+    }
+    await chmod(file, 0o440);
+    await chmod(dir, 0o570);
+    await assert.rejects(provider.resolve(false), /permissions or size/);
+  } finally {
+    await chmod(dir, 0o700);
+    await rm(dir, { recursive: true, force: true });
+  }
+});

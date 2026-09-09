@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "266b7bd33ae88f817cfe6c7f90386ae13da14affd91cb4abb7981f3a1ecc3065",
+  "tree_sha256": "805608380f4a35b93c2ec3346d69345c8fdef75d2288a5b5b842d173e91fafe8",
   "files": [
     {
       "path": ".dockerignore",
@@ -35,9 +35,9 @@
     },
     {
       "path": ".github/workflows/security-runtime.yml",
-      "bytes": 1157,
+      "bytes": 1303,
       "mode": "644",
-      "sha256": "635bc86e4a046e8c71e6a5b278a637bff873f0ca1aef9f311eb0f006d6bf0a2e"
+      "sha256": "81c3a2e40d922194dcd6235bcf8e5beb77a72093346098ea5fa5d69504c37c70"
     },
     {
       "path": ".gitignore",
@@ -59,9 +59,9 @@
     },
     {
       "path": "COMMERCIAL.md",
-      "bytes": 6887,
+      "bytes": 7190,
       "mode": "644",
-      "sha256": "dd206b67bc056123aa777d58d39f740978493ef564dd180f7fdc4c1053a6d28f"
+      "sha256": "70dcedacc0cbc7d50a7b9256c28313ef643fe7dadc5a74b048b19ac20b57975d"
     },
     {
       "path": "CONTRIBUTING.md",
@@ -557,9 +557,9 @@
     },
     {
       "path": "docs/REMOTE-DEPLOY.md",
-      "bytes": 11318,
+      "bytes": 12324,
       "mode": "644",
-      "sha256": "05d3a3b690fe84a7992aa7449d36fbdabc735252dfa496ab1ccd60eb19012ba2"
+      "sha256": "675ae34f5e5799f2ddd800b6cd75c89d9f882b6c5ee33ccd679600fd8428185e"
     },
     {
       "path": "docs/SECURITY-CHECKLIST.md",
@@ -1133,9 +1133,9 @@
     },
     {
       "path": "src/cli/init.ts",
-      "bytes": 9404,
+      "bytes": 9485,
       "mode": "644",
-      "sha256": "6f5338b910937a06f23870f82a7afa014fdc47430d101fa2fb073952f633e505"
+      "sha256": "f8549b418441bf696298879506dbf136fc678d31417f54177c6452affeab3bd5"
     },
     {
       "path": "src/cli/pair.ts",
@@ -1361,9 +1361,9 @@
     },
     {
       "path": "src/deploy/ssh.ts",
-      "bytes": 13255,
+      "bytes": 13393,
       "mode": "644",
-      "sha256": "6ddc6c6797d22989a23e230e56de8ccdd2b4000a9203986c7641de51ea934481"
+      "sha256": "e12f815f245481a1a2440ae65103b011c876a9a1d6b642e4f1d14df7932db0a0"
     },
     {
       "path": "src/deploy/state.ts",
@@ -1805,9 +1805,9 @@
     },
     {
       "path": "src/tools/schemas/write_file.json",
-      "bytes": 1719,
+      "bytes": 1730,
       "mode": "644",
-      "sha256": "8005e5e6dd46f1245fd6bffd875602adc70dbb47ddd8334b483fdd03e930f00a"
+      "sha256": "3f1ceb24015a890dd0e025a07bcb885118f2b67f11525763e11efc7da6251423"
     },
     {
       "path": "src/types/contracts.ts",
@@ -2063,9 +2063,9 @@
     },
     {
       "path": "src/vault/providers.ts",
-      "bytes": 17805,
+      "bytes": 18516,
       "mode": "644",
-      "sha256": "a09d404c581af0c2c03f0d52efec05f22ae683c1e99b592b8d4ded8ff041853d"
+      "sha256": "f7ba8eb4b829a81e77621056c883c79020f6f1459ef58613bd035ecf261ed0dd"
     },
     {
       "path": "src/vault/types.ts",
@@ -2549,9 +2549,9 @@
     },
     {
       "path": "tests/unit/cli/init.test.ts",
-      "bytes": 3084,
+      "bytes": 4060,
       "mode": "644",
-      "sha256": "4c3504582d8df53583fca6c3555e78b336f2d337aa0a86a9140f033569bc01f2"
+      "sha256": "b5ff21528227fb854282a76b8846be34b233d1366943c3507d41ebf15dee602c"
     },
     {
       "path": "tests/unit/cli/notify.test.ts",
@@ -3065,9 +3065,9 @@
     },
     {
       "path": "tests/unit/deploy/ssh-plan.test.ts",
-      "bytes": 4255,
+      "bytes": 4581,
       "mode": "644",
-      "sha256": "34a9d1431aa140612bd9a25010261f8c59927413435385a2bc288a728f4f610a"
+      "sha256": "573e0a67f1ee7c58b10332115f695166997d4d4af1fefa6767a3337af0997ac6"
     },
     {
       "path": "tests/unit/drivers/hybrid.test.ts",
@@ -3545,9 +3545,9 @@
     },
     {
       "path": "tests/unit/vault/systemd-credential.test.ts",
-      "bytes": 3347,
+      "bytes": 4307,
       "mode": "644",
-      "sha256": "035fbe1e55342d80c3a37da39f1d0a362ef1508483066a16736868dec1767d6c"
+      "sha256": "983020b627faf75a42bb9fcfcbc4c47765f0dba80d6a7174d6ca51c1f1475e79"
     },
     {
       "path": "tests/unit/vault/vault.test.ts",
@@ -3569,9 +3569,9 @@
     },
     {
       "path": "tests/unit/website/site.test.ts",
-      "bytes": 3940,
+      "bytes": 4090,
       "mode": "644",
-      "sha256": "113dcbc4c2049eac6580751fa6e0168307abcc8300714000a591eb0d824c93a3"
+      "sha256": "c1efeb41d17b85ae002e0734e1caeeee0c4b9f52c7c16fecc521fd42a3079dd2"
     },
     {
       "path": "tsconfig.json",
@@ -3605,15 +3605,15 @@
     },
     {
       "path": "website/contact.html",
-      "bytes": 1668,
+      "bytes": 1769,
       "mode": "644",
-      "sha256": "a0423d2191e04e52f8d65b955f61fdfc905051fe2edbedab609b59f996aef444"
+      "sha256": "449a1e2ae7a6d7e6f6a657ce2cf18870f50608700f297e2495c75d43faccd615"
     },
     {
       "path": "website/enterprise.html",
-      "bytes": 6453,
+      "bytes": 6616,
       "mode": "644",
-      "sha256": "3a21bc9e2350646f31ca940d3e79c762eb1184b777dca08ce08d62ef70db28a3"
+      "sha256": "a4ff0695bb10fcf5ce326ecbca9161d97096b6cc93986888cf87b440a8be8d9d"
     },
     {
       "path": "website/examples.html",
@@ -3623,9 +3623,9 @@
     },
     {
       "path": "website/faq.html",
-      "bytes": 8776,
+      "bytes": 9156,
       "mode": "644",
-      "sha256": "2aa1760fd3da73df02b443ec7b6ce627c88930c492a8116f74fed6f2a19c45b9"
+      "sha256": "cfce4de909a84aec0b89e47150bcf73d33c1ac52de66bc59abc8cbff74426ecb"
     },
     {
       "path": "website/favicon-32.png",
@@ -3749,9 +3749,9 @@
     },
     {
       "path": "website/terms.html",
-      "bytes": 7232,
+      "bytes": 7491,
       "mode": "644",
-      "sha256": "446963ef9b0b2993dfcf28707d79d1b80a6e4a06a55925014da311a07bd73ade"
+      "sha256": "c230cd380272a9135125cac812a13130abc0e390e3bbaee04d9194356e809521"
     },
     {
       "path": "website/tokens.css",

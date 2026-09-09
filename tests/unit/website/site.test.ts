@@ -25,6 +25,8 @@ test("static site builds and checks both the custom domain and a Pages project p
     assert.match(terms, /modified, rebranded/);
     assert.match(terms, /never grants resale or sublicensing/);
     assert.match(terms, /without output royalties/);
+    assert.match(terms, /no obligation to provide support, maintenance, fixes, security patches/);
+    assert.match(terms, /Upon confirmed payment/);
     const permission = readFileSync(new URL("../../../COMMERCIAL.md", import.meta.url), "utf8");
     assert.match(permission, /no ownership of outputs/);
     assert.match(permission, /Buying more US\$49 licences does not grant them/);

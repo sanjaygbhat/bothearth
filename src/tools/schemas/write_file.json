@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "modelbot://tools/write_file.json",
   "title": "write_file",
-  "description": "Save a finished file for the user. This is the only way to hand back a deliverable: whatever you write here is saved to the user's Mac and appears in the task's results, where they can open it. Write the output the user actually asked for — CSV or TSV when they asked for a spreadsheet, Markdown for a document or report, JSON for structured data, plain text otherwise. Paths are relative to the /workspace/out folder ('invoices.csv', 'report/summary.md'); nothing outside that folder can be written. Up to 10 MB per file and 200 files. Use encoding 'base64' for binary content such as an image or PDF, otherwise 'utf8'. Use mode 'overwrite' to replace a file, 'append' to add to one, 'create' to fail if it already exists.",
+  "description": "Save a finished file for the user. This is the only way to hand back a deliverable: whatever you write here is saved on the user's BotHearth host and appears in the task's results, where they can open it. Write the output the user actually asked for — CSV or TSV when they asked for a spreadsheet, Markdown for a document or report, JSON for structured data, plain text otherwise. Paths are relative to the /workspace/out folder ('invoices.csv', 'report/summary.md'); nothing outside that folder can be written. Up to 10 MB per file and 200 files. Use encoding 'base64' for binary content such as an image or PDF, otherwise 'utf8'. Use mode 'overwrite' to replace a file, 'append' to add to one, 'create' to fail if it already exists.",
   "type": "object",
   "properties": {
     "path": {

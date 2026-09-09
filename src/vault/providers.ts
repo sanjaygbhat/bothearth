@@ -142,8 +142,22 @@ export function systemdCredentialProvider(directory: string): KeyProvider {
       const fd = openSync(join(directory, "modelbot-vault"), constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const stat = fstatSync(fd);
-        if (!stat.isFile() || stat.size > 65 || (stat.mode & 0o077) !== 0 ||
-            (process.getuid && stat.uid !== process.getuid())) throw new Error("vault: invalid systemd credential permissions or size");
+        const privateOwned = (stat.mode & 0o077) === 0 &&
+          (!process.getuid || stat.uid === process.getuid());
+        // System services use root-owned, read-only files with a service-user ACL.
+        // Trust that root-managed directory, never a writable/shared substitute.
+        let rootManaged = false;
+        if (process.platform === "linux" && stat.uid === 0 && stat.gid === 0 &&
+            (stat.mode & 0o337) === 0) {
+          const dirFd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+          try {
+            const dir = fstatSync(dirFd);
+            rootManaged = dir.uid === 0 && dir.gid === 0 && (dir.mode & 0o227) === 0;
+          } finally { closeSync(dirFd); }
+        }
+        if (!stat.isFile() || stat.size > 65 || (!privateOwned && !rootManaged)) {
+          throw new Error("vault: invalid systemd credential permissions or size");
+        }
         return { kind: "systemd-credential", key: parseHexKey(readFileSync(fd, "utf8")) };
       } finally { closeSync(fd); }
     },
