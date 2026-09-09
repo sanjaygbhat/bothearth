@@ -27,7 +27,7 @@ describe("three outcomes, three receipts", () => {
 
     const done = terminalCopy({ status: "completed", reason: "completed", budget: null, took: "4 minutes" });
     assert.equal(done.barVerb, "Finished");
-    assert.equal(done.heading, "Done in 4 minutes");
+    assert.equal(done.heading, "Task completed");
     assert.equal(done.diagnostics, false);
 
     for (const status of ["cancelled", "failed"]) {

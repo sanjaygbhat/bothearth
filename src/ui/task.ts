@@ -505,7 +505,7 @@ export function terminalCopy(input: {
   if (kind === "done") {
     return {
       kind,
-      heading: input.took ? `Done in ${input.took}` : "Done",
+      heading: "Task completed",
       lede: "Give it a look before you act on it.",
       barVerb: "Finished",
       againLabel: "Run again",

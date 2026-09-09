@@ -46,7 +46,7 @@ for (const page of pages) {
     softwareVersion: version, releaseNotes: `${site.href}about/#release`,
     softwareRequirements: "Node.js 22.18+, supported container runtime, and an eligible model account",
     license: `${repo}/blob/main/LICENSE`, author,
-    downloadUrl: repo, screenshot: `${site.href}screenshots/reading-summary.png` });
+    downloadUrl: repo, screenshot: `${site.href}screenshots/reading-completed.png` });
   const values = { TITLE: escape(page.title), DESCRIPTION: escape(page.description),
     CANONICAL: escape(canonical), SITE: escape(site.href), BASE: escape(site.pathname),
     REPOSITORY: escape(repo), VERSION: escape(version), DATE: escape(config.reviewed),
@@ -62,14 +62,15 @@ for (const page of pages) {
     return values[key];
   });
   values.CONTENT = render(readFileSync(join(source, page.file), "utf8"));
+  values.IMAGEVIEWER = values.CONTENT.includes("<img ") ? `<script src="${escape(site.pathname)}image-viewer.js" defer></script>` : "";
   const destination = join(output, page.slug);
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, "index.html"), render(template));
 }
-for (const file of ["tokens.css", "style.css", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
+for (const file of ["tokens.css", "style.css", "image-viewer.js", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
   "fonts/fraunces-latin-wght.woff2", "fonts/Fraunces-OFL.txt",
   "screenshots/task-running.png", "screenshots/needs-you.png",
-  "screenshots/reading-summary.png", "screenshots/reading-summary-detail.png"]) {
+  "screenshots/reading-completed.png", "screenshots/reading-completed-detail.png"]) {
   mkdirSync(dirname(join(output, file)), { recursive: true });
   cpSync(join(source, file), join(output, file));
 }
@@ -83,4 +84,4 @@ if (site.pathname === "/" && !site.hostname.endsWith(".github.io")) {
   writeFileSync(cname, `${site.hostname}\n`);
 } else if (existsSync(cname)) unlinkSync(cname);
 writeFileSync(join(output, "404.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Page not found — BotHearth</title><link rel="stylesheet" href="${escape(site.pathname)}tokens.css"><link rel="stylesheet" href="${escape(site.pathname)}style.css"><main class="wrap page-header"><p class="eyebrow">404</p><h1>This room is empty.</h1><p class="lead">That page could not be found. <a href="${escape(site.pathname)}">Return to BotHearth</a> or open the <a href="${escape(site.pathname)}quickstart/">quickstart</a>.</p></main></html>\n`);
-console.log(`Built ${pages.length} pages in .site-build for ${site.href} (no runtime JavaScript)`);
+console.log(`Built ${pages.length} pages in .site-build for ${site.href}`);

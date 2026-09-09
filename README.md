@@ -12,7 +12,7 @@
   <a href="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml"><img src="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-[![An actual BotHearth reading-log task: 70 minutes across three entries, with reading.csv and reading-summary.md saved and ready to open.](website/screenshots/reading-summary-detail.png)](website/screenshots/reading-summary.png)
+[![An actual BotHearth reading-log task: 70 minutes across three entries, with reading.csv and reading-summary.md saved and ready to open.](website/screenshots/reading-completed-detail.png)](website/screenshots/reading-completed.png)
 
 *An actual task using the [sample reading log](https://bothearth.com/examples/#workspace). Open the image for the complete capture; [capture details and usage meter](https://bothearth.com/about/#credits).*
 
@@ -65,7 +65,7 @@ Builds from this checkout are ad-hoc signed, which means macOS refuses to let th
 
 | Review a destination | Inspect a finished result |
 |---|---|
-| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![An actual reading-log task with the original CSV and a 70-minute Markdown summary saved.](website/screenshots/reading-summary-detail.png) |
+| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![An actual reading-log task with the original CSV and a 70-minute Markdown summary saved.](website/screenshots/reading-completed-detail.png) |
 
 *Unretouched app captures: the approval view is a pre-rename development build from 7 September 2026; the reading-log result is an actual sample task from 8 September. The dollar meter estimates tool usage, not a provider bill.*
 

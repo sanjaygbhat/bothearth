@@ -20,6 +20,12 @@ a:hover { text-decoration-thickness: 2px; }
 a:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 5px; border-radius: 3px; }
 main:focus { outline: none; }
 img { max-width: 100%; height: auto; display: block; }
+.image-open { overflow: hidden; }
+.image-viewer { width: min(1200px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); padding: 1rem; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); color: var(--color-text); }
+.image-viewer::backdrop { background: rgb(0 0 0 / 75%); }
+.image-viewer button { display: block; min-height: 44px; margin: 0 0 0.75rem auto; padding: 0.5rem 1rem; font: inherit; cursor: pointer; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-bg); color: var(--color-text); }
+.image-viewer button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.image-viewer img { width: 100%; max-height: calc(100dvh - 8rem); object-fit: contain; }
 svg { flex-shrink: 0; }
 .wrap { width: min(100% - 5rem, 1160px); margin-inline: auto; }
 .skip { position: absolute; left: -9999px; top: 1rem; z-index: 10; }

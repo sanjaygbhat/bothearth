@@ -64,7 +64,8 @@ for (const page of config.pages) {
     assert(app && app.name === "BotHearth" && app.license === `${repo}/blob/main/LICENSE`);
     assert(!app.aggregateRating && !app.review && !app.offers, "Do not invent ratings or an unrestricted free offer");
   }
-  assert.equal((html.match(/<script\b/g) || []).length, 1, `Runtime script in ${relative}`);
+  const runtimeScripts = [...html.matchAll(/<script\b(?! type="application\/ld\+json")[^>]*>/g)].map(match => match[0]);
+  assert.deepEqual(runtimeScripts, html.includes("<img ") ? [`<script src="${site.pathname}image-viewer.js" defer>`] : [], `Unexpected runtime script in ${relative}`);
   assert(!/<iframe\b/i.test(html), `Unexpected frame in ${relative}`);
   assert(!/\bSanjay\b|\bSGBhat\b|mailto:|sanjaygbhat@gmail\.com/i.test(html), `Private contact identity in ${relative}`);
   if (page.slug === "contact") {

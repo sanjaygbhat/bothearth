@@ -1,6 +1,6 @@
 # BotHearth website
 
-Eleven substantive pages, rendered to static HTML with a small Node standard-library build. The informational site has no browser JavaScript, framework, analytics, checkout, or hosted agent service. Enterprise verification, certificate issuance, and enquiry delivery run in the separate [Node service](../enterprise/README.md). The agent daemon is a separate local application.
+Eleven substantive pages, rendered to static HTML with a small Node standard-library build. The informational site uses a small local script for accessible image previews, with no framework, analytics, checkout, or hosted agent service. Enterprise verification, certificate issuance, and enquiry delivery run in the separate [Node service](../enterprise/README.md). The agent daemon is a separate local application.
 
 ## Build and preview
 
@@ -17,7 +17,7 @@ Open <http://127.0.0.1:4176/>. Stop the local preview server with Ctrl+C. The st
 
 `website/*.html` contains authored page fragments and the shared layout. `website/site.json` supplies page titles, descriptions, slugs, repository URL, canonical site URL, and the actual source-review date. The build copies only selected public assets to `.site-build/`, then emits sitemap, robots, 404, and domain files. Serve that output, not the source directory.
 
-The static site test checks the custom domain and GitHub Pages project-path builds, plus rejection of a query-bearing canonical URL. The checker validates local links, fragments, repository document paths, CSS assets, unique metadata, schema, sitemap, image dimensions, and absence of remote runtime assets or scripts.
+The static site test checks the custom domain and GitHub Pages project-path builds, plus rejection of a query-bearing canonical URL. The checker validates local links, fragments, repository document paths, CSS assets, unique metadata, schema, sitemap, image dimensions, and absence of remote runtime assets or unexpected scripts. With the preview server running and the existing computer-server Playwright dependency plus Chrome installed, run `node scripts/check-site-browser.mjs http://127.0.0.1:4176/` to check image opening, all three closing methods, keyboard focus and scroll restoration on desktop and mobile.
 
 ## URLs and branding
 
@@ -36,7 +36,7 @@ The website uses a text/SVG BotHearth wordmark, the existing warm palette, a loc
 
 The main page introduces BotHearth through a task, the agent's visible work, and its saved result. Keep setup requirements beside the entry point and detailed implementation/licence answers in the linked guides. The reading-log illustration is labeled as an example and uses the exact sample totals from the examples page.
 
-The homepage and repository README use `reading-summary-detail.png`, an actual 1200×540 viewport capture taken on 9 September 2026 of the completed 8 September reading-log task, re-opened with the simplified total-cost UI without rerunning or changing task data, linked to the complete `reading-summary.png` capture. The task saved a correct 70-minute summary and the original three-row CSV. The approval screenshot `needs-you.png` and retained `task-running.png` asset are pre-rename app captures from 7 September. All image bytes are unretouched; captions link to provenance and usage-meter details. Other historical screenshots are not deployed assets.
+The homepage and repository README use `reading-completed-detail.png`, an actual 1200×540 viewport capture taken on 9 September 2026 of the completed 8 September reading-log task, re-opened with the simplified total-cost UI without rerunning or changing task data, linked to the complete `reading-completed.png` capture. The task saved a correct 70-minute summary and the original three-row CSV. The approval screenshot `needs-you.png` and retained `task-running.png` asset are pre-rename app captures from 7 September. All image bytes are unretouched; captions link to provenance and usage-meter details. Other historical screenshots are not deployed assets.
 
 ## Publish the informational site with GitHub Pages
 

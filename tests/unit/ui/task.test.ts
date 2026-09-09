@@ -791,7 +791,7 @@ describe("task view — finished", () => {
   it("shows the result, the receipt and a way to start the next thing", async () => {
     const t = await mountWith(done("completed", "## Cheapest\n\n- JetBlue **$188**"));
     try {
-      assert.match(t.root.querySelector("h1")!.textContent, /Done in 4 minutes/);
+      assert.equal(t.root.querySelector("h1")!.textContent, "Task completed");
       assert.equal(t.root.querySelector(".result strong")!.textContent, "$188");
       assert.equal(t.root.querySelector(".result li")!.textContent, "JetBlue $188");
 
