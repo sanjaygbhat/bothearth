@@ -1,6 +1,6 @@
 # BotHearth website
 
-Ten substantive pages, rendered to static HTML with a small Node standard-library build. The informational site has no browser JavaScript, framework, analytics, form, checkout, or hosted agent service. Enterprise verification, certificate issuance, and enquiry delivery run in the separate [Node service](../enterprise/README.md). The agent daemon is a separate local application.
+Eleven substantive pages, rendered to static HTML with a small Node standard-library build. The informational site has no browser JavaScript, framework, analytics, checkout, or hosted agent service. Enterprise verification, certificate issuance, and enquiry delivery run in the separate [Node service](../enterprise/README.md). The agent daemon is a separate local application.
 
 ## Build and preview
 
@@ -70,4 +70,4 @@ This static site adds no analytics or cookies. The host receives normal web requ
 
 ## Enterprise entry point
 
-Set the GitHub Actions repository variable `SITE_ENTERPRISE_URL` to the verified HTTPS origin of the deployed enterprise service, for example `https://enterprise.bothearth.com`. The builder validates it and adds sign-in/contact links. Leave it unset until the service and real email delivery are verified; the page then explicitly says online claims are not open and provides direct email contact. Run the build and tests with the same variable. GitHub Pages hosts only static output and cannot run `enterprise/server.mjs`. Do not publish the licence database, environment files, or private enquiry records.
+Set the GitHub Actions repository variable `SITE_ENTERPRISE_URL` to the verified HTTPS origin of the deployed enterprise service, for example `https://enterprise.bothearth.com`. The builder validates it and adds sign-in links. Leave it unset until the service and real email delivery are verified; the page then explicitly says online claims are not open and links to the contact form. Set `SITE_CONTACT_URL` to a verified HTTPS form endpoint with an opaque ID (never an email-bearing URL), or deploy `enterprise/contact.mjs` and use its `/enquiry` endpoint. Without either, the contact form explicitly disables sending. Run the build and tests with the same variables. GitHub Pages hosts only static output and cannot run `enterprise/server.mjs`. Do not publish the licence database, environment files, or private enquiry records.

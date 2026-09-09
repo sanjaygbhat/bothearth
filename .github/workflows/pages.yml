@@ -11,6 +11,7 @@ permissions:
 env:
   MODELBOT_NO_OPEN: '1'
   CI: '1'
+  SITE_CONTACT_URL: ${{ vars.SITE_CONTACT_URL }}
   SITE_ENTERPRISE_URL: ${{ vars.SITE_ENTERPRISE_URL }}
 concurrency:
   group: pages-${{ github.ref }}

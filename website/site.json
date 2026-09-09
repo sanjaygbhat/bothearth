@@ -7,62 +7,68 @@
     {
       "slug": "",
       "file": "index.html",
-      "title": "BotHearth — your AI agent, with a computer",
+      "title": "BotHearth \u2014 your AI agent, with a computer",
       "description": "Give BotHearth a task. Your AI agent browses websites, works with files, and saves results for you to review. Watch it work and take control when it needs you."
     },
     {
       "slug": "quickstart",
       "file": "quickstart.html",
-      "title": "Get BotHearth — set up your AI agent and run a first task",
+      "title": "Get BotHearth \u2014 set up your AI agent and run a first task",
       "description": "Set up BotHearth on a Mac or Linux computer, connect your model account, and run your first task. This alpha installs from source with Node.js and Docker."
     },
     {
       "slug": "how-it-works",
       "file": "how-it-works.html",
-      "title": "How BotHearth works — give it a task, watch it work",
-      "description": "Describe a task, follow your agent’s computer, review requests, and open the files it saves. Learn how to connect your model and take control when needed."
+      "title": "How BotHearth works \u2014 give it a task, watch it work",
+      "description": "Describe a task, follow your agent\u2019s computer, review requests, and open the files it saves. Learn how to connect your model and take control when needed."
     },
     {
       "slug": "security",
       "file": "security.html",
-      "title": "BotHearth security and privacy — where your data goes",
+      "title": "BotHearth security and privacy \u2014 where your data goes",
       "description": "Read BotHearth's container, approval, and human-control boundaries; what remote models receive; how task data is retained; and how to report a vulnerability."
     },
     {
       "slug": "examples",
       "file": "examples.html",
-      "title": "What BotHearth can do — tasks to try with your AI agent",
+      "title": "What BotHearth can do \u2014 tasks to try with your AI agent",
       "description": "Ask BotHearth to research a topic, compare options from pages you provide, or summarize a personal reading log. Try a prompt and open the result it saves."
     },
     {
       "slug": "faq",
       "file": "faq.html",
-      "title": "BotHearth FAQ — licence, costs, compatibility, and limits",
+      "title": "BotHearth FAQ \u2014 licence, costs, compatibility, and limits",
       "description": "Is BotHearth free? What does the usage meter measure? Which platforms work? Clear answers about PolyForm Noncommercial, model costs, and the alpha release."
     },
     {
       "slug": "about",
       "file": "about.html",
-      "title": "About BotHearth — project, author, and contribution guide",
-      "description": "Meet BotHearth, an AI agent with its own computer, maintained by Sanjay Bhat. Try a task, explore the source, and help improve the project."
+      "title": "About BotHearth \u2014 project and contribution guide",
+      "description": "Meet BotHearth, an AI agent with its own computer. Try a task, explore the source, and help improve the project."
     },
     {
       "slug": "enterprise",
       "file": "enterprise.html",
-      "title": "BotHearth for enterprises — one free perpetual licence per organisation",
-      "description": "Verify your work email to claim one free perpetual BotHearth licence for internal business use. Contact Sanjay Bhat for additional installations."
+      "title": "BotHearth for enterprises \u2014 one free perpetual licence per organisation",
+      "description": "Verify your work email to claim one free perpetual BotHearth licence for internal business use. Contact us for additional installations."
     },
     {
       "slug": "terms",
       "file": "terms.html",
-      "title": "BotHearth commercial terms — US$99 perpetual installation licences",
+      "title": "BotHearth commercial terms \u2014 US$99 perpetual installation licences",
       "description": "Business licence terms for BotHearth: US$99 per additional installation, one-time payment, internal use, email delivery, and clear alpha software limits."
     },
     {
       "slug": "refunds",
       "file": "refunds.html",
-      "title": "BotHearth refund and cancellation policy — one-time licence purchases",
+      "title": "BotHearth refund and cancellation policy \u2014 one-time licence purchases",
       "description": "BotHearth paid licence sales are final with no voluntary refunds. Read cancellation rules, billing-error support, and mandatory legal and payment-provider exceptions."
+    },
+    {
+      "slug": "contact",
+      "file": "contact.html",
+      "title": "Contact BotHearth \u2014 licences, sales, and support",
+      "description": "Contact BotHearth about enterprise licences, billing, or support. Send your enquiry through our private contact form."
     }
   ]
 }

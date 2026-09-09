@@ -29,13 +29,13 @@ export function workEmail(value) {
   const parsed = parse(host, { allowPrivateDomains: true });
   if (!parsed.domain || !parsed.isIcann || parsed.isPrivate) fail(400, "Use a domain owned by your organisation.");
   for (let domain = host; domain.includes("."); domain = domain.slice(domain.indexOf(".") + 1)) {
-    if (blocked.has(domain)) fail(400, "Use your organisation’s own domain, not a personal or disposable email service. Contact Sanjay if your domain was rejected incorrectly.");
+    if (blocked.has(domain)) fail(400, "Use your organisation’s own domain, not a personal or disposable email service. Contact us if your domain was rejected incorrectly.");
   }
   // ponytail: mailbox verification + domain lists cannot prove a legal organisation; review disputed claims manually.
   return { email: `${parts[0].toLowerCase()}@${host}`, domain: parsed.domain };
 }
 
-export function createEnterpriseServer({ database, origin, secret, from, contact = "sanjaygbhat@gmail.com", sendMail, now = Date.now }) {
+export function createEnterpriseServer({ database, origin, secret, from, contact, sendMail, now = Date.now }) {
   const url = new URL(origin);
   const local = url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname);
   if ((!local && url.protocol !== "https:") || url.origin !== origin || secret.length < 32 || !from || !sendMail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) throw new Error("Configure an HTTPS origin, a 32+ character secret, email sender, and contact address.");
@@ -51,13 +51,13 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
   const setCookie = (res, id, age = 86400) => res.setHeader("set-cookie", `${cookieName}=${id}.${hash(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${local ? "" : "; Secure"}`);
   const csrf = (id) => `<input type="hidden" name="csrf" value="${hash(`csrf:${id}`)}">`;
   const form = (id, action, content, button) => `<form class="enterprise-form" method="post" action="${action}">${csrf(id)}${content}<button class="button" type="submit">${button}</button></form>`;
-  const page = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>${escape(title)} — BotHearth</title><link rel="stylesheet" href="https://bothearth.com/tokens.css"><link rel="stylesheet" href="/style.css"></head><body><a class="skip" href="#main">Skip to content</a><div class="wrap"><header class="site-header"><a class="wordmark" href="https://bothearth.com/">BotHearth</a><nav aria-label="Main navigation"><a href="https://bothearth.com/enterprise/">Enterprise offer</a></nav></header><main class="page-header prose" id="main"><h1>${escape(title)}</h1>${body}</main><footer class="site-footer"><p><a href="https://bothearth.com/security/#website">Privacy</a> · <a href="mailto:${escape(contact)}">Contact Sanjay</a></p></footer></div></body></html>`;
+  const page = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>${escape(title)} — BotHearth</title><link rel="stylesheet" href="https://bothearth.com/tokens.css"><link rel="stylesheet" href="/style.css"></head><body><a class="skip" href="#main">Skip to content</a><div class="wrap"><header class="site-header"><a class="wordmark" href="https://bothearth.com/">BotHearth</a><nav aria-label="Main navigation"><a href="https://bothearth.com/enterprise/">Enterprise offer</a></nav></header><main class="page-header prose" id="main"><h1>${escape(title)}</h1>${body}</main><footer class="site-footer"><p><a href="https://bothearth.com/security/#website">Privacy</a> · <a href="https://bothearth.com/contact/">Contact us</a></p></footer></div></body></html>`;
   const limit = (key, count, period) => {
     const window = Math.floor(now() / period);
     const result = db.prepare("INSERT INTO limits VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count").get(hash(`${key}:${window}`), (window + 1) * period);
     if (result.count > count) fail(429, "Too many attempts. Please try again later.");
   };
-  const certificate = (licence) => page("Enterprise licence certificate", `<p>Issued by Sanjay Bhat to <strong>${escape(licence.organisation)}</strong>.</p><dl><dt>Licence ID</dt><dd>${escape(licence.id)}</dd><dt>Organisation domain</dt><dd>${escape(licence.domain)}</dd><dt>Issued</dt><dd>${new Date(licence.issued).toISOString()}</dd><dt>BotHearth version</dt><dd>${escape(licence.version)}</dd><dt>Terms version</dt><dd>${escape(licence.terms_version)}</dd><dt>Allowance</dt><dd>One running installation for internal business use. Perpetual; no renewal fee.</dd></dl>${licence.terms_html}`);
+  const certificate = (licence) => page("Enterprise licence certificate", `<p>Issued by BotHearth to <strong>${escape(licence.organisation)}</strong>.</p><dl><dt>Licence ID</dt><dd>${escape(licence.id)}</dd><dt>Organisation domain</dt><dd>${escape(licence.domain)}</dd><dt>Issued</dt><dd>${new Date(licence.issued).toISOString()}</dd><dt>BotHearth version</dt><dd>${escape(licence.version)}</dd><dt>Terms version</dt><dd>${escape(licence.terms_version)}</dd><dt>Allowance</dt><dd>One running installation for internal business use. Perpetual; no renewal fee.</dd></dl>${licence.terms_html}`);
   const server = createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -104,7 +104,7 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
         db.prepare("INSERT OR REPLACE INTO challenges VALUES (?, ?, ?, ?, ?, 0)").run(hash(id), email, domain, hash(`${id}:${code}`), timestamp + 600000);
         try {
           await sendMail({ from, to: [email], subject: "Your BotHearth sign-in code", text: `Your BotHearth code is ${code}. It expires in 10 minutes and works once. Enter it only at ${origin}/verify in the browser where you requested it. Never share it with anyone, including support. If you did not request it, ignore this email.` }, `signin-${randomUUID()}`);
-        } catch { db.prepare("DELETE FROM challenges WHERE id=? AND code=?").run(hash(id), hash(`${id}:${code}`)); fail(503, "Email could not be sent. Please try again later or contact Sanjay."); }
+        } catch { db.prepare("DELETE FROM challenges WHERE id=? AND code=?").run(hash(id), hash(`${id}:${code}`)); fail(503, "Email could not be sent. Please try again later or contact us."); }
         redirect("/verify"); return;
       }
       if (path === "/verify") {
@@ -158,7 +158,7 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
         db.prepare("INSERT OR IGNORE INTO enquiries VALUES (?, ?, ?, ?, ?, ?, NULL)").run(enquiryId, session.email, session.domain, seats, message, timestamp);
         const enquiry = db.prepare("SELECT * FROM enquiries WHERE id=?").get(enquiryId);
         if (!enquiry.delivered) {
-          if (timestamp - enquiry.created >= 23 * 3600000) fail(409, "This saved enquiry needs manual follow-up. Please email Sanjay and include your reference.");
+          if (timestamp - enquiry.created >= 23 * 3600000) fail(409, "This saved enquiry needs manual follow-up. Please use the contact form and include your reference.");
           try {
             await sendMail({ from, to: [contact], reply_to: enquiry.email, subject: `BotHearth enterprise enquiry — ${enquiry.domain}`, text: `Reference: ${enquiry.id}\nVerified work email: ${enquiry.email}\nDomain: ${enquiry.domain}\nAdditional licences: ${enquiry.seats}\n\n${enquiry.message}` }, `enquiry-${enquiry.id}`);
             db.prepare("UPDATE enquiries SET delivered=? WHERE id=?").run(now(), enquiryId);
@@ -171,18 +171,18 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
       } else if (req.method !== "GET" || path !== "/") fail(404, "Page not found.");
       enquiryId = randomUUID();
       const sent = new URL(req.url, origin).searchParams.get("sent");
-      if (sent && db.prepare("SELECT id FROM enquiries WHERE id=? AND email=? AND delivered IS NOT NULL").get(sent, session.email)) notice = '<div class="enterprise-notice" role="status">Your enquiry has been accepted by our email service for delivery to Sanjay. He can reply directly to your verified work email.</div>';
+      if (sent && db.prepare("SELECT id FROM enquiries WHERE id=? AND email=? AND delivered IS NOT NULL").get(sent, session.email)) notice = '<div class="enterprise-notice" role="status">Your enquiry has been accepted by our email service for delivery to our inbox. We can reply directly to your verified work email.</div>';
       const pendingEnquiries = db.prepare("SELECT * FROM enquiries WHERE email=? AND delivered IS NULL ORDER BY created DESC LIMIT 10").all(session.email);
-      const retries = pendingEnquiries.map((enquiry) => `<p>Saved enquiry ${escape(enquiry.id)}: ${enquiry.seats} additional licences.</p>${timestamp - enquiry.created < 23 * 3600000 ? form(id, "/contact", `<input type="hidden" name="request_id" value="${escape(enquiry.id)}"><input type="hidden" name="seats" value="${enquiry.seats}"><input type="hidden" name="message" value="${escape(enquiry.message)}">`, "Retry saved enquiry email") : `<p>Please email Sanjay with this reference for manual follow-up.</p>`}`).join("");
+      const retries = pendingEnquiries.map((enquiry) => `<p>Saved enquiry ${escape(enquiry.id)}: ${enquiry.seats} additional licences.</p>${timestamp - enquiry.created < 23 * 3600000 ? form(id, "/contact", `<input type="hidden" name="request_id" value="${escape(enquiry.id)}"><input type="hidden" name="seats" value="${enquiry.seats}"><input type="hidden" name="message" value="${escape(enquiry.message)}">`, "Retry saved enquiry email") : `<p>Please use the contact form with this reference for manual follow-up.</p>`}`).join("");
       const licence = getLicence();
       const licenceBody = licence ? `<section><h2>Your free perpetual licence</h2><p><strong>${escape(licence.organisation)}</strong> · ${escape(licence.domain)}</p><p>Licence ${escape(licence.id)} covers one running installation of BotHearth ${escape(licence.version)} for internal business use. No expiry or renewal fee. Your colleagues on this domain share this licence.</p><p><a class="button" href="/certificate">Download licence certificate</a> <a href="https://bothearth.com/quickstart/">Install BotHearth</a></p></section>` : `<section><h2>Claim your free perpetual licence</h2><p>One running installation for <strong>${escape(session.domain)}</strong>. Internal business use, with no expiry or renewal fee.</p><details><summary>Read the licence terms</summary>${terms}</details>${form(id, "/claim", `<label>Legal organisation name<input name="organisation" maxlength="160" autocomplete="organization" required></label><label class="consent"><input type="checkbox" name="accept" value="${termsVersion}" required><span>I am authorised to represent this organisation, it has not claimed another free licence, and I accept the licence terms above (${termsVersion}).</span></label>`, "Claim free licence")}</section>`;
-      res.end(page("Enterprise account", `<p>Signed in as ${escape(session.email)}.</p>${licenceBody}<section id="contact"><h2>Additional licences: US$99 each</h2><p>One-time payment per additional installation of the issued version, plus applicable taxes. For business customers outside India. No voluntary refunds. <a href="https://bothearth.com/terms/">Commercial terms</a> · <a href="https://bothearth.com/refunds/">Refund policy</a>. Payment collection is not open yet.</p><p>Your enquiry goes to Sanjay Bhat, with your verified work email as the reply address.</p>${notice}${retries}${form(id, "/contact", `<input type="hidden" name="request_id" value="${enquiryId}"><label>Additional licences<input name="seats" type="number" min="1" max="10000" step="1" value="1" required></label><label>What is your billing country, and how will your organisation use BotHearth?<textarea name="message" rows="5" maxlength="4000" required></textarea></label><p>Do not include passwords, API keys, or confidential task data.</p>`, "Send enquiry")}</section>${form(id, "/sign-out", "", "Sign out")}`));
+      res.end(page("Enterprise account", `<p>Signed in as ${escape(session.email)}.</p>${licenceBody}<section id="contact"><h2>Additional licences: US$99 each</h2><p>One-time payment per additional installation of the issued version, plus applicable taxes. For business customers outside India. No voluntary refunds. <a href="https://bothearth.com/terms/">Commercial terms</a> · <a href="https://bothearth.com/refunds/">Refund policy</a>. Payment collection is not open yet.</p><p>Your enquiry goes to our private inbox, with your verified work email as the reply address.</p>${notice}${retries}${form(id, "/contact", `<input type="hidden" name="request_id" value="${enquiryId}"><label>Additional licences<input name="seats" type="number" min="1" max="10000" step="1" value="1" required></label><label>What is your billing country, and how will your organisation use BotHearth?<textarea name="message" rows="5" maxlength="4000" required></textarea></label><p>Do not include passwords, API keys, or confidential task data.</p>`, "Send enquiry")}</section>${form(id, "/sign-out", "", "Sign out")}`));
     } catch (error) {
       res.statusCode = error.status || 500;
       if (error.status === 429) res.setHeader("retry-after", "60");
       // Do not log email addresses, codes, cookies, or provider response bodies.
       if (!error.status) console.error("Enterprise request failed");
-      res.end(page("Please try again", `<p role="alert">${escape(error.status ? error.message : "Something went wrong. Please try again or contact Sanjay.")}</p><p><a href="/">Return to your account</a> · <a href="/verify">Return to the code form</a></p>`));
+      res.end(page("Please try again", `<p role="alert">${escape(error.status ? error.message : "Something went wrong. Please try again or contact us.")}</p><p><a href="/">Return to your account</a> · <a href="/verify">Return to the code form</a></p>`));
     }
   });
   server.requestTimeout = 15000;
@@ -193,7 +193,7 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const env = process.env;
-  if (!env.ENTERPRISE_ORIGIN || !env.ENTERPRISE_SECRET || !env.RESEND_API_KEY || !env.ENTERPRISE_FROM || !env.ENTERPRISE_DB) throw new Error("Set ENTERPRISE_ORIGIN, ENTERPRISE_SECRET, RESEND_API_KEY, ENTERPRISE_FROM, and ENTERPRISE_DB. See enterprise/README.md.");
+  if (!env.ENTERPRISE_ORIGIN || !env.ENTERPRISE_SECRET || !env.RESEND_API_KEY || !env.ENTERPRISE_FROM || !env.ENTERPRISE_DB || !env.ENTERPRISE_CONTACT) throw new Error("Set ENTERPRISE_ORIGIN, ENTERPRISE_SECRET, RESEND_API_KEY, ENTERPRISE_FROM, ENTERPRISE_DB, and ENTERPRISE_CONTACT. See enterprise/README.md.");
   process.umask(0o077);
   mkdirSync(dirname(resolve(env.ENTERPRISE_DB)), { recursive: true, mode: 0o700 });
   const server = createEnterpriseServer({ database: env.ENTERPRISE_DB, origin: env.ENTERPRISE_ORIGIN, secret: env.ENTERPRISE_SECRET, from: env.ENTERPRISE_FROM, contact: env.ENTERPRISE_CONTACT,

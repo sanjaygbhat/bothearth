@@ -23,7 +23,7 @@ test("static site builds and checks both the custom domain and a Pages project p
     assert.match(readFileSync(enterprisePage, "utf8"), /Online claims are not open yet/);
     run("scripts/build-site.mjs", config.url, "https://enterprise.bothearth.com");
     run("scripts/check-site.mjs", config.url, "https://enterprise.bothearth.com");
-    assert.match(readFileSync(enterprisePage, "utf8"), /href="https:\/\/enterprise.bothearth.com\/">Sign in with work email/);
+    assert.match(readFileSync(enterprisePage, "utf8"), /href="https:\/\/enterprise.bothearth.com\/">Claim your free licence/);
     for (const enterprise of ["http://enterprise.bothearth.com", "https://user:password@example.com", "https://example.com/path", "https://example.com/?token=secret"]) {
       const invalidEnterprise = spawnSync(process.execPath, ["scripts/build-site.mjs"], {
         cwd: root, encoding: "utf8", timeout: 30_000,

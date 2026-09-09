@@ -65,7 +65,14 @@ for (const page of config.pages) {
     assert(!app.aggregateRating && !app.review && !app.offers, "Do not invent ratings or an unrestricted free offer");
   }
   assert.equal((html.match(/<script\b/g) || []).length, 1, `Runtime script in ${relative}`);
-  assert(!/<(?:form|iframe)\b/i.test(html), `Unexpected form or frame in ${relative}`);
+  assert(!/<iframe\b/i.test(html), `Unexpected frame in ${relative}`);
+  assert(!/\bSanjay\b|\bSGBhat\b|mailto:|sanjaygbhat@gmail\.com/i.test(html), `Private contact identity in ${relative}`);
+  if (page.slug === "contact") {
+    assert.equal((html.match(/<form\b/g) || []).length, 1);
+    assert(html.includes('method="post"') && html.includes('name="email"') && html.includes('name="message"'));
+    const action = html.match(/<form[^>]*action="([^"]+)"/)?.[1];
+    assert(action ? action.startsWith("https://") && !decodeURIComponent(action).includes("@") : html.includes('<fieldset disabled>'), "Contact form must have a private endpoint or explicitly disable sending");
+  } else assert(!/<form\b/i.test(html), `Unexpected form in ${relative}`);
   assert(!/(?:src|href)="https?:\/\//.test(html.replace(/<a\b[^>]*>/g, "").replace(/<link rel="canonical"[^>]*>/g, "")), `External runtime asset in ${relative}`);
   for (const match of html.matchAll(/\b(?:href|src)="([^"]+)"/g)) checkReference(match[1], current);
   checkReference(html.match(/<meta property="og:image" content="([^"]+)"/)?.[1] || "", current);

@@ -1,0 +1,18 @@
+<header class="page-header"><p class="eyebrow">Let’s talk</p><h1>Contact <em>BotHearth.</em></h1><p class="lead">Claim the limited-time enterprise offer, request more licences, or ask about billing and support.</p></header>
+<article class="prose">
+<details class="contact-box" open><summary class="button">Contact us</summary>
+{{CONTACTNOTICE}}
+<form class="enterprise-form" method="post" {{CONTACTACTION}}>
+<fieldset {{CONTACTSTATE}}>
+<label>Your name<input name="name" autocomplete="name" maxlength="160" required></label>
+<label>Email for our reply<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+<label>Organisation<input name="organisation" autocomplete="organization" maxlength="160"></label>
+<label>Additional licences (if needed)<input name="seats" type="number" min="0" max="10000" value="0"></label>
+<label>How can we help?<textarea name="message" rows="6" maxlength="4000" placeholder="Tell us about your use case. For an order, include your billing country and licence quantity." required></textarea></label>
+<div hidden aria-hidden="true"><label>Leave this empty<input name="website" tabindex="-1" autocomplete="off"></label></div>
+<p>We use your details to respond to this enquiry. Do not include passwords, payment card details, or confidential task data. <a href="{{BASE}}security/#website">Privacy</a>.</p>
+<button class="button" type="submit">Send enquiry</button>
+</fieldset>
+</form></details>
+<p>Additional installation licences cost <strong>US$99 each, paid once</strong>, plus applicable taxes. <a href="{{BASE}}terms/">Commercial terms</a> · <a href="{{BASE}}refunds/">Refund policy</a>.</p>
+</article>

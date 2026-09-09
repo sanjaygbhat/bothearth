@@ -16,7 +16,7 @@ test("enterprise verification, domain-wide perpetual grants, and durable contact
   let time = Date.now();
   let failMail = false;
   const mails: Array<{ payload: any; key: string }> = [];
-  const options = { database: join(dir, "enterprise.sqlite"), origin: "http://127.0.0.1", secret: "test-only-secret-with-at-least-32-characters", from: "BotHearth <licences@bothearth.com>", now: () => time,
+  const options = { database: join(dir, "enterprise.sqlite"), origin: "http://127.0.0.1", secret: "test-only-secret-with-at-least-32-characters", contact: "private-inbox@example.org", from: "BotHearth <licences@bothearth.com>", now: () => time,
     sendMail: async (payload: any, key: string) => { mails.push({ payload, key }); if (failMail) throw new Error("Test mail failure"); } };
   let server = createEnterpriseServer(options);
   let base = "";
@@ -75,7 +75,7 @@ test("enterprise verification, domain-wide perpetual grants, and durable contact
     failMail = false;
     assert.equal((await a("/contact", enquiry)).status, 303);
     assert.equal(mails.at(-1)!.key, failedKey, "delivery retries retain the idempotency key");
-    assert.deepEqual(mails.at(-1)!.payload.to, ["sanjaygbhat@gmail.com"]);
+    assert.deepEqual(mails.at(-1)!.payload.to, ["private-inbox@example.org"]);
     assert.equal(mails.at(-1)!.payload.reply_to, "alice@acme.co.uk");
     const count = mails.length;
     assert.equal((await a("/contact", enquiry)).status, 303);

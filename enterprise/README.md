@@ -2,7 +2,7 @@
 
 The website remains static on GitHub Pages. `server.mjs` is a separate Node.js 22.18+ HTTP service with a persistent SQLite database and Resend email delivery. The local BotHearth daemon is never exposed to the public internet. No browser JavaScript, authentication framework, or payment SDK is needed.
 
-The implemented flow is work email → one-time code → acceptance of the offer terms → a downloadable licence certificate. Later sign-ins on the same registrable domain see the same certificate. Additional-licence enquiries are stored and emailed to `sanjaygbhat@gmail.com`, with the verified work email as `reply_to`.
+The implemented flow is work email → one-time code → acceptance of the offer terms → a downloadable licence certificate. Later sign-ins on the same registrable domain see the same certificate. Additional-licence enquiries are stored and emailed to the private `ENTERPRISE_CONTACT` recipient, with the verified work email as `reply_to`.
 
 ## Activate
 
@@ -16,7 +16,7 @@ The implemented flow is work email → one-time code → acceptance of the offer
    | `ENTERPRISE_SECRET` | A random secret of at least 32 characters; keep it stable across restarts |
    | `RESEND_API_KEY` | Sending-only Resend API key |
    | `ENTERPRISE_FROM` | Verified sender address |
-   | `ENTERPRISE_CONTACT` | Optional; defaults to `sanjaygbhat@gmail.com` |
+   | `ENTERPRISE_CONTACT` | Required private recipient address; never rendered into public pages |
    | `ENTERPRISE_DB` | Absolute path on the persistent disk, e.g. `/var/lib/bothearth-enterprise/licences.sqlite` |
    | `PORT` | Optional; defaults to `4180` |
    | `ENTERPRISE_BIND` | Optional; defaults to `127.0.0.1`; use `0.0.0.0` only when required by the host's private ingress |
@@ -38,3 +38,7 @@ Enquiries are persisted before sending. Successful provider acceptance is record
 Back up SQLite using its backup API or stop the service before copying the database and any WAL sidecar files. Use encrypted backups, restrict filesystem access, and test restoration. Losing or reinitialising the database would lose perpetual grant records and permit duplicate claims. A secret rotation signs users out; it does not invalidate their licence records. Review pending enquiries (`delivered IS NULL`) and Resend bounces operationally.
 
 The SQL schema is created on startup. No paid checkout or payment-created entitlement exists yet; quotes and confirmed payment records govern additional licences separately. Additional installation licences are US$99 once, plus applicable tax, for businesses outside India. The public commercial and refund policies govern paid orders. Payment-provider approval is still required.
+
+## Public contact form
+
+`contact.mjs` is a separate, stateless Node service for the public contact form. It requires `ENTERPRISE_CONTACT`, `ENTERPRISE_FROM`, and `RESEND_API_KEY` only. Run one instance (including Cloud Run with maximum instances 1), listening on `PORT` or 8080. `/health` checks availability; `/enquiry` accepts native form POSTs only from `https://bothearth.com`. It validates fields, applies a honeypot and conservative rate limits, forwards enquiries with an unverified reply-to address, and never renders the recipient. No customer database or local agent is exposed. Set the website repository variable `SITE_CONTACT_URL` to the deployed HTTPS `/enquiry` URL after verifying real delivery. Provider failures return an explicit error, never a success receipt.
