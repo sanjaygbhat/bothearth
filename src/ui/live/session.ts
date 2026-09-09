@@ -367,18 +367,10 @@ export class LiveView {
     }
   }
 
-  /**
-   * Keys this page keeps for itself while a person is driving, so the two
-   * documented ways out of a takeover cannot be swallowed by the remote page.
-   *
-   * `Escape` returns control (the hint under the live view says so) and the
-   * ⌘/Ctrl combinations are the app's own shortcuts — ⌘↩ gives control back,
-   * ⌘. stops the task, ⌘⇧T toggles. Everything else, Tab and the arrows
-   * included, belongs to the website the person is driving.
-   */
+  /** Reserve only BotHearth shortcuts; browser/desktop shortcuts go to the remote computer. */
   static keepsLocally(ev: KeyboardEvent): boolean {
-    if (ev.key === "Escape") return true;
-    return Boolean(ev.metaKey) || Boolean(ev.ctrlKey);
+    return Boolean(ev.metaKey || ev.ctrlKey) &&
+      (ev.key === "Enter" || ev.key === "." || (Boolean(ev.shiftKey) && ev.key.toLowerCase() === "t"));
   }
 
   private onKey(ev: KeyboardEvent, kind: "keyDown" | "keyUp"): void {
@@ -391,7 +383,7 @@ export class LiveView {
       return;
     }
     // Let the app's own keys through to the document handler in task.ts.
-    if (LiveView.keepsLocally(ev)) return;
+    if (LiveView.keepsLocally(ev) || (ev.key === "Escape" && document.fullscreenElement)) return;
     // Tab in particular: without this it walks the app's own focus ring out of
     // the live surface and the next character lands in a button.
     ev.preventDefault();

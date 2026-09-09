@@ -148,10 +148,10 @@ it("canvas blur and disconnect reset held operator keys", async () => {
 describe("keys while driving", () => {
   it("keeps Esc and the command keys for the app, and forwards everything else", () => {
     const key = (init: Partial<KeyboardEvent>) => init as unknown as KeyboardEvent;
-    assert.equal(LiveView.keepsLocally(key({ key: "Escape" })), true, "Esc returns control");
+    assert.equal(LiveView.keepsLocally(key({ key: "Escape" })), false, "Esc reaches the remote computer");
     assert.equal(LiveView.keepsLocally(key({ key: "Enter", metaKey: true })), true, "⌘↩ is ours");
     assert.equal(LiveView.keepsLocally(key({ key: ".", metaKey: true })), true, "⌘. is ours");
-    assert.equal(LiveView.keepsLocally(key({ key: "T", ctrlKey: true })), true);
+    assert.equal(LiveView.keepsLocally(key({ key: "T", ctrlKey: true })), false);
     for (const k of ["a", "Tab", "Enter", "Backspace", "ArrowLeft", "ArrowDown", "Shift"]) {
       assert.equal(LiveView.keepsLocally(key({ key: k })), false, `${k} reaches the website`);
     }
@@ -161,7 +161,7 @@ describe("keys while driving", () => {
     const UI = join(dirname(fileURLToPath(import.meta.url)), "../../../src/ui");
     const body = readFileSync(join(UI, "live/session.ts"), "utf8");
     const onKey = body.slice(body.indexOf("private onKey("));
-    assert.match(onKey, /if \(LiveView\.keepsLocally\(ev\)\) return;/);
+    assert.match(onKey, /if \(LiveView\.keepsLocally\(ev\)/);
     // The preventDefault comes AFTER the local-keys check and BEFORE the send,
     // so Tab, the arrows and Backspace never also act on the app's own DOM.
     assert.ok(

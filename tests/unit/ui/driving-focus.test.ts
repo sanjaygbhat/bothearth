@@ -1,4 +1,4 @@
-/** The task view hands the keyboard to the live screen, and Esc gives it back. */
+/** The task view hands the keyboard to the live screen without stealing desktop Escape. */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -15,18 +15,14 @@ describe("taking control", () => {
     assert.match(surface.slice(0, 900), /this\.panel\.focusScreen\(\)/);
     // The panel must already be in the driving phase by then.
     assert.ok(
-      task.indexOf("this.renderPanelState(driving, needsYou, observing);") <
+      task.indexOf("this.renderPanelState(driving, needsControl, observing);") <
         task.indexOf("this.renderSurface(driving, observing);"),
       "the phase is set before the surface asks for focus",
     );
   });
 
-  it("makes Esc return control, not just leave full screen", () => {
+  it("keeps Escape available to the computer outside fullscreen", () => {
     const task = source("task.ts");
-    assert.match(
-      task,
-      /event\.key === "Escape" && this\.drivingNow\(\)/,
-      "the hint's promise is wired to something",
-    );
+    assert.doesNotMatch(task, /event\.key === "Escape" && this\.drivingNow\(\)/);
   });
 });

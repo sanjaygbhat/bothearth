@@ -129,6 +129,8 @@ export interface AgentLoopOptions {
   emit?: (event: AgentLoopEvent) => void | Promise<void>;
   isCancelled?: () => boolean;
   signal?: AbortSignal;
+  hasMessages?: () => boolean;
+  isWaiting?: () => boolean;
   waitForResume?: (reason: "approval" | "takeover", result?: ToolResult) => Promise<boolean>;
   now?: () => number;
   stopAndAsk?: (reason: AgentStopReason, detail: string) => void | Promise<void>;
@@ -564,6 +566,24 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         return finish("paused", "stall", `no progress for ${Math.round(stallMs / 1000)} seconds`);
       }
 
+      const incoming = opts.store?.takeMessages(opts.taskId) ?? [];
+      for (const content of incoming) messages.push({ role: "user", content });
+      if (incoming.length && opts.isWaiting?.()) {
+        const reply = await opts.adapter.complete({ signal: opts.signal, model: opts.model,
+          system: "Reply to the operator about the current task. Human control or approval remains pending. You cannot observe or operate the computer until it is returned. Do not claim to have taken actions.",
+          messages, tools: [] });
+        if (opts.isCancelled?.()) return finish("cancelled", "cancelled", "task cancelled");
+        usage.tokens_in += reply.usage.tokens_in;
+        usage.tokens_out += reply.usage.tokens_out;
+        if (reply.usage.usd_est !== undefined) usage.usd_est = (usage.usd_est ?? 0) + reply.usage.usd_est;
+        else spendKnown = false;
+        opts.store?.insertStep(opts.taskId, step, "usage", usage);
+        append(opts, messages, step, "assistant", { role: "assistant", content: reply.content ?? "" });
+        await emit(opts, "task.step", { status: "running", message: true });
+        step += 1;
+        lastProgress = now();
+        continue;
+      }
       const observedOrStall = await beforeStall(
         opts.driver.observe(opts.computerId),
         stallMs - (now() - lastProgress),
@@ -773,7 +793,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
             return finish("paused", "approval", result.error.message);
           }
           lastProgress = now();
-          result = await opts.dispatchTool!(call.name, call.arguments, { origin, signals });
+          result = opts.hasMessages?.()
+            ? { ok: false, error: { code: "E_STALE_REF", message: "Action not executed: new operator message is waiting." } }
+            : await opts.dispatchTool!(call.name, call.arguments, { origin, signals });
         }
         notifyDriver(opts.driver, opts.computerId, {
           name: call.name,

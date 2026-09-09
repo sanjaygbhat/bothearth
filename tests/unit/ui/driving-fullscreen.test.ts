@@ -115,11 +115,13 @@ async function mount(options: { fullscreen: "grants" | "denies" | "absent" }) {
   };
 }
 
-describe("Take control goes full screen and says so", () => {
+describe("Full screen is optional during takeover", () => {
   it("asks the browser for full screen and confirms control in the live view", async () => {
     const t = await mount({ fullscreen: "grants" });
     try {
       t.take().click();
+      await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
       await settle(8);
 
       assert.deepEqual(t.posts, [
@@ -143,7 +145,7 @@ describe("Take control goes full screen and says so", () => {
       assert.equal(side.classList.contains("driving-full"), true);
       const bar = t.root.querySelector(".drive-bar")!;
       assert.equal(bar.hidden, false);
-      assert.match(bar.querySelector(".lease")!.textContent, /Control returns to the bot in 9:4/);
+      assert.match(bar.querySelector(".lease")!.textContent, /Control pauses in 9:4/);
       assert.deepEqual(
         bar.querySelectorAll("button").map((node) => node.textContent),
         ["Give control back"],
@@ -157,6 +159,8 @@ describe("Take control goes full screen and says so", () => {
     const t = await mount({ fullscreen: "denies" });
     try {
       t.take().click();
+      await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
       await settle(8);
       assert.deepEqual(t.asked, ["enter"]);
       assert.equal(t.nativeFull(), false, "a denied request must not be reported as full screen");
@@ -172,6 +176,8 @@ describe("Take control goes full screen and says so", () => {
     const t = await mount({ fullscreen: "absent" });
     try {
       t.take().click();
+      await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
       await settle(8);
       assert.deepEqual(t.asked, []);
       assert.equal(t.grid().getAttribute("data-full"), "true");
@@ -190,7 +196,7 @@ describe("Take control goes full screen and says so", () => {
         shiftKey: true,
       });
       await settle(8);
-      assert.deepEqual(t.asked, ["enter"]);
+      assert.deepEqual(t.asked, []);
       assert.equal(t.notice().textContent, CONTROL_TAKEN);
     } finally {
       t.restore();
@@ -247,6 +253,8 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
+      await settle(8);
       assert.equal(t.nativeFull(), true);
 
       (document as unknown as { fire(t: string, e: Json): void }).fire("keydown", {
@@ -270,6 +278,8 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
+      await settle(8);
       t.root.querySelector(".drive-bar button")!.click();
       await settle(8);
 
@@ -289,6 +299,8 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
+      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
+      await settle(8);
       t.setRelease("human");
       t.root.querySelector(".drive-bar button")!.click();
       await settle(8);
@@ -300,4 +312,17 @@ describe("the two ways out of driving full screen", () => {
       t.restore();
     }
   });
+});
+
+
+it("taking control preserves the conversation until full screen is explicitly requested", async () => {
+  const t = await mount({ fullscreen: "grants" });
+  try {
+    t.take().click();
+    await settle(8);
+    assert.deepEqual(t.asked, []);
+    assert.equal(t.nativeFull(), false);
+    assert.notEqual(t.grid().getAttribute("data-full"), "true");
+    assert.ok(t.root.querySelector(".task-composer"));
+  } finally { t.restore(); }
 });

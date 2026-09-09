@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { ConnectorMcpClient } from "../../../src/mcp/client.ts";
+import { createSandboxRuntime } from "../../../src/sandbox/lifecycle.ts";
 import { decodeLiveFrame } from "../../../src/protocol/live.ts";
 import { withDockerLock } from "../lock.ts";
 import { until } from "../../helpers/until.ts";
@@ -16,7 +17,7 @@ test("real browser-only UI takeover blocks model tools and resumes after release
   await withDockerLock(async () => {
     const root = mkdtempSync(join(tmpdir(), "modelbot-takeover-"));
     const token = randomUUID();
-    const daemon = await startDaemon({ port: 0, mcpToken: token, bootstrapToken: token, sqlitePath: join(root, "state.sqlite"), workspaceRoot: join(root, "computers"), idlePauseMin: 0, declaredOrigins: { readable: ["http://127.0.0.1:8080"], writable: ["http://127.0.0.1:8080"] } });
+    const daemon = await startDaemon({ port: 0, mcpToken: token, bootstrapToken: token, sqlitePath: join(root, "state.sqlite"), workspaceRoot: join(root, "computers"), sandbox: createSandboxRuntime({ workspaceRoot: join(root, "computers"), browserImage: process.env.MODELBOT_TEST_BROWSER_IMAGE }), idlePauseMin: 0, declaredOrigins: { readable: ["http://127.0.0.1:8080"], writable: ["http://127.0.0.1:8080"] } });
     const bootstrap = await fetch(`${daemon.baseUrl}/api/v1/session/bootstrap`, { method: "POST", headers: { Origin: daemon.baseUrl, "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
     assert.equal(bootstrap.status, 200);
     const { csrf } = await bootstrap.json() as { csrf: string };
@@ -36,7 +37,7 @@ test("real browser-only UI takeover blocks model tools and resumes after release
       created = true;
       const canary = `modelbot-canary-${randomUUID()}`;
       const typedEmail = "owner@example.test ._-@é🙂@r";
-      const html = `<form onsubmit="event.preventDefault();if(this.email.value===${JSON.stringify(typedEmail).replaceAll('"', '&quot;')}&&this.secret.value===${JSON.stringify(canary).replaceAll('"', '&quot;')}){document.body.textContent='Signed in';fetch('/passed')}else{fetch('/failed',{method:'POST',body:this.email.value})};"><label>Email<input name="email" autofocus></label><label>Password<input name="secret" type="password"></label><button>Login</button></form>`;
+      const html = `<form style="position:fixed;left:100px;top:200px" onsubmit="event.preventDefault();if(this.email.value===${JSON.stringify(typedEmail).replaceAll('"', '&quot;')}&&this.secret.value===${JSON.stringify(canary).replaceAll('"', '&quot;')}){document.body.textContent='Signed in';fetch('/passed')}else{fetch('/failed',{method:'POST',body:this.email.value})};"><label>Email<input name="email" autofocus></label><label>Password<input name="secret" type="password"></label><button>Login</button></form>`;
       const server = `let passed=false,failed='';require('node:http').createServer((req,res)=>{if(req.url==='/passed'){passed=true;res.end();return}if(req.url==='/failed'){req.on('data',d=>failed+=d);req.on('end',()=>res.end());return}if(req.url==='/status'){res.end(JSON.stringify({passed,failed}));return}if(req.url==='/redirect'){res.writeHead(302,{location:'http://localhost:8080/blocked'});res.end();return;}res.setHeader('Content-Type','text/html; charset=utf-8');res.end(${JSON.stringify(html)})}).listen(8080,'127.0.0.1')`;
       const fixture = spawnSync("docker", ["exec", "-d", `modelbot-${name}-browser`, "node", "-e", server], { encoding: "utf8" });
       assert.equal(fixture.status, 0, fixture.stderr);
@@ -76,7 +77,7 @@ test("real browser-only UI takeover blocks model tools and resumes after release
       assert.equal(reused.status, 409, "old task IDs and their approvals cannot be recycled");
       await post("/api/v1/harness-bindings", { ...bindingInput, task_id: `task-${randomUUID()}` });
       assert.equal((await call("browser_navigate", { url: "http://127.0.0.1:8080", wait_until: "domcontentloaded" })).ok, true);
-      const frames: Array<{ mode: string; size: number }> = [];
+      const frames: Array<{ mode: string; size: number; target: string }> = [];
       let mode = "", epoch = 0;
       ws = new WebSocket(`${daemon.baseUrl.replace("http", "ws")}/api/v1/live/${name}`, { headers: { Origin: daemon.baseUrl, Cookie: headers.Cookie } });
       ws.binaryType = "arraybuffer";
@@ -87,7 +88,8 @@ test("real browser-only UI takeover blocks model tools and resumes after release
         } else {
           const frame = decodeLiveFrame(new Uint8Array(event.data));
           assert.equal(frame.payload[0], 0xff, "JPEG pixels, not an emitted placeholder");
-          frames.push({ mode: frame.header.mode, size: frame.payload.length });
+          if (process.env.MODELBOT_TEST_FRAME && frame.header.mode === "human") writeFileSync(process.env.MODELBOT_TEST_FRAME, frame.payload);
+          frames.push({ mode: frame.header.mode, size: frame.payload.length, target: frame.header.target });
         }
       });
       await until(() => frames.some((frame) => frame.size > 100 && frame.mode === "agent"), "live-view condition timed out", 15_000);
@@ -99,6 +101,10 @@ test("real browser-only UI takeover blocks model tools and resumes after release
         for (const kind of ["keyDown", "keyUp"]) ws!.send(JSON.stringify({ v: 1, t: "key", epoch, key, code, mods, kind }));
       };
       const type = (text: string) => { for (const char of text) key(char, char === "@" || char === "_" ? 8 : 0); };
+      if (process.env.MODELBOT_TEST_BROWSER_IMAGE) {
+        await until(() => frames.some(frame => frame.mode === "human" && frame.target === "desktop"), "no full desktop frame", 15000);
+        for (const kind of ["down", "up"]) ws!.send(JSON.stringify({ v: 1, t: "pointer", epoch, kind, x: 200, y: 350, button: 0 }));
+      }
       type("junk"); key("a", 2, "KeyA"); key("Backspace");
       type("replace me"); key("a", 4, "KeyA"); key("Backspace");
       type("owner@example.test ._-@é🙂");
@@ -113,12 +119,23 @@ test("real browser-only UI takeover blocks model tools and resumes after release
       ws.send(JSON.stringify({ v: 1, t: "key", epoch, kind: "keyDown", code: "Enter", key: "Enter" }));
       ws.send(JSON.stringify({ v: 1, t: "key", epoch, kind: "keyUp", code: "Enter", key: "Enter" }));
       const verifyTyping = await promisify(execFile)("docker", ["exec", `modelbot-${name}-browser`, "node", "-e",
-        "(async()=>{for(let i=0;i<100;i++){const s=await(await fetch('http://127.0.0.1:8080/status')).json();if(s.passed){console.log('passed');return}if(s.failed){console.error('Wrong synthetic input:',s.failed);process.exit(1)}await new Promise(r=>setTimeout(r,50))}process.exit(2)})()"], { encoding: "utf8" });
+        "(async()=>{for(let i=0;i<600;i++){const s=await(await fetch('http://127.0.0.1:8080/status')).json();if(s.passed){console.log('passed');return}if(s.failed){console.error('Wrong synthetic input:',s.failed);process.exit(1)}await new Promise(r=>setTimeout(r,50))}process.exit(2)})()"], { encoding: "utf8" });
       assert.equal(verifyTyping.stdout.trim(), "passed", "actual key events produced the complete expected input");
       await until(() => frames.some((frame) => frame.mode === "human"), "live-view condition timed out", 15_000);
       for (const tool of ["browser_snapshot", "browser_screenshot"]) {
         const blocked = await call(tool, tool === "browser_snapshot" ? { depth: null, interactive_only: false, max_chars: 1000, scope: null } : { full_page: false });
         assert.equal(blocked.error.code, "E_TAKEOVER_BUSY", tool);
+      }
+      if (process.env.MODELBOT_TEST_BROWSER_IMAGE) {
+        await until(() => frames.some(frame => frame.mode === "human" && frame.target === "desktop"), "no full desktop frame", 15000);
+        key("t", 3, "KeyT");
+        await new Promise(resolve => setTimeout(resolve, 700));
+        const windows = await promisify(execFile)("docker", ["top", `modelbot-${name}-browser`, "-eo", "pid,comm"], { encoding: "utf8" });
+        assert.match(windows.stdout, /xterm/, "desktop shortcut opened an actual terminal");
+        key("e", 3, "KeyE");
+        await new Promise(resolve => setTimeout(resolve, 700));
+        const files = await promisify(execFile)("docker", ["top", `modelbot-${name}-browser`, "-eo", "pid,comm"], { encoding: "utf8" });
+        assert.match(files.stdout, /pcmanfm/, "desktop shortcut opened the file manager");
       }
       assert.equal((await post(`/api/v1/takeover/${id}/release`)).takeover.state, "agent");
       await until(() => mode === "agent", "live-view condition timed out", 15_000);

@@ -21,10 +21,14 @@ export function mapClientToCssPx(
   canvasRect: RectLike,
   viewport: ViewportLike,
 ): { x: number; y: number } {
-  const sx = canvasRect.width > 0 ? viewport.w / canvasRect.width : 1;
-  const sy = canvasRect.height > 0 ? viewport.h / canvasRect.height : 1;
-  const x = (clientX - canvasRect.left) * sx;
-  const y = (clientY - canvasRect.top) * sy;
+  // Canvas uses object-fit: contain. Account for the visible image's margins,
+  // especially when switching between a browser page and the taller desktop.
+  const scale = canvasRect.width > 0 && canvasRect.height > 0
+    ? Math.min(canvasRect.width / viewport.w, canvasRect.height / viewport.h) : 1;
+  const left = canvasRect.left + (canvasRect.width - viewport.w * scale) / 2;
+  const top = canvasRect.top + (canvasRect.height - viewport.h * scale) / 2;
+  const x = (clientX - left) / scale;
+  const y = (clientY - top) / scale;
   return {
     x: clamp(x, 0, Math.max(0, viewport.w - 1e-6)),
     y: clamp(y, 0, Math.max(0, viewport.h - 1e-6)),

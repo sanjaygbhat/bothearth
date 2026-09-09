@@ -38,7 +38,7 @@ export function taskBudget(
 export function taskActivity(store: Store, taskId: string) {
   const rows = store.db.prepare(`
     SELECT kind, body_json, created_at, result_id FROM (
-      SELECT kind, body_json, created_at, NULL AS result_id FROM steps WHERE task_id = ? AND kind = 'assistant'
+      SELECT kind, body_json, created_at, NULL AS result_id FROM steps WHERE task_id = ? AND kind IN ('assistant', 'user')
       UNION ALL
       SELECT type AS kind, body_json, ts AS created_at, seq AS result_id FROM audit_refs WHERE task_id = ?
         AND type IN ('task.completed','task.failed','task.cancelled','task.resumed','task.step','tool.call','tool.result',
@@ -49,7 +49,7 @@ export function taskActivity(store: Store, taskId: string) {
   const steps = rows.slice(0, 100).reverse().map((row) => {
     const source = JSON.parse(row.body_json) as Record<string, unknown>;
     const body: Record<string, unknown> = {};
-    if (row.kind === "assistant") {
+    if (row.kind === "assistant" || row.kind === "user") {
       const content = (typeof source.content === "string" ? source.content : Array.isArray(source.content)
         ? source.content.filter((p) => p?.type === "text").map((p) => p.text).join("\n") : "");
       body.content = content.slice(0, 8000);

@@ -689,7 +689,7 @@ describe("task view — you’re driving", () => {
       const card = t.root.querySelector(".driving");
       assert.ok(card);
       assert.match(card.textContent, /You’re driving/);
-      assert.match(card.textContent, /Nothing you type now reaches the model/);
+      assert.match(card.textContent, /Messages you send below go to the bot/);
       assert.equal(t.root.querySelector(".view")!.classList.contains("human"), true);
       assert.equal(t.root.querySelector(".side-head .state")!.textContent, "You are driving");
       // No "Take control" while you already have it (audit P2-15).
@@ -718,7 +718,7 @@ describe("task view — you’re driving", () => {
     try {
       assert.match(
         t.root.querySelector(".driving")!.textContent,
-        /Control returns to the bot in 9:4\d unless you keep using it/,
+        /Control pauses in 9:4\d unless you keep using it/,
       );
     } finally {
       t.restore();

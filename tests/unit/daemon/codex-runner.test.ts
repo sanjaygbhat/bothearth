@@ -41,7 +41,15 @@ if(mode==='hold') {
  process.on('SIGTERM',()=>{emit({type:'item.completed',item:{type:'agent_message',text:'late after cancel'}});process.exit(0);});
  setInterval(()=>{},1000);
 } else {
- if(mode==='wait-existing'&&!argv.includes('resume')) {
+ if(mode==='chat'&&!argv.includes('resume')) {
+  report.chatReady=true;publish();await new Promise(r=>setTimeout(r,500));
+  const message=await client.callTool({name:'takeover_status',arguments:{}});
+  assert.equal(message.isError,true);assert.ok(message.content[0].text.includes('Just answer'));
+  emit({type:'item.completed',item:{type:'agent_message',text:'Here is my status. Waiting for your direction.'}});
+ } else if(mode==='chat') {
+  assert.ok(input.includes('Continue'));
+  assert.equal((await client.callTool({name:'done',arguments:{status:'success',summary:'Continued after conversation'}})).isError,false);
+ } else if(mode==='wait-existing' &&!argv.includes('resume')) {
   await new Promise(r=>setTimeout(r,300));
  } else if(mode.startsWith('wait')&&!argv.includes('resume')) {
   const request=await client.callTool({name:'request_takeover',arguments:{reason:'Synthetic control request',timeout_sec:60}});
@@ -50,6 +58,9 @@ if(mode==='hold') {
   assert.equal(new URL(requestData.url).hash,'#/live/selected');
   assert.equal((await fetch(requestData.url)).status,200);
   if(mode==='wait-fast') await new Promise(r=>setTimeout(r,300));
+ } else if(mode==='wait-message'&&input.includes('What is blocking you?')) {
+  assert.ok(input.includes('STILL pending'));
+  emit({type:'item.completed',item:{type:'agent_message',text:'I am waiting for your control handoff.'}});
  } else if(mode.startsWith('complete')||mode.startsWith('wait')) {
   const done=await client.callTool({name:'done',arguments:{summary:'Synthetic task completed',status:mode==='complete-fail'?'fail':mode==='complete-cancelled'?'cancelled':'success'}});
   assert.equal(done.isError,false);
@@ -77,7 +88,7 @@ if(mode==='hold') {
   };
   const scopes = () => existsSync(runsRoot) ? readdirSync(runsRoot).map((dir) => join(runsRoot, dir, "scope.json"))
     .filter(existsSync).map((file) => JSON.parse(readFileSync(file, "utf8"))) : [];
-  return { daemon, api, start, scopes, async close() {
+  return { daemon, api, start, scopes, headers, async close() {
     await daemon.close();
     if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER; else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
     if (oldVault === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX; else process.env.MODELBOT_VAULT_KEY_HEX = oldVault;
@@ -253,5 +264,60 @@ test("remote operator origin leaves local scoped provider MCP transport on loopb
     const task = await f.start();
     await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "remote-configured task did not complete");
     assert.ok(f.scopes()[0].url.startsWith(f.daemon.baseUrl + "/mcp/tasks/"));
+  } finally { await f.close(); }
+});
+
+
+test("operator can converse during takeover without granting control; messages persist and terminal tasks reject them", async () => {
+  const f = await fixture("wait-message");
+  try {
+    const task = await f.start();
+    await until(() => Boolean(f.daemon.store.activeTakeoverForComputer("selected", task.id)), "no takeover");
+    const takeover = f.daemon.store.activeTakeoverForComputer("selected", task.id)!;
+    assert.equal((await f.api(`/api/v1/takeover/${takeover.id}/acquire`, {})).status, 200);
+    assert.equal((await fetch(`${f.daemon.baseUrl}/api/v1/tasks/${task.id}/messages`, { method: "POST", headers: { ...f.headers, "X-CSRF-Token": "wrong" }, body: JSON.stringify({ text: "unauthorised" }) })).status, 403);
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: " " })).status, 400);
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "x".repeat(8001) })).status, 400);
+    assert.equal((await f.api(`/api/v1/tasks/missing/messages`, { text: "hello" })).status, 404);
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "What is blocking you?" })).status, 202);
+    await until(() => f.daemon.store.taskTranscript(task.id).some(m => m.content === "I am waiting for your control handoff."), "no mid-task reply");
+    assert.equal(f.daemon.store.getTask(task.id)?.status, "running");
+    assert.equal(f.daemon.store.activeTakeoverForComputer("selected", task.id)?.state, "human");
+    const detail = await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any;
+    assert.ok(detail.steps.some((s: any) => s.kind === "user" && s.body.content === "What is blocking you?"));
+    assert.equal(f.daemon.store.pendingMessages(task.id).length, 0);
+    assert.equal((await f.api(`/api/v1/takeover/${takeover.id}/release`, {})).status, 200);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "did not resume");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "late" })).status, 409);
+  } finally { await f.close(); }
+});
+
+test("a paused native task resumes its saved provider conversation", async () => {
+  const f = await fixture("complete");
+  try {
+    const id = "task_resume_fixture";
+    f.daemon.store.insertHarnessTaskBinding({ task_id: id, computer_id: "selected", spend_cap_usd: 20, max_steps: 20, proxy_usd_per_tool_call: 0.01 });
+    f.daemon.store.db.prepare("UPDATE tasks SET adapter = 'codex', capabilities = '[\"browser\"]' WHERE id = ?").run(id);
+    const task = f.daemon.store.getTask(id)!;
+    f.daemon.store.pauseTask(task.id);
+    f.daemon.store.insertStep(task.id, 0, "runner_session", { thread_id: "00000000-0000-0000-0000-000000000001", provider: "codex" });
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/resume`, {})).status, 202);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "saved task did not complete");
+    assert.ok(f.scopes()[0].argv.includes("resume"));
+    assert.ok(f.scopes()[0].argv.includes("00000000-0000-0000-0000-000000000001"));
+  } finally { await f.close(); }
+});
+
+
+test("a mid-task conversational reply waits for another message instead of failing", async () => {
+  const f = await fixture("chat");
+  try {
+    const task = await f.start();
+    await until(() => f.scopes()[0]?.chatReady, "runner not ready");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Just answer my status question; wait for further direction." })).status, 202);
+    await until(async () => (await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message, "reply did not park");
+    assert.equal(f.daemon.store.getTask(task.id)?.status, "running");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Continue" })).status, 202);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "did not continue");
   } finally { await f.close(); }
 });

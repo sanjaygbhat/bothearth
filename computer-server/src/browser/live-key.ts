@@ -14,8 +14,8 @@ export function keyChord(key: string, mods: number | null): string {
 /** Preserve real down/up and repeat semantics using Playwright's key definitions. */
 export class KeyboardRelay {
   private held = new Set<string>();
-  private keyboard: Keyboard;
-  constructor(keyboard: Keyboard) { this.keyboard = keyboard; }
+  private keyboard: Pick<Keyboard, "up" | "down" | "press" | "insertText">;
+  constructor(keyboard: Pick<Keyboard, "up" | "down" | "press" | "insertText">) { this.keyboard = keyboard; }
 
   async reset(): Promise<void> {
     for (const key of [...this.held].reverse()) {

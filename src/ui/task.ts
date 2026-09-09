@@ -58,6 +58,7 @@ export type TaskRecord = {
   status: string;
   created_at: string;
   updated_at?: string;
+  awaiting_message?: boolean;
   max_steps?: number;
   /** Which AI ran it. Only newer records carry it. */
   adapter?: string | null;
@@ -766,6 +767,10 @@ export function feedLine(
   ctx: FeedContext = {},
 ): FeedLine | null {
   switch (kind) {
+    case "user": {
+      const content = readString(body, "content");
+      return content ? { text: `You: ${content}`, voice: "say" } : null;
+    }
     case "assistant": {
       const content = readString(body, "content", "text", "summary");
       return content ? { text: content, voice: "say", rich: true } : null;
@@ -1080,6 +1085,7 @@ class TaskView {
   private currentUrl: string | null = null;
   private renderedRows: string[] = [];
   private feed!: HTMLElement;
+  private composer!: HTMLFormElement;
   private announce!: HTMLElement;
   private surface!: HTMLElement;
   private grid!: HTMLElement;
@@ -1271,6 +1277,42 @@ class TaskView {
     });
     this.surface = appendTextChild(this.left, "div", "", "task-surface");
     this.surface.hidden = true;
+    this.composer = document.createElement("form");
+    this.composer.className = "task-composer";
+    const label = document.createElement("label");
+    label.textContent = "Message BotHearth";
+    const draft = document.createElement("textarea");
+    draft.name = "message";
+    draft.rows = 2;
+    draft.maxLength = 8000;
+    draft.required = true;
+    draft.placeholder = "Ask a question or change direction…";
+    label.append(draft);
+    const send = document.createElement("button");
+    send.type = "submit";
+    send.className = "btn sm";
+    send.textContent = "Send";
+    const status = document.createElement("p");
+    status.setAttribute("role", "status");
+    status.textContent = "You can message while the bot works or waits. Keep passwords in its computer.";
+    this.composer.append(label, send, status);
+    this.composer.addEventListener("submit", async event => {
+      event.preventDefault();
+      const text = draft.value.trim(), taskId = this.taskId;
+      if (!text || send.disabled) return;
+      send.disabled = true;
+      status.textContent = "Sending…";
+      try {
+        await apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/messages`, { text });
+        if (!this.alive || taskId !== this.taskId) return;
+        if (draft.value.trim() === text) draft.value = "";
+        status.textContent = "Queued for the bot’s next step. Computer control stays with you until you return it.";
+        await this.load();
+      } catch (error) {
+        status.textContent = humanApiError(error, "Message could not be sent. Try again.");
+      } finally { send.disabled = false; }
+    });
+    this.left.append(this.composer);
     this.feed = appendTextChild(this.left, "div", "", "feed");
     this.feed.setAttribute("role", "log");
     this.feed.setAttribute("aria-live", "polite");
@@ -1546,7 +1588,7 @@ class TaskView {
     // someone reloaded it.
     const paused = event.type === "task.step" && body.status === "paused";
     if (paused) this.pausedStep = { at: event.ts, body };
-    if (event.type.startsWith("task.") && (paused || event.type !== "task.step")) {
+    if (event.type.startsWith("task.") && (paused || body.message === true || event.type !== "task.step")) {
       void this.load();
     }
 
@@ -1662,9 +1704,7 @@ class TaskView {
       if (granted) {
         rememberAcquired((this.acquired = granted.takeover_id));
         this.panel?.setDriver(true);
-        // Straight to full screen: the click that got here is the user gesture
-        // the Fullscreen API wants, and it is still spendable this tick.
-        await this.panel?.setFullScreen(true);
+        // Keep the conversation visible while the operator drives. Full screen is opt-in.
         this.panel?.setNotice(CONTROL_TAKEN);
       }
       this.leaseRead = Date.now();
@@ -1793,19 +1833,12 @@ class TaskView {
 
   /** ux-spec §2.7. Esc, Enter, ⌘↩, ⌘. and ⌘⇧T all land here. */
   handleKey(event: KeyboardEvent): void {
+    if (event.composedPath?.().includes(this.composer)) return;
     if (this.approval?.handleKey(event)) return;
     // Full screen first: Esc leaves it and leaves control exactly where it is.
     if (event.key === "Escape" && this.panel?.isFullScreen()) {
       event.preventDefault();
       void this.panel.setFullScreen(false);
-      return;
-    }
-    // The live surface takes the keyboard while you drive, so the way out has
-    // to be a key it deliberately does not forward. Esc is it, and the hint
-    // under the frame says so in as many words.
-    if (event.key === "Escape" && this.drivingNow()) {
-      event.preventDefault();
-      void this.returnControl();
       return;
     }
     const command = event.metaKey || event.ctrlKey;
@@ -1831,10 +1864,11 @@ class TaskView {
   private render(): void {
     const task = this.detail?.task;
     if (!task) return;
+    this.composer.hidden = task.status !== "running";
     const driving = this.drivingNow();
     const observing = this.observingNow();
-    const needsYou =
-      Boolean(this.approvalReq) || Boolean(this.takeover && !driving && !observing);
+    const needsControl = Boolean(this.approvalReq) || Boolean(this.takeover && !driving && !observing);
+    const needsYou = task.awaiting_message === true || needsControl;
     const status = statusWord(task.status, { needsYou, driving, observing });
 
     const goal = goalHead(task.goal || "Untitled task");
@@ -1858,7 +1892,7 @@ class TaskView {
 
     // The panel goes first: it owns the phase, and the driving surface below
     // asks it for the keyboard once it is in the driving phase.
-    this.renderPanelState(driving, needsYou, observing);
+    this.renderPanelState(driving, needsControl, observing);
     this.renderSurface(driving, observing);
     this.renderFeed();
     this.renderFacts();
@@ -2026,6 +2060,7 @@ class TaskView {
   }
 
   private renderFeed(): void {
+    const nearBottom = !this.renderedRows.length || this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
     const rows = collapseFeed(this.sortedItems());
     if (!rows.length) {
       this.feed.replaceChildren();
@@ -2068,8 +2103,6 @@ class TaskView {
     }
     this.renderedRows = signature;
 
-    const nearBottom =
-      this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
     if (nearBottom) this.feed.scrollTop = this.feed.scrollHeight;
   }
 

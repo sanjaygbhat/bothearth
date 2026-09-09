@@ -910,3 +910,23 @@ it("a daemon-dispatched tool call produces one audit record", async () => {
     store.close();
   }
 });
+
+it("answers an operator during human control without observations or tools", async () => {
+  const computer = new StableComputer();
+  const store = new Store(":memory:");
+  store.insertComputer({ id: computer.computerId, name: "fixture", capabilities: ["browser"], persistent: false, status: "running" });
+  store.insertTask({ id: "task_fixture", computer_id: computer.computerId, goal: "finish fixture", max_steps: 10 });
+  store.insertStep("task_fixture", 0, "user", { role: "user", content: "Why are you waiting?" });
+  const adapter = new ScriptedAdapter((_, request) => {
+    assert.equal(computer.calls.length, 0);
+    assert.deepEqual(request.tools, []);
+    assert.ok(request.messages.some(message => message.role === "user" && message.content === "Why are you waiting?"));
+    return { content: "Waiting for your sign-in.", tool_calls: [], usage: { tokens_in: 2, tokens_out: 3, usd_est: 0.01 } };
+  });
+  try {
+    const result = await runAgentLoop({ ...base(computer, adapter), store, maxSteps: 1, isWaiting: () => true });
+    assert.equal(result.status, "paused");
+    assert.equal(result.usage.usd_est, 0.01);
+    assert.ok(store.taskTranscript("task_fixture").some(message => message.content === "Waiting for your sign-in."));
+  } finally { store.close(); }
+});

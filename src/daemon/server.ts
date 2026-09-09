@@ -838,8 +838,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     publicOrigin ?? null,
   );
 
-  type TaskScope = { taskId: string; computerId: string; token: string; active: boolean; waitGeneration: number; connectionFailed?: boolean };
+  type TaskScope = { taskId: string; computerId: string; token: string; active: boolean; waitGeneration: number; messageGeneration: number; awaitingMessage?: boolean; connectionFailed?: boolean };
   const scopedMcp = new Map<string, { scope: TaskScope; handler: ReturnType<typeof createMcpHttpHandler> }>();
+
+  function takeOperatorMessages(taskId: string): string[] {
+    const messages = store.takeMessages(taskId);
+    const scope = scopedMcp.get(taskId)?.scope;
+    if (scope && messages.length) scope.messageGeneration++;
+    return messages;
+  }
 
   function resolveMcpComputer(scope?: TaskScope): { id: string } | null {
     if (scope) {
@@ -903,6 +910,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           scope.waitGeneration++;
           return toolError("E_TAKEOVER_BUSY", "Resolve pending human control or approval before finishing");
         }
+        const messageTask = scope?.taskId ?? store.getHarnessTaskBinding(computerId)?.task_id;
+        const operatorMessages = messageTask ? takeOperatorMessages(messageTask) : [];
+        if (operatorMessages.length) return toolError("E_STALE_REF",
+          "This action was NOT executed. New messages from the operator: " + JSON.stringify(operatorMessages) +
+          " Respond to these before deciding your next action. Messages do not grant approval or return computer control.");
         const binding = store.getHarnessTaskBinding(computerId);
         if (binding && store.getTask(binding.task_id)?.status !== "running") {
           return toolError("E_POLICY", "Harness task has ended; create a new task binding in the operator UI API");
@@ -944,6 +956,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
               );
               scheduleTakeoverExpiry(takeoverId);
             }
+          }
+          if (name === "done" && messageTask && store.pendingMessages(messageTask).length) {
+            return toolError("E_STALE_REF", "Task remains open: new operator messages arrived before completion. " + JSON.stringify(takeOperatorMessages(messageTask)));
           }
           if (binding && name === "done" && (result as { ok?: boolean })?.ok) {
             const status = args.status === "fail" ? "failed" : args.status === "cancelled" ? "cancelled" : "completed";
@@ -1117,18 +1132,33 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     await closeForeignTakeover(task);
     const runnerProvider = task.adapter === "codex" || task.adapter === "claude" ? task.adapter : null;
     if (runnerProvider && opts.codexRunner) {
-      const scope: TaskScope = { taskId: task.id, computerId: task.computer_id, token: randomBytes(32).toString("hex"), active: true, waitGeneration: 0 };
+      const scope: TaskScope = { taskId: task.id, computerId: task.computer_id, token: randomBytes(32).toString("hex"), active: true, waitGeneration: 0, messageGeneration: 0 };
       scopedMcp.set(task.id, { scope, handler: createMcpHttpHandler(makeMcpOptions(scope)) });
       try {
+        const saved = resume ? store.db.prepare("SELECT body_json FROM steps WHERE task_id = ? AND kind = 'runner_session' ORDER BY rowid DESC LIMIT 1")
+          .get(task.id) as { body_json: string } | undefined : undefined;
+        const session = saved ? JSON.parse(saved.body_json) as { thread_id: string; provider: string } : undefined;
         await runCodexTask(opts.codexRunner, task, {
           url: `http://${host === "::1" ? "[::1]" : host}:${mcpOpts.port}/mcp/tasks/${encodeURIComponent(task.id)}`,
           token: scope.token, signal: controller.signal,
+          threadId: session?.provider === runnerProvider ? session.thread_id : undefined,
+          onThread(thread_id) {
+            store.insertStep(task.id, 0, "runner_session", { thread_id, provider: runnerProvider });
+          },
           maxRuntimeSec: taskMaxRuntimeSec(task),
           onMessage(content) {
             if (controller.signal.aborted || store.getTask(task.id)?.status !== "running") return;
             store.insertStep(task.id, 0, "assistant", { role: "assistant", content });
-            void emit("task.step", { status: "running" }, { task_id: task.id, computer_id: task.computer_id })
+            void emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id })
               .catch((error) => logError("task event failed", { task_id: task.id, error: String(error) }));
+          },
+          hasMessages: () => store.pendingMessages(task.id).length > 0,
+          takeMessages: () => takeOperatorMessages(task.id),
+          messageGeneration: () => scope.messageGeneration,
+          onWaitingForMessage(waiting) {
+            scope.awaitingMessage = waiting;
+            void emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id })
+              .catch(error => logError("task event failed", { error: String(error) }));
           },
           isWaiting: () => taskWaiting(task.id, task.computer_id),
           waitGeneration: () => scope.waitGeneration,
@@ -1165,6 +1195,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     return runAgentLoop({
       signal: controller.signal,
       supportedMethods: computerMethods.get(task.computer_id),
+      hasMessages: () => store.pendingMessages(task.id).length > 0,
+      isWaiting: () => taskWaiting(task.id, task.computer_id),
       waitForResume: (reason, result) => new Promise<boolean>((resolveWait) => {
         let timer: ReturnType<typeof setTimeout>;
         const finish = (resume: boolean) => {
@@ -1176,6 +1208,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         const check = () => {
           if (controller.signal.aborted || store.getTask(task.id)?.status === "cancelled" ||
               store.getComputer(task.computer_id)?.status !== "running") return finish(false);
+          if (store.pendingMessages(task.id).length) return finish(true);
           if (reason === "approval") {
             const id = result && !result.ok ? result.error.details?.approval_id : undefined;
             const approval = typeof id === "string" ? store.getApproval(id) : undefined;
@@ -1217,6 +1250,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       tokenCapIn: agent.tokenCapIn,
       policyGate: agent.policyGate,
       dispatchTool: async (tool, args, context) => {
+        if (store.pendingMessages(task.id).length) return toolError("E_STALE_REF", "Action not executed: read the new operator message before continuing.");
         const result = await toolDispatcher.dispatch(tool, args, {
           taskId: task.id,
           computerId: task.computer_id,
@@ -2151,10 +2185,31 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         task: {
           ...verifiedArtifacts(task, workspace),
           results_dir,
+          awaiting_message: scopedMcp.get(task.id)?.scope.awaitingMessage === true,
           ...taskBudget(store, task, spendCapDefault()),
         },
         ...taskActivity(store, task.id),
       });
+      return;
+    }
+
+    const taskMessage = /^\/api\/v1\/tasks\/([^/]+)\/messages$/.exec(path);
+    if (taskMessage && method === "POST") {
+      const task = store.getTask(decodeURIComponent(taskMessage[1]!));
+      if (!task) { writeJson(res, 404, { error: "not_found" }); return; }
+      if (task.status !== "running") { writeJson(res, 409, { error: "Task must be running to receive a message" }); return; }
+      let body: { text?: unknown } | null;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { writeJson(res, 400, { error: "Invalid JSON" }); return; }
+      if (!body || typeof body.text !== "string" || !body.text.trim() || body.text.length > 8000) {
+        writeJson(res, 400, { error: "Message must contain 1–8000 characters" }); return;
+      }
+      if (store.pendingMessages(task.id).length >= 20) {
+        writeJson(res, 429, { error: "Wait for the bot to read your queued messages" }); return;
+      }
+      store.insertStep(task.id, 0, "user", { role: "user", content: body.text.trim() });
+      await emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id });
+      writeJson(res, 202, { queued: true });
       return;
     }
 

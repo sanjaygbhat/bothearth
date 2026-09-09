@@ -15,7 +15,7 @@ import { LiveView } from "./session.ts";
 const NOTICE_MS = 6000;
 
 /** The one line that tells a person the screen takes their keyboard now. */
-export const DRIVING_HINT = "Click the screen, then type. Esc returns control.";
+export const DRIVING_HINT = "Click the computer to type. Ctrl+Alt+T opens Terminal; Ctrl+Alt+E opens Files. Use Return control when finished.";
 
 /** What the live surface is called to a screen reader, per phase. */
 export function screenLabel(phase: PanelPhase, url: string | null): string {

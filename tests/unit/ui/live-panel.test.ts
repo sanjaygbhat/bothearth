@@ -245,7 +245,7 @@ describe("the live surface while you drive", () => {
   });
 
   it("shows one line saying the screen takes the keyboard and how to leave", () => {
-    assert.equal(DRIVING_HINT, "Click the screen, then type. Esc returns control.");
+    assert.equal(DRIVING_HINT, "Click the computer to type. Ctrl+Alt+T opens Terminal; Ctrl+Alt+E opens Files. Use Return control when finished.");
     assert.match(source("live/panel.ts"), /this\.hintText\.hidden = !driving/);
   });
 

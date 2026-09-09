@@ -215,7 +215,7 @@ describe("who is driving", () => {
   it("says how long control lasts, and what keeps it", () => {
     assert.equal(
       leaseText(581_000),
-      "Control returns to the bot in 9:41 unless you keep using it.",
+      "Control pauses in 9:41 unless you keep using it.",
     );
     assert.match(leaseText(0), /goes back to the bot/);
     assert.doesNotMatch(`${leaseText(581_000)} ${leaseText(0)}`, /lease|epoch|ttl/i);
@@ -253,8 +253,8 @@ describe("takeover cards", () => {
       });
       const text = card.root.textContent;
       assert.match(text, /You’re driving/);
-      assert.match(text, /can’t see the screen or what you type/);
-      assert.match(text, /Nothing you type now reaches the model/);
+      assert.match(text, /can’t see or operate the computer/);
+      assert.match(text, /Messages you send below go to the bot/);
       assert.doesNotMatch(text, /epoch|lease|takeover_|control_epoch/i);
 
       const buttons = actionable(card.root);
@@ -270,7 +270,7 @@ describe("takeover cards", () => {
       assert.equal(lease.hidden, true, "no countdown until the daemon gives a deadline");
       card.setLease(581_000);
       assert.equal(lease.hidden, false);
-      assert.match(lease.textContent, /Control returns to the bot in 9:41/);
+      assert.match(lease.textContent, /Control pauses in 9:41/);
       assert.equal(lease.getAttribute("role"), null, "a per-second line is not announced");
       card.setLease(null);
       assert.equal(lease.hidden, true);

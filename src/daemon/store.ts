@@ -799,7 +799,7 @@ export class Store {
     return rows<{ body_json: string }>(
       this.db.prepare(
         `SELECT body_json FROM steps WHERE task_id = ?
-         AND kind IN ('observation', 'assistant', 'tool') ORDER BY rowid`,
+         AND kind IN ('observation', 'assistant', 'tool', 'user') ORDER BY rowid`,
       ).all(id),
     ).map((r) => JSON.parse(r.body_json) as AdapterMessage);
   }
@@ -1176,6 +1176,19 @@ export class Store {
       ).run(computerId);
     }
     this.harnessDenialAuditsInFlight.delete(computerId);
+  }
+
+  pendingMessages(taskId: string): Array<{ id: string; content: string }> {
+    return (this.db.prepare(`SELECT id, body_json FROM steps WHERE task_id = ?
+      AND kind = 'user' AND json_extract(body_json, '$.delivered_at') IS NULL ORDER BY rowid`)
+      .all(taskId) as Array<{ id: string; body_json: string }>).map(row => ({ id: row.id, content: JSON.parse(row.body_json).content }));
+  }
+
+  takeMessages(taskId: string): string[] {
+    const messages = this.pendingMessages(taskId);
+    const mark = this.db.prepare(`UPDATE steps SET body_json = json_set(body_json, '$.delivered_at', ?) WHERE id = ?`);
+    for (const message of messages) mark.run(now(), message.id);
+    return messages.map(message => message.content);
   }
 
   insertStep(taskId: string, seq: number, kind: string, body: unknown): void {

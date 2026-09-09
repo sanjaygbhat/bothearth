@@ -43,6 +43,7 @@ import {
   redactUrl,
 } from "../redact.ts";
 import { KeyboardRelay, keyChord, type RelayKey } from "./live-key.ts";
+import { Desktop, DESKTOP } from "./desktop.ts";
 import { NavigationGuard } from "./navigation-guard.ts";
 import { MAX_TABS, chooseLivePage } from "./live-page.ts";
 
@@ -352,6 +353,7 @@ export class BrowserSession {
   /** Chrome for Testing writes Crashpad settings outside the profile; keep them
    * private, ephemeral, and cleaned up on close. */
   private configHome = "";
+  private desktop: Desktop | null = null;
   private downloadQuarantines = new WeakMap<object, Promise<Record<string, unknown>>>();
 
   async start(): Promise<void> {
@@ -362,7 +364,12 @@ export class BrowserSession {
     disableCredentialStorage(profileDir());
     this.configHome ||= mkdtempSync(join(tmpdir(), "modelbot-chromium-"));
 
+    if (process.env.MODELBOT_DESKTOP === "1" && !this.desktop) {
+      this.desktop = new Desktop(this.configHome);
+      await this.desktop.start();
+    }
     const args = [...LAUNCH_ARGS];
+    if (this.desktop) args.push("--window-position=0,0", "--window-size=1280,820");
     const proxy = process.env.MODELBOT_PROXY_SERVER || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
     if (!proxy) throw new Error("browser: MODELBOT_PROXY_SERVER is required");
     const u = new URL(proxy);
@@ -379,11 +386,11 @@ export class BrowserSession {
       // Full Chromium uses its own user namespace inside the hardened container.
       // The seccomp profile permits chroot inside that namespace without outer capabilities.
       channel: "chromium",
-      headless: true,
+      headless: !this.desktop,
       chromiumSandbox: true,
       // Chrome for Testing writes Crashpad settings outside user-data-dir.
       // Keep those files private and ephemeral under the writable container tmpfs.
-      env: { ...process.env, XDG_CONFIG_HOME: this.configHome },
+      env: { ...process.env, ...this.desktop?.env, XDG_CONFIG_HOME: this.configHome },
       // ARCH forbids --disable-dev-shm-usage; Playwright adds it by default.
       // --enable-automation is Playwright's other default and an automation tell.
       ignoreDefaultArgs: ["--disable-dev-shm-usage", "--enable-automation"],
@@ -647,7 +654,7 @@ export class BrowserSession {
       }
       // This stream goes only to the authenticated operator UI. Model captures use
       // gated screenshot/snapshot RPCs and never consume these frames.
-      if (!this.casting || !this.onLiveFrame || cdp !== this.cdp ||
+      if ((this.desktop && this.liveMode === "human") || !this.casting || !this.onLiveFrame || cdp !== this.cdp ||
           mode !== this.liveMode || epoch !== this.epoch) return;
       const jpeg = Buffer.from(evt.data, "base64");
       const m = evt.metadata as {
@@ -709,6 +716,7 @@ export class BrowserSession {
 
   setLiveMode(mode: LiveMode, bump = false): void {
     if (mode === "human" && this.relayPage?.isClosed()) this.relayPage = null;
+    this.desktop?.stopStream();
     this.liveMode = mode;
     if (bump) this.epoch += 1;
     if (mode === "agent" && this.actAbort.signal.aborted) {
@@ -721,6 +729,7 @@ export class BrowserSession {
   }
 
   async stopScreencast(): Promise<void> {
+    this.desktop?.stopStream();
     this.casting = false;
     try {
       await this.cdp?.send("Page.stopScreencast");
@@ -730,6 +739,16 @@ export class BrowserSession {
   }
 
   async startScreencast(): Promise<void> {
+    if (this.desktop && this.liveMode === "human") {
+      this.casting = true;
+      const epoch = this.epoch;
+      this.desktop.stream(jpeg => {
+        if (!this.casting || this.liveMode !== "human" || epoch !== this.epoch) return;
+        this.onLiveFrame?.({ v: 1, seq: ++this.seq, ts: Date.now(), mime: "image/jpeg", mode: "human", epoch, target: "desktop",
+          viewport: { w: DESKTOP.width, h: DESKTOP.height, dpr: 1 }, meta: { offsetTop: 0, pageScaleFactor: 1, deviceWidth: DESKTOP.width, deviceHeight: DESKTOP.height, scrollOffsetX: 0, scrollOffsetY: 0 } }, jpeg);
+      });
+      return;
+    }
     const view = this.livePage ?? this.page;
     if (!this.cdp || !view) throw new Error("no cdp");
     await this.maskSecrets(view);
@@ -743,6 +762,8 @@ export class BrowserSession {
   async close(): Promise<void> {
     await this.stopScreencast();
     await this.context?.close();
+    this.desktop?.close();
+    this.desktop = null;
     if (this.configHome) rmSync(this.configHome, { recursive: true, force: true });
     this.configHome = "";
     this.context = null;
@@ -1174,6 +1195,10 @@ export class BrowserSession {
     dx: number | null;
     dy: number | null;
   }): Promise<ToolResult> {
+    if (this.desktop && this.liveMode === "human") {
+      await this.desktop.pointer(p);
+      return { ok: true, data: { action: p.action } };
+    }
     // Agent and HUMAN input stay on the ACTION/request page; livePage is view-only.
     // raw CDP mouse events do not focus inputs in headless Chromium.
     const page = this.liveMode === "human" ? this.liveTarget() : this.requirePage();
@@ -1212,11 +1237,16 @@ export class BrowserSession {
   }
 
   async resetLiveKeys(): Promise<void> {
+    await this.desktop?.reset();
     await this.liveKeyboard?.relay.reset();
   }
 
   /** HUMAN operator input stays bound to the takeover target. */
   async liveKey(p: RelayKey): Promise<ToolResult> {
+    if (this.desktop && this.liveMode === "human") {
+      await this.desktop.key(p);
+      return { ok: true, data: { key: p.key } };
+    }
     const page = this.liveTarget();
     if (!page) return toolError("E_IO", "takeover target unavailable");
     await page.bringToFront();
@@ -1229,6 +1259,10 @@ export class BrowserSession {
   }
 
   async typeText(p: { text: string }): Promise<ToolResult> {
+    if (this.desktop && this.liveMode === "human") {
+      await this.desktop.text(p.text);
+      return { ok: true, data: { typed: p.text.length } };
+    }
     const page = this.liveMode === "human" ? this.liveTarget() : this.requirePage();
     if (!page) return toolError("E_IO", "takeover target unavailable");
     if (this.liveMode === "human") await page.bringToFront();

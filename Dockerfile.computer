@@ -18,9 +18,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Runtime packages only (no compilers / build-essential). curl/xz-utils are
 # build-only: the Node tarball lands in this same RUN so their purge shrinks the
-# layer that added them. A shell-role computer therefore gets bash, coreutils and
-# node — no git, python3 or jq: keeping an interpreter and a credential-reading
-# VCS out of a sandbox the model can run commands in is deliberate.
+# layer that added them. This browser image includes an operator desktop; the
+# separate Dockerfile.shell keeps model shell execution away from browser data.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -28,6 +27,7 @@ RUN set -eux; \
       curl \
       xz-utils \
       tini \
+      xvfb xauth xdotool openbox xterm pcmanfm ffmpeg \
       tzdata \
       locales \
       fonts-liberation \
@@ -114,6 +114,8 @@ CMD ["sleep", "infinity"]
 # Final stage: computer-server. Guarded ARG so `--target base` builds without
 # that tree.
 FROM base AS final
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends xclip dbus-x11 && rm -rf /var/lib/apt/lists/*
 ARG COMPUTER_SERVER_DIR=computer-server
 USER root
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/modelbot/
@@ -133,7 +135,7 @@ RUN mkdir -p /opt/computer-server-root \
  && ln -sf /opt/playwright/node_modules/playwright-core /opt/computer-server-root/computer-server/node_modules/playwright-core \
  && chown -R agent:agent /opt/computer-server-root \
  && chmod -R a+rX /opt/computer-server-root
-ENV NODE_PATH=/opt/playwright/node_modules
+ENV NODE_PATH=/opt/playwright/node_modules MODELBOT_DESKTOP=1
 USER browser
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]

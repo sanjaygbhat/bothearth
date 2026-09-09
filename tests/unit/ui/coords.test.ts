@@ -53,3 +53,9 @@ describe("ui live coords", () => {
     assert.equal(msg.button, 0);
   });
 });
+
+
+it("maps clicks through letterboxing in both page and desktop views", () => {
+  assert.deepEqual(mapClientToCssPx(100, 70, { left: 0, top: 0, width: 640, height: 400 }, { w: 1280, h: 720, dpr: 1 }), { x: 200, y: 100 });
+  assert.deepEqual(mapClientToCssPx(80, 100, { left: 0, top: 0, width: 640, height: 360 }, { w: 1280, h: 900, dpr: 1 }), { x: 40, y: 250 });
+});

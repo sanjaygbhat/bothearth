@@ -100,7 +100,7 @@ export function acquiredControl(): string | null {
 /** The lease line under "You’re driving". */
 export function leaseText(msLeft: number): string {
   return msLeft > 0
-    ? `Control returns to the bot in ${countdownText(msLeft)} unless you keep using it.`
+    ? `Control pauses in ${countdownText(msLeft)} unless you keep using it.`
     : "Control goes back to the bot as soon as it can take it.";
 }
 
@@ -139,12 +139,10 @@ export const TAKE_FAILED =
 /**
  * What the live view says the moment the keyboard lands on it.
  *
- * The frame goes ember and full screen at the same time, which is a large
- * change to make without a sentence: this is that sentence, and it names the
- * way back out.
+ * The frame marks human control and names the way back out.
  */
 export const CONTROL_TAKEN =
-  "You have control. Type and click in the frame as if it were your own browser. Press Give control back (⌘↩) when done.";
+  "You have control. Type and click in the frame as if it were your own computer. Press Give control back (⌘↩) when done.";
 
 /**
  * Ask for the keyboard and take it. Returns the grant this page now holds, or
@@ -271,12 +269,12 @@ export function renderDriving(handlers: DrivingHandlers): {
   appendTextChild(
     root,
     "p",
-    "Your bot can’t see the screen or what you type right now. Do the step on the right, then return control and it carries on from there.",
+    "Your bot can’t see or operate the computer while you drive. Return control when you are ready.",
   );
   appendTextChild(
     root,
     "p",
-    "Nothing you type now reaches the model. The website still sees it, the same as always.",
+    "Typing inside the computer stays out of model context. Messages you send below go to the bot. Sites and apps still receive your input.",
     "q",
   );
 

@@ -106,9 +106,11 @@ A long task runs into three other limits, all of them in `~/.modelbot/modelbot.y
 
 BotHearth asks for new destinations and detected sends, payments, uploads, and deletes. Expand the card to inspect the proposed action, then choose **Don't allow** or **Allow once**. Some site permissions can be remembered for the task. Ordinary interaction on approved sites and writing a result into the task workspace can proceed without another prompt. The policy does not identify every possible external effect; stay present for sensitive work. If you do not answer within 15 minutes, the task pauses — press **Resume** when you are ready.
 
+Use **Message BotHearth** to ask questions or redirect a running task. Messages reach the runner at its next step; an in-progress action may finish first. You can still message while it waits for approval or while you hold computer control. Messages are sent to the chosen model, so enter passwords in the computer instead. Sending a message does not approve an action or return control.
+
 ## Taking control
 
-When a site needs a password, a code or a CAPTCHA, your bot will not do it. Press **Take control** — or **Take control instead** on the card — and the live view fills the screen and says **You have control**. From then on the frame is yours: type and click in it as if it were your own browser. While you are driving, the model cannot see the screen or what you type. The site still receives it, exactly as it would normally. `⌘V` / `Ctrl+V` pastes into the page, so a password manager works.
+When a site needs a password, a code or a CAPTCHA, your bot will not do it. Press **Take control** — or **Take control instead** on the card — to operate the bot’s full desktop: browser chrome, windows, files and a terminal. The conversation stays visible; **Full screen** is optional. Click inside the computer before typing. `Ctrl+Alt+T` opens Terminal and `Ctrl+Alt+E` opens Files. While you drive, the model cannot observe or operate the computer. The site still receives it, exactly as it would normally. `⌘V` / `Ctrl+V` pastes into the page, so a password manager works.
 
 A line above the frame counts down the lease. Ten minutes without input pauses control; it does not return capture to the agent automatically. Every click or keystroke resets that clock. Press **Give control back** (`⌘↩`) when the step is done and BotHearth validates the page before resuming. `Esc` leaves full screen without giving control back. A remaining sensitive-field signal can prevent handback.
 
