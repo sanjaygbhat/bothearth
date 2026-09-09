@@ -9,7 +9,7 @@ try {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
-    for (const path of ["", "security/"]) {
+    for (const path of ["", "security/", "about/"]) {
       const url = new URL(path, base).href;
       await page.goto(url);
       const link = page.locator('a[href$=".png"]').filter({ has: page.locator("img") }).first();
@@ -35,6 +35,6 @@ try {
     }
     assert.deepEqual(errors, []);
     await page.close();
-    console.log(`Image viewer passed at ${width}px: both pages, close button, outside click, Escape, focus and scroll`);
+    console.log(`Image viewer passed at ${width}px: all image pages, close button, outside click, Escape, focus and scroll`);
   }
 } finally { await browser.close(); }

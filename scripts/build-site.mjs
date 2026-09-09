@@ -46,7 +46,7 @@ for (const page of pages) {
     softwareVersion: version, releaseNotes: `${site.href}about/#release`,
     softwareRequirements: "Node.js 22.18+, supported container runtime, and an eligible model account",
     license: `${repo}/blob/main/LICENSE`, author,
-    downloadUrl: repo, screenshot: `${site.href}screenshots/reading-completed.png` });
+    downloadUrl: repo, screenshot: `${site.href}screenshots/email-inbox-redacted.png` });
   const values = { TITLE: escape(page.title), DESCRIPTION: escape(page.description),
     CANONICAL: escape(canonical), SITE: escape(site.href), BASE: escape(site.pathname),
     REPOSITORY: escape(repo), VERSION: escape(version), DATE: escape(config.reviewed),
@@ -70,7 +70,7 @@ for (const page of pages) {
 for (const file of ["tokens.css", "style.css", "image-viewer.js", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
   "fonts/fraunces-latin-wght.woff2", "fonts/Fraunces-OFL.txt",
   "screenshots/task-running.png", "screenshots/needs-you.png",
-  "screenshots/reading-completed.png", "screenshots/reading-completed-detail.png"]) {
+  "screenshots/email-inbox-redacted.png", "screenshots/email-organised-redacted.png"]) {
   mkdirSync(dirname(join(output, file)), { recursive: true });
   cpSync(join(source, file), join(output, file));
 }

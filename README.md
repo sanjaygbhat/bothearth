@@ -12,9 +12,9 @@
   <a href="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml"><img src="https://github.com/sanjaygbhat/bothearth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-[![An actual BotHearth reading-log task: 70 minutes across three entries, with reading.csv and reading-summary.md saved and ready to open.](website/screenshots/reading-completed-detail.png)](website/screenshots/reading-completed.png)
+[![BotHearth organising the actual test inbox, with account identity, senders and message content blurred.](website/screenshots/email-inbox-redacted.png)](website/screenshots/email-inbox-redacted.png)
 
-*An actual task using the [sample reading log](https://bothearth.com/examples/#workspace). Open the image for the complete capture; [capture details and usage meter](https://bothearth.com/about/#credits).*
+*Real email organisation test, 8 September 2026: **51 min 6 s across two runs**. Private inbox details blurred. [Completed result and test record](docs/EMAIL-ORGANISATION-TEST-2026-09-08.md).*
 
 ## Run it
 
@@ -61,13 +61,13 @@ Builds from this checkout are ad-hoc signed, which means macOS refuses to let th
   *While you drive, model capture is blocked. Press **Give control back** to resume after validation. Ten minutes without input pauses control; it does not automatically return the browser to the agent. Screenshots show a development build and may contain older labels.*
 - **Connect your own model account.** BotHearth invokes your installed Codex or Claude Code CLI using its native authentication. It is independent of OpenAI and Anthropic. Provider terms, eligible plans, rate limits, and charges apply; see [provider requirements](docs/PROVIDERS.md).
 - **Review a task's activity.** The task view records its steps, approved actions, visited sites, and saved results. Remote providers receive the model-visible task context; [privacy and retention](PRIVACY.md) explains what stays on the host and what is sent out.
-- **Limit how much work a task may do.** The default meter is $20 with a default per-task ceiling of $100, configurable under **Settings → Usage**. Harness tasks count each computer tool call as an estimated cent: $20 represents 2,000 calls, not a provider bill. API usage estimates also depend on configured prices. These controls cannot enforce a hard cap on external charges. A task reaching its limit pauses and can be resumed with a higher allowance.
+- **See the task’s total cost estimate.** Harness tasks count each computer tool call as an estimated cent; this is not a provider bill. API usage estimates also depend on configured prices. Internal task limits remain as a safety control and cannot enforce a hard cap on external charges.
 
 | Review a destination | Inspect a finished result |
 |---|---|
-| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![An actual reading-log task with the original CSV and a 70-minute Markdown summary saved.](website/screenshots/reading-completed-detail.png) |
+| ![An operator approval card for en.wikipedia.org with deny, allow for task, and allow once options.](assets/screenshots/needs-you.png) | ![Actual email organisation result: final run completed in 20 min 49 s, with private inbox and report details blurred.](website/screenshots/email-organised-redacted.png) |
 
-*Unretouched app captures: the approval view is a pre-rename development build from 7 September 2026; the reading-log result is an actual sample task from 8 September. The dollar meter estimates tool usage, not a provider bill.*
+*Actual app captures: the approval view is a pre-rename build from 7 September 2026; the email result is the completed continuation from 8 September, with private and obsolete internal details blurred. The dollar meter estimates tool usage, not a provider bill.*
 
 ## How it works
 

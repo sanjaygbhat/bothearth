@@ -1,7 +1,7 @@
 {
   "format": 1,
   "repository": "sanjaygbhat/bothearth",
-  "tree_sha256": "0217a8b70684778265134bac2cdd65036663466d89f38f3cebc67b45a7e6c47b",
+  "tree_sha256": "b19d62bbc6c53e2a349710632b26c1987ed70d8eead5b498ed5a742a8082612f",
   "files": [
     {
       "path": ".dockerignore",
@@ -107,9 +107,9 @@
     },
     {
       "path": "README.md",
-      "bytes": 11129,
+      "bytes": 10979,
       "mode": "644",
-      "sha256": "26c2ec3f562a8376f14357c381778debc66b31cd970cb27309f2cb5b050ab2e3"
+      "sha256": "2ce1e18589de82e3b598577fbe2ca3ec629abb7303733e09aa9b805618d55541"
     },
     {
       "path": "SECURITY.md",
@@ -526,6 +526,12 @@
       "sha256": "8f44f1ae24e188aede1a57afa9948568829490c11ee3e01da358ac570a82f48c"
     },
     {
+      "path": "docs/EMAIL-ORGANISATION-TEST-2026-09-08.md",
+      "bytes": 2192,
+      "mode": "644",
+      "sha256": "c8c97f28ea992c2b7dd04505b5a534719fc632105bbd21149c5198ffe99872b5"
+    },
+    {
       "path": "docs/EXTENDING.md",
       "bytes": 4917,
       "mode": "644",
@@ -935,15 +941,15 @@
     },
     {
       "path": "scripts/build-site.mjs",
-      "bytes": 7389,
+      "bytes": 7395,
       "mode": "644",
-      "sha256": "308bcfe1b34b6f1eec814c4e3d6a0b3c2c6bf258e437fcc7a030ba8d353eef04"
+      "sha256": "1703024ae76950a31ce2f985ad58a50e81b2cb3971727bc109ba25f2fb92a0ec"
     },
     {
       "path": "scripts/check-site-browser.mjs",
-      "bytes": 2348,
+      "bytes": 2363,
       "mode": "644",
-      "sha256": "f84829d2909a0aea7088f94d74f4c9c8d938ec1726454a44a4d31e7865aceb9e"
+      "sha256": "569d0dd62cb642c7691a8448def57e8ac286970bd49945de07bf15e711c2390e"
     },
     {
       "path": "scripts/check-site.mjs",
@@ -3605,15 +3611,15 @@
     },
     {
       "path": "website/README.md",
-      "bytes": 9538,
+      "bytes": 9587,
       "mode": "644",
-      "sha256": "68dd0124b9b61051750135f3bdc975a66b3a5c020ace046a605955be13762a33"
+      "sha256": "051be4c0e6aa0481fbd23c4a941c0b90e3b066dea21067385a1a018a3010e535"
     },
     {
       "path": "website/about.html",
-      "bytes": 5882,
+      "bytes": 6834,
       "mode": "644",
-      "sha256": "de5dd636b6b23bbcc865c9a22c747a7a433f3dd9fb295f975a1caab1e2bf8ac3"
+      "sha256": "abb9fadbaf63198e8d5ab8be99ce0dcf492abd1660c9413b2b763bf0ef83a96d"
     },
     {
       "path": "website/apple-touch-icon.png",
@@ -3689,9 +3695,9 @@
     },
     {
       "path": "website/index.html",
-      "bytes": 9023,
+      "bytes": 9052,
       "mode": "644",
-      "sha256": "b58bb34deb5f0de0fbb380bcf3d8183d1ffed747bef170625375cc9c9e135637"
+      "sha256": "f4c8c1b3a7f709cb75530a42136a4404eec8dfd149cf65581d5cadf18230c80f"
     },
     {
       "path": "website/layout.html",
@@ -3710,6 +3716,18 @@
       "bytes": 2073,
       "mode": "644",
       "sha256": "7bfc0859148dfb6d095d7ef03dfc9f372dface1c50d2032f2717a6c2a1698a2f"
+    },
+    {
+      "path": "website/screenshots/email-inbox-redacted.png",
+      "bytes": 148222,
+      "mode": "644",
+      "sha256": "216d38241b150e61d23f7f81cab24af0d68cfe188c66d86dcb7db727834bdc18"
+    },
+    {
+      "path": "website/screenshots/email-organised-redacted.png",
+      "bytes": 159612,
+      "mode": "644",
+      "sha256": "b00601fdc8a5fc732cb8659ac4c4cbff027106514c6d45044f1f349a93905d39"
     },
     {
       "path": "website/screenshots/needs-you.png",
@@ -3755,9 +3773,9 @@
     },
     {
       "path": "website/security.html",
-      "bytes": 10722,
+      "bytes": 10856,
       "mode": "644",
-      "sha256": "afe5e7571bb3b28c27bd20c4cdd9e60282e09d5eda5c05d9960ebef5cb495f31"
+      "sha256": "1df008a80c15ba4282fb0cc9f327a851acaf8f2551f5d4adfb6daaa8b8f94a9f"
     },
     {
       "path": "website/site.json",
