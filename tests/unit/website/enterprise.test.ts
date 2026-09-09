@@ -1,0 +1,110 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { once } from "node:events";
+import { test } from "node:test";
+import { createEnterpriseServer, workEmail } from "../../../enterprise/server.mjs";
+
+test("enterprise verification, domain-wide perpetual grants, and durable contact delivery", async () => {
+  for (const email of ["x@gmail.com", "x@team.gmail.com", "x@mailinator.com", "x@foo.33mail.com", "x@localhost", "x@co.uk", "x@tenant.github.io", "x@a.invalid", "a..b@company.com", "x@company.com\r\nBcc:evil@test.com", "x@-bad.com", "x@company.com."]) {
+    assert.throws(() => workEmail(email), undefined, email);
+  }
+  assert.deepEqual(workEmail(" Person@Dept.Acme.co.uk "), { email: "person@dept.acme.co.uk", domain: "acme.co.uk" });
+  assert.equal(workEmail("x@bücher.de").domain, "xn--bcher-kva.de");
+  const dir = mkdtempSync(join(tmpdir(), "enterprise-test-"));
+  let time = Date.now();
+  let failMail = false;
+  const mails: Array<{ payload: any; key: string }> = [];
+  const options = { database: join(dir, "enterprise.sqlite"), origin: "http://127.0.0.1", secret: "test-only-secret-with-at-least-32-characters", from: "BotHearth <licences@bothearth.com>", now: () => time,
+    sendMail: async (payload: any, key: string) => { mails.push({ payload, key }); if (failMail) throw new Error("Test mail failure"); } };
+  let server = createEnterpriseServer(options);
+  let base = "";
+  const start = async () => { server.listen(0, "127.0.0.1"); await once(server, "listening"); base = `http://127.0.0.1:${(server.address() as any).port}`; };
+  const stop = async () => { server.close(); await once(server, "close"); };
+  const client = () => {
+    let cookie = ""; let csrf = "";
+    return async (path = "/", data?: Record<string, string>, origin = options.origin) => {
+      const response = await fetch(`${base}${path}`, { method: data ? "POST" : "GET", redirect: "manual", headers: { cookie, ...(data ? { origin, "content-type": "application/x-www-form-urlencoded" } : {}) }, body: data ? new URLSearchParams({ csrf, ...data }) : undefined });
+      if (response.headers.has("set-cookie")) cookie = response.headers.get("set-cookie")!.split(";")[0];
+      const text = await response.text(); csrf = text.match(/name="csrf" value="([^"]+)"/)?.[1] || csrf;
+      return { status: response.status, text, headers: response.headers };
+    };
+  };
+  const login = async (browser: ReturnType<typeof client>, email: string) => {
+    await browser();
+    assert.equal((await browser("/sign-in", { email })).status, 303);
+    const code = mails.at(-1)!.payload.text.match(/code is (\d{8})/)[1];
+    await browser("/verify");
+    assert.equal((await browser("/verify", { code })).status, 303);
+    assert.equal((await browser()).status, 200);
+    return code;
+  };
+  try {
+    await start();
+    const a = client();
+    await a();
+    assert.equal((await a("/claim", { organisation: "Acme", accept: "2026-09-09" })).status, 401);
+    assert.equal((await a("/sign-in", { email: "a@acme.co.uk" }, "https://evil.test")).status, 403);
+    assert.equal((await a("/sign-in", { email: "a@acme.co.uk", csrf: "wrong" })).status, 403);
+    assert.equal((await a("/sign-in", { email: "a@gmail.com" })).status, 400);
+    const code = await login(a, "alice@acme.co.uk");
+    assert.equal((await a("/verify", { code })).status, 400, "code cannot be replayed");
+    assert.equal((await a("/claim", { organisation: "Acme" })).status, 400, "terms acceptance is required");
+    const b = client(); await login(b, "bob@department.acme.co.uk");
+    const grants = await Promise.all([a("/claim", { organisation: "Acme <script>", accept: "2026-09-09" }), b("/claim", { organisation: "Acme duplicate", accept: "2026-09-09" })]);
+    assert(grants.every((r) => r.status === 303));
+    const certificate = await a("/certificate");
+    assert.equal(certificate.status, 200);
+    assert.match(certificate.text, /Perpetual; no renewal fee/);
+    assert.match(certificate.text, /Free enterprise licence terms/);
+    assert(!certificate.text.includes("Acme <script>"));
+    assert.equal((await b("/certificate")).text, certificate.text, "subdomains and simultaneous claims share the grant");
+    const other = client(); await login(other, "carol@another-business.com");
+    assert.equal((await other("/certificate")).status, 404, "another domain cannot access the grant");
+    await a();
+    const html = (await a()).text;
+    const requestId = html.match(/name="request_id" value="([^"]+)"/)![1];
+    const enquiry = { request_id: requestId, seats: "3", message: "Need three installations. <script> stays plain text." };
+    failMail = true;
+    const failed = await a("/contact", enquiry);
+    assert.equal(failed.status, 503); assert.match(failed.text, /enquiry is saved/);
+    const failedKey = mails.at(-1)!.key;
+    await stop(); server = createEnterpriseServer(options); await start();
+    assert.match((await a()).text, /Retry saved enquiry email/, "failed enquiries survive restart and remain retryable");
+    failMail = false;
+    assert.equal((await a("/contact", enquiry)).status, 303);
+    assert.equal(mails.at(-1)!.key, failedKey, "delivery retries retain the idempotency key");
+    assert.deepEqual(mails.at(-1)!.payload.to, ["sanjaygbhat@gmail.com"]);
+    assert.equal(mails.at(-1)!.payload.reply_to, "alice@acme.co.uk");
+    const count = mails.length;
+    assert.equal((await a("/contact", enquiry)).status, 303);
+    assert.equal(mails.length, count, "duplicate form submission does not send another email");
+    assert.match((await a(`/?sent=${requestId}`)).text, /accepted by our email service/);
+    assert(!((await other(`/?sent=${requestId}`)).text.includes("accepted by our email service")));
+    assert.equal((await other("/contact", enquiry)).status, 403);
+    const locked = client(); await locked();
+    await locked("/sign-in", { email: "locked@acme.co.uk" });
+    const lockedCode = mails.at(-1)!.payload.text.match(/code is (\d{8})/)[1];
+    await locked("/verify");
+    for (let i = 0; i < 5; i++) assert.equal((await locked("/verify", { code: "wrong" })).status, 400);
+    assert.equal((await locked("/verify", { code: lockedCode })).status, 400);
+    const expired = client(); await expired();
+    await expired("/sign-in", { email: "expired@acme.co.uk" });
+    const expiredCode = mails.at(-1)!.payload.text.match(/code is (\d{8})/)[1];
+    time += 600001;
+    assert.equal((await expired("/verify", { code: expiredCode })).status, 400);
+    await stop(); server = createEnterpriseServer(options); await start();
+    assert.equal((await a("/certificate")).text, certificate.text, "licence and session survive restart");
+    time += 2 * 86400000;
+    assert.equal((await a("/certificate")).status, 401, "session expires; licence does not");
+    await login(a, "alice@acme.co.uk");
+    assert.equal((await a("/certificate")).text, certificate.text);
+    assert.equal((await a("/sign-out", {})).status, 303);
+    assert.equal((await a("/certificate")).status, 401);
+    const unavailable = client(); await unavailable(); failMail = true;
+    assert.equal((await unavailable("/sign-in", { email: "failure@acme.co.uk" })).status, 503);
+    assert.equal((await unavailable("/verify")).status, 400, "failed email leaves no usable challenge");
+    assert.equal((await unavailable("/sign-in", { email: "failure@acme.co.uk" })).status, 429);
+  } finally { await stop(); rmSync(dir, { recursive: true, force: true }); }
+});

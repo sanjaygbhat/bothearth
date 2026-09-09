@@ -99,7 +99,7 @@ Limits worth knowing before you rely on it. BotHearth is a single-operator runti
 
 ## Licence
 
-Source-available under [PolyForm Noncommercial 1.0.0](LICENSE). The license defines permitted uses; no commercial-use grant or paid offering is included in this launch. [COMMERCIAL.md](COMMERCIAL.md) explains the scope and [NOTICE](NOTICE) / [third-party notices](THIRD_PARTY_NOTICES.md) cover separately licensed components. Contributions are signed off under the [contributor licence agreement](CLA.md).
+Source-available under [PolyForm Noncommercial 1.0.0](LICENSE). The repository license defines permitted noncommercial uses. The separate [enterprise offer](https://bothearth.com/enterprise/) grants one free perpetual licence for internal business use after verification and certificate issuance; additional installations require a separate agreement. [COMMERCIAL.md](COMMERCIAL.md) explains the scope and [NOTICE](NOTICE) / [third-party notices](THIRD_PARTY_NOTICES.md) cover separately licensed components. Contributions are signed off under the [contributor licence agreement](CLA.md).
 
 ## Contributing
 

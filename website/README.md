@@ -1,6 +1,6 @@
 # BotHearth website
 
-Seven substantive pages, rendered to static HTML with a small Node standard-library build. No browser JavaScript, framework, runtime dependency, analytics, form, checkout, or hosted agent service. The agent daemon is a separate local application.
+Ten substantive pages, rendered to static HTML with a small Node standard-library build. The informational site has no browser JavaScript, framework, analytics, form, checkout, or hosted agent service. Enterprise verification, certificate issuance, and enquiry delivery run in the separate [Node service](../enterprise/README.md). The agent daemon is a separate local application.
 
 ## Build and preview
 
@@ -13,11 +13,11 @@ npm run site:test
 python3 -m http.server 4176 --bind 127.0.0.1 --directory .site-build
 ```
 
-Open <http://127.0.0.1:4176/>. Stop the local preview server with Ctrl+C. These scripts require no npm dependency installation, Docker, model account, or product build. They never touch product `dist/`.
+Open <http://127.0.0.1:4176/>. Stop the local preview server with Ctrl+C. The static build and checker require no dependency installation, Docker, model account, or product build. The enterprise integration test needs `npm ci`. They never touch product `dist/`.
 
 `website/*.html` contains authored page fragments and the shared layout. `website/site.json` supplies page titles, descriptions, slugs, repository URL, canonical site URL, and the actual source-review date. The build copies only selected public assets to `.site-build/`, then emits sitemap, robots, 404, and domain files. Serve that output, not the source directory.
 
-The one site test checks the custom domain and GitHub Pages project-path builds, plus rejection of a query-bearing canonical URL. The checker validates local links, fragments, repository document paths, CSS assets, unique metadata, schema, sitemap, image dimensions, and absence of remote runtime assets or scripts.
+The static site test checks the custom domain and GitHub Pages project-path builds, plus rejection of a query-bearing canonical URL. The checker validates local links, fragments, repository document paths, CSS assets, unique metadata, schema, sitemap, image dimensions, and absence of remote runtime assets or scripts.
 
 ## URLs and branding
 
@@ -58,12 +58,16 @@ Sitemap dates describe the actual content review, not each rebuild. Update `revi
 
 After the site is live, verify its Search Console property, submit the sitemap, inspect indexing, and check current generative-AI inclusion/reporting settings. Keep claim evidence and reproducible example results current. The [Google AI optimization guide](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide) is the primary reference; discoverability is not a promise of ranking or citation.
 
-The [IndexNow verification file](70df6a3860a46a46f4485513292e8249.txt) is deliberately public proof of host control, separate from any account credential. After deployment, confirm that `https://bothearth.com/70df6a3860a46a46f4485513292e8249.txt` serves the exact key `70df6a3860a46a46f4485513292e8249` over HTTPS. Then submit one JSON POST to `https://api.indexnow.org/indexnow` with `host: "bothearth.com"`, that `key`, the public file URL as `keyLocation`, and a `urlList` containing only added, changed, or deleted canonical BotHearth URLs. The initial launch can submit the seven canonical page URLs in the sitemap. Use `Content-Type: application/json; charset=utf-8`.
+The [IndexNow verification file](70df6a3860a46a46f4485513292e8249.txt) is deliberately public proof of host control, separate from any account credential. After deployment, confirm that `https://bothearth.com/70df6a3860a46a46f4485513292e8249.txt` serves the exact key `70df6a3860a46a46f4485513292e8249` over HTTPS. Then submit one JSON POST to `https://api.indexnow.org/indexnow` with `host: "bothearth.com"`, that `key`, the public file URL as `keyLocation`, and a `urlList` containing only added, changed, or deleted canonical BotHearth URLs. The initial launch can submit the canonical page URLs in the sitemap. Use `Content-Type: application/json; charset=utf-8`.
 
 Submit after the public change is deployed; unchanged URLs need no repeated notification. HTTP 200 acknowledges receipt, while 202 means key validation is pending. Neither proves crawling, indexing, ranking, or AI citation. Follow the [IndexNow protocol](https://www.indexnow.org/documentation) and its [official endpoint guidance](https://www.indexnow.org/faq).
 
 ## Licence and privacy
 
-Project code and artwork follow the repository licence and notices. Fraunces retains its [SIL Open Font License](fonts/Fraunces-OFL.txt). This release is source-available for permitted noncommercial purposes; it includes no commercial-use grant.
+Project code and artwork follow the repository licence and notices. Fraunces retains its [SIL Open Font License](fonts/Fraunces-OFL.txt). This release is source-available for permitted noncommercial purposes; the separate enterprise offer supplies internal commercial-use rights only after verification and certificate issuance.
 
 This static site adds no analytics or cookies. The host receives normal web request data under its own policy. The public security page distinguishes this website from the application's remote model, website, connector, and paired-device data flows.
+
+## Enterprise entry point
+
+Set the GitHub Actions repository variable `SITE_ENTERPRISE_URL` to the verified HTTPS origin of the deployed enterprise service, for example `https://enterprise.bothearth.com`. The builder validates it and adds sign-in/contact links. Leave it unset until the service and real email delivery are verified; the page then explicitly says online claims are not open and provides direct email contact. Run the build and tests with the same variable. GitHub Pages hosts only static output and cannot run `enterprise/server.mjs`. Do not publish the licence database, environment files, or private enquiry records.

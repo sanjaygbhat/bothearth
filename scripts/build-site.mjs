@@ -16,11 +16,14 @@ for (const url of [site, repository]) {
     "Site and repository URLs must be HTTPS without credentials, a query, or a fragment");
 }
 site.pathname = `${site.pathname.replace(/\/$/, "")}/`;
+const enterprise = process.env.SITE_ENTERPRISE_URL ? new URL(process.env.SITE_ENTERPRISE_URL) : null;
+if (enterprise) assert(enterprise.protocol === "https:" && !enterprise.username && !enterprise.password && !enterprise.search && !enterprise.hash && enterprise.pathname === "/",
+  "SITE_ENTERPRISE_URL must be an HTTPS origin without credentials, path, query, or fragment");
 const repo = repository.href.replace(/\/$/, "");
 const escape = (value) => String(value).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const template = readFileSync(join(source, "layout.html"), "utf8");
-const nav = [["how-it-works", "How it works"], ["examples", "What it can do"], ["faq", "FAQ"]];
+const nav = [["how-it-works", "How it works"], ["examples", "What it can do"], ["faq", "FAQ"], ["enterprise", "Enterprise"]];
 const pages = config.pages;
 assert.equal(new Set(pages.map((page) => page.slug)).size, pages.length, "Duplicate page slug");
 const author = { "@type": "Person", "@id": `${site.href}about/#author`,
@@ -46,6 +49,8 @@ for (const page of pages) {
   const values = { TITLE: escape(page.title), DESCRIPTION: escape(page.description),
     CANONICAL: escape(canonical), SITE: escape(site.href), BASE: escape(site.pathname),
     REPOSITORY: escape(repo), VERSION: escape(version), DATE: escape(config.reviewed),
+    ENTERPRISEACTION: enterprise ? `<a class="button" href="${escape(enterprise.href)}">Sign in with work email →</a>` : `<p class="qualification">Online claims are not open yet. <a href="mailto:sanjaygbhat@gmail.com?subject=BotHearth%20enterprise%20licence">Contact Sanjay to arrange your licence</a>.</p>`,
+    ENTERPRISECONTACT: enterprise ? `<a class="button" href="${escape(enterprise.href)}#contact">Contact us</a>` : `<a class="button" href="mailto:sanjaygbhat@gmail.com?subject=BotHearth%20additional%20licences">Contact us by email</a>`,
     NAV: nav.map(([slug, label]) => `<a href="${escape(`${site.pathname}${slug}/`)}"${slug === page.slug ? ' aria-current="page"' : ""}>${label}</a>`).join(""),
     SCHEMA: JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c") };
   const render = (html) => html.replace(/\{\{([A-Z]+)\}\}/g, (_, key) => {

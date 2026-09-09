@@ -48,3 +48,9 @@ Review harness histories and `task-runs` diagnostics separately before sharing l
 On a remote VM, its provider can access unencrypted disks and snapshots. Use SSH or Tailscale to reach the UI and protect the host's vault and backups.
 
 See [SECURITY.md](SECURITY.md) for trust boundaries and [configuration](docs/CONFIG.md) for paths.
+
+## Enterprise licensing service
+
+The separate enterprise service collects verified work emails, organisation names and domains, licence records and accepted terms, and optional enquiries for additional licences. It uses Resend for verification codes and sends enquiries to Sanjay Bhat at sanjaygbhat@gmail.com. It does not receive local agent tasks or model credentials.
+
+Codes are keyed hashes, expire after ten minutes, and allow five attempts. HttpOnly session cookies expire after 24 hours; sign-out invalidates the server session. Hashed rate-limit identifiers expire within one hour. Expired authentication/rate records are removed on the next request. Perpetual licence records remain as evidence of the grant. Enquiry database records are removed after 90 days on the next request; mailbox, provider, backup, and hosting retention are separate. Contact [Sanjay](mailto:sanjaygbhat@gmail.com) for data corrections or requests. See the [website privacy notice](https://bothearth.com/security/#website) and [Resend privacy policy](https://resend.com/legal/privacy-policy).

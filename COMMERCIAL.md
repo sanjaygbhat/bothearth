@@ -1,12 +1,12 @@
 # License and costs
 
-BotHearth's current release is free for the noncommercial purposes permitted by [PolyForm Noncommercial 1.0.0](LICENSE). There is no BotHearth checkout, paid plan, managed service, or model-access resale in this launch.
+BotHearth's current release is free for the noncommercial purposes permitted by [PolyForm Noncommercial 1.0.0](LICENSE). Organisations can claim one free perpetual internal-business-use licence under the separate [enterprise offer](https://bothearth.com/enterprise/). Additional installation licences are US$99 each, paid once, for business customers outside India, plus any applicable taxes. There are no voluntary refunds; mandatory legal and payment-provider rights remain. Read the [paid terms](https://bothearth.com/terms/) and [refund policy](https://bothearth.com/refunds/). Orders are available by enquiry to [Sanjay Bhat](mailto:sanjaygbhat@gmail.com). There is no automated paid checkout, managed service, or model-access resale.
 
 ## What is permitted?
 
-The license permits noncommercial purposes and identifies qualifying personal uses and organizations. Hobby projects, personal study, and qualifying educational or charitable use are examples; read the actual license for its conditions. Being free of charge does not, by itself, make a use noncommercial. Paid client work, commercial internal automation, resale, and hosted commercial services are not granted by this release.
+The license permits noncommercial purposes and identifies qualifying personal uses and organizations. Hobby projects, personal study, and qualifying educational or charitable use are examples; read the actual license for its conditions. Being free of charge does not, by itself, make a use noncommercial. The repository licence does not grant commercial internal automation, paid client work, resale, or hosted commercial services. An issued enterprise certificate supplies the additional internal-use rights stated in that certificate.
 
-The license controls; this page does not add an evaluation exception or another grant of rights. Any separately executed agreement remains governed by its own terms. License questions can be sent to [Sanjay Bhat](mailto:sanjaygbhat@gmail.com).
+The free enterprise certificate covers one running installation of its recorded version, internal modifications, backups, and replacement hardware. It has no expiry or renewal fee; future releases, support, model access, hosting, resale, and third-party services are excluded. One free grant per organisation and registrable domain; subdomains and colleagues share it. The offer takes effect only after work-email verification, acceptance by an authorised representative, and certificate issuance. Read the [full offer terms](https://bothearth.com/enterprise/#terms). Online claims remain closed until the separate service is configured; the source download alone is not an enterprise grant. Any separately executed agreement remains governed by its own terms. License questions can be sent to [Sanjay Bhat](mailto:sanjaygbhat@gmail.com).
 
 ## Is this open source?
 

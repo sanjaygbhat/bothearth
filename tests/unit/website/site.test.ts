@@ -6,10 +6,10 @@ import { test } from "node:test";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 test("static site builds and checks both the custom domain and a Pages project path", () => {
-  const run = (script: string, site: string) => {
+  const run = (script: string, site: string, enterprise = "") => {
     const result = spawnSync(process.execPath, [script], {
       cwd: root, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, SITE_URL: site },
+      env: { ...process.env, SITE_URL: site, SITE_ENTERPRISE_URL: enterprise },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   };
@@ -19,12 +19,24 @@ test("static site builds and checks both the custom domain and a Pages project p
       run("scripts/build-site.mjs", site);
       run("scripts/check-site.mjs", site);
     }
+    const enterprisePage = new URL("../../../.site-build/enterprise/index.html", import.meta.url);
+    assert.match(readFileSync(enterprisePage, "utf8"), /Online claims are not open yet/);
+    run("scripts/build-site.mjs", config.url, "https://enterprise.bothearth.com");
+    run("scripts/check-site.mjs", config.url, "https://enterprise.bothearth.com");
+    assert.match(readFileSync(enterprisePage, "utf8"), /href="https:\/\/enterprise.bothearth.com\/">Sign in with work email/);
+    for (const enterprise of ["http://enterprise.bothearth.com", "https://user:password@example.com", "https://example.com/path", "https://example.com/?token=secret"]) {
+      const invalidEnterprise = spawnSync(process.execPath, ["scripts/build-site.mjs"], {
+        cwd: root, encoding: "utf8", timeout: 30_000,
+        env: { ...process.env, SITE_URL: config.url, SITE_ENTERPRISE_URL: enterprise },
+      });
+      assert.notEqual(invalidEnterprise.status, 0, "Unsafe enterprise URL must be rejected");
+    }
     const invalid = spawnSync(process.execPath, ["scripts/build-site.mjs"], {
       cwd: root, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, SITE_URL: "https://example.com/?tracking=1" },
     });
     assert.notEqual(invalid.status, 0, "Query-bearing canonical URL must be rejected");
   } finally {
-    run("scripts/build-site.mjs", config.url);
+    run("scripts/build-site.mjs", config.url, process.env.SITE_ENTERPRISE_URL || "");
   }
 });

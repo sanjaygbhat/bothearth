@@ -20,6 +20,8 @@ The lockfiles pin npm packages. They are installed from their publishers rather 
 |---|---|---|
 | `@modelcontextprotocol/sdk` | 1.30.0 | MIT |
 | `yaml` | 2.9.0 | ISC |
+| `tldts`, `tldts-core` (enterprise domain normalization) | 7.4.12 | MIT |
+| `disposable-email-domains` (enterprise eligibility list) | 1.0.62 | MIT |
 | `playwright`, `playwright-core` | 1.59.1 | Apache-2.0 |
 | TypeScript (build tool) | See lockfiles | Apache-2.0 |
 | `@types/node` (build types) | See lockfiles | MIT |

@@ -19,9 +19,9 @@ const ROOT_FILES = new Set([
   "flavours/claude-modelbot/.claude-plugin/marketplace.json",
 ]);
 const DIRECTORIES = ["src/", "computer-server/", "tests/", "scripts/", "policy/", "sandbox/",
-  "assets/brand/", "assets/screenshots/", "apps/macos/", "mobile/", "flavours/", "website/"];
+  "assets/brand/", "assets/screenshots/", "apps/macos/", "mobile/", "flavours/", "website/", "enterprise/"];
 const EXCLUDED_PART = /^(?:\..*|node_modules|dist|build|coverage|data|internal|DerivedData|xcuserdata|target|__pycache__)$/;
-const EXCLUDED_FILE = /(?:\.(?:log|pid|sqlite3?|db|enc|jks|keystore|p12|mobileprovision|tgz|zip)|(?:^|\/)(?:local\.properties|tokens?\.json|credentials?\.json|auth\.json))$/i;
+const EXCLUDED_FILE = /(?:\.(?:log|pid|sqlite3?(?:-(?:wal|shm))?|db|enc|jks|keystore|p12|mobileprovision|tgz|zip)|(?:^|\/)(?:local\.properties|tokens?\.json|credentials?\.json|auth\.json))$/i;
 const PRIVATE_SCREENSHOTS = new Set(["assets/screenshots/home.png", "assets/screenshots/driving.png",
   "website/screenshots/home.png", "website/screenshots/home-dark.png", "website/screenshots/driving.png"]);
 const SCAN_RULES = [
@@ -117,8 +117,8 @@ function exportSource(out, repository) {
 
 function selfTest() {
   for (const path of PRIVATE_SCREENSHOTS) assert(!isPublicPath(path), path);
-  for (const path of ["src/cli/index.ts", "LICENSE", "docs/QUICKSTART.md", ".github/workflows/pages.yml", "tests/fixtures/jcs/input/values.json"]) assert(isPublicPath(path), path);
-  for (const path of [".claude/secret", "docs/internal/review.md", "data/tasks.sqlite", "website/.env", "src/.env.local", "mobile/android/local.properties", "website/dist/private.html", "src/../private", ".github/workflows/verify.yml"]) assert(!isPublicPath(path), path);
+  for (const path of ["src/cli/index.ts", "enterprise/server.mjs", "enterprise/README.md", "LICENSE", "docs/QUICKSTART.md", ".github/workflows/pages.yml", "tests/fixtures/jcs/input/values.json"]) assert(isPublicPath(path), path);
+  for (const path of [".claude/secret", "docs/internal/review.md", "data/tasks.sqlite", "enterprise/licences.sqlite-wal", "enterprise/licences.sqlite-shm", "enterprise/.env", "enterprise/data/licences.sqlite", "website/.env", "src/.env.local", "mobile/android/local.properties", "website/dist/private.html", "src/../private", ".github/workflows/verify.yml"]) assert(!isPublicPath(path), path);
   assert.equal(scanText("sample", "safe documentation").length, 0);
   const secret = "ghp_" + "a".repeat(36);
   const found = scanText("sample", "first line\n" + secret);

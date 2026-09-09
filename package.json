@@ -50,7 +50,8 @@
     "prepack": "npm run build",
     "site:build": "node scripts/build-site.mjs",
     "site:check": "node scripts/check-site.mjs",
-    "site:test": "node --test tests/unit/website/site.test.ts"
+    "site:test": "node --test tests/unit/website/*.test.ts",
+    "enterprise:start": "node enterprise/server.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
@@ -59,6 +60,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "disposable-email-domains": "1.0.62",
+    "tldts": "7.4.12",
     "yaml": "^2.9.0"
   },
   "files": [
