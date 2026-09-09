@@ -19,6 +19,15 @@ test("static site builds and checks both the custom domain and a Pages project p
       run("scripts/build-site.mjs", site);
       run("scripts/check-site.mjs", site);
     }
+    const terms = readFileSync(new URL("../../../.site-build/terms/index.html", import.meta.url), "utf8");
+    assert.match(terms, /US\$49/);
+    assert(!terms.includes("US$99"));
+    assert.match(terms, /modified, rebranded/);
+    assert.match(terms, /never grants resale or sublicensing/);
+    assert.match(terms, /without output royalties/);
+    const permission = readFileSync(new URL("../../../COMMERCIAL.md", import.meta.url), "utf8");
+    assert.match(permission, /no ownership of outputs/);
+    assert.match(permission, /Buying more US\$49 licences does not grant them/);
     const enterprisePage = new URL("../../../.site-build/enterprise/index.html", import.meta.url);
     assert.match(readFileSync(enterprisePage, "utf8"), /Online claims are not open yet/);
     run("scripts/build-site.mjs", config.url, "https://enterprise.bothearth.com");

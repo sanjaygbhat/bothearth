@@ -20,7 +20,7 @@
 
 Give BotHearth a task: research a topic from pages you provide, compare your options, or turn a personal reading log into a summary. Your AI agent uses its computer to browse and work with files while you follow along. Review requests, take control when a site needs you, and open the results it saves.
 
-The software is free for the noncommercial purposes permitted by its [license](LICENSE). There is no BotHearth subscription or checkout. You supply the machine and an eligible model account; provider usage, electricity, and optional hosting can cost money. This release is source-available under PolyForm Noncommercial, which is **not an OSI open-source license**. See [license and cost questions](COMMERCIAL.md).
+One business bot is free under the limited-time perpetual [business permission](COMMERCIAL.md); additional business bots are US$49 each, once. You may sell the work it creates. Standard grants exclude resale and hosting of BotHearth or modified copies as a service. There is no BotHearth subscription or checkout. You supply the machine and an eligible model account; provider usage, electricity, and optional hosting can cost money. This release is source-available under PolyForm Noncommercial, which is **not an OSI open-source license**. See [license and cost questions](COMMERCIAL.md).
 
 You need macOS or Linux, Node.js 22.18 or newer, a running container runtime, and either [Claude Code](docs/CLAUDE-CODE.md) or [Codex](docs/PROVIDERS.md) installed and authenticated on the host. Use Docker Engine on Linux; Docker Desktop, OrbStack, or Colima on macOS. Container runtimes have their own license terms; see the [quickstart](docs/QUICKSTART.md).
 
@@ -99,7 +99,7 @@ Limits worth knowing before you rely on it. BotHearth is a single-operator runti
 
 ## Licence
 
-Source-available under [PolyForm Noncommercial 1.0.0](LICENSE). The repository license defines permitted noncommercial uses. The separate [enterprise offer](https://bothearth.com/enterprise/) grants one free perpetual licence for internal business use after verification and certificate issuance; additional installations require a separate agreement. [COMMERCIAL.md](COMMERCIAL.md) explains the scope and [NOTICE](NOTICE) / [third-party notices](THIRD_PARTY_NOTICES.md) cover separately licensed components. Contributions are signed off under the [contributor licence agreement](CLA.md).
+Source-available under [PolyForm Noncommercial 1.0.0](LICENSE). The unchanged repository licence defines permitted noncommercial uses; [the additional business permission](COMMERCIAL.md) allows one free business bot and commercial outputs. The optional [work-domain certificate](https://bothearth.com/enterprise/) records the same perpetual free entitlement. Additional business bots cost US$49 each, once. Neither standard grant includes commercial resale, sublicensing or customer-facing hosting of BotHearth, including modified copies. [COMMERCIAL.md](COMMERCIAL.md) explains the scope and [NOTICE](NOTICE) / [third-party notices](THIRD_PARTY_NOTICES.md) cover separately licensed components. Contributions are signed off under the [contributor licence agreement](CLA.md).
 
 ## Contributing
 

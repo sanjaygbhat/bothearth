@@ -115,7 +115,7 @@ Action classification uses observed signals and cannot recognize every possible 
 
 ## Reporting vulnerabilities
 
-1. Use [the contact form](https://bothearth.com/contact/) and mention that it is a security report, or use **GitHub Security Advisories** when private reporting is enabled on the public repository. Send a short impact summary first; agree on a safe way to transfer sensitive reproduction data.
+1. Use [GitHub’s private vulnerability reporting form](https://github.com/sanjaygbhat/bothearth/security/advisories/new), enabled on the public repository. Send a short impact summary first; agree on a safe way to transfer sensitive reproduction data.
 2. Include: BotHearth version/commit, host OS, container runtime, reproduction steps, and impact.
 3. Allow a reasonable window for a fix before public disclosure. This repository is pre-release; include the exact commit in reports. There is no security certification, guaranteed response time, or paid support SLA.
 
@@ -126,3 +126,5 @@ Do **not** open a public issue that includes exploit details for unpatched vulne
 - [PRIVACY.md](./PRIVACY.md) — data residency, retention, purge
 - [Release verification](docs/SECURITY-CHECKLIST.md) — checks to record for the released revision
 - [Architecture](docs/ARCHITECTURE.md) — current component and data flow
+
+- [Dated engineering security review](docs/SECURITY-REVIEW-2026-09-09.md) — findings, fixes, public test receipts and limits

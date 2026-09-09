@@ -64,7 +64,7 @@ Submit after the public change is deployed; unchanged URLs need no repeated noti
 
 ## Licence and privacy
 
-Project code and artwork follow the repository licence and notices. Fraunces retains its [SIL Open Font License](fonts/Fraunces-OFL.txt). This release is source-available for permitted noncommercial purposes; the separate enterprise offer supplies internal commercial-use rights only after verification and certificate issuance.
+Project code and artwork follow the repository licence and notices. Fraunces retains its [SIL Open Font License](fonts/Fraunces-OFL.txt). This release is source-available under PolyForm Noncommercial plus the Business and Output Permission in COMMERCIAL.md. One business bot is free; certificates record that entitlement, and additional business bots cost US$49 each, once. Standard grants exclude commercial replication of the service, including modified copies. Outputs may be sold.
 
 This static site adds no analytics or cookies. The host receives normal web request data under its own policy. The public security page distinguishes this website from the application's remote model, website, connector, and paired-device data flows.
 

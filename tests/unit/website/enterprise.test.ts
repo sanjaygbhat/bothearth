@@ -44,7 +44,7 @@ test("enterprise verification, domain-wide perpetual grants, and durable contact
     await start();
     const a = client();
     await a();
-    assert.equal((await a("/claim", { organisation: "Acme", accept: "2026-09-09" })).status, 401);
+    assert.equal((await a("/claim", { organisation: "Acme", accept: "2026-09-09.2" })).status, 401);
     assert.equal((await a("/sign-in", { email: "a@acme.co.uk" }, "https://evil.test")).status, 403);
     assert.equal((await a("/sign-in", { email: "a@acme.co.uk", csrf: "wrong" })).status, 403);
     assert.equal((await a("/sign-in", { email: "a@gmail.com" })).status, 400);
@@ -52,7 +52,7 @@ test("enterprise verification, domain-wide perpetual grants, and durable contact
     assert.equal((await a("/verify", { code })).status, 400, "code cannot be replayed");
     assert.equal((await a("/claim", { organisation: "Acme" })).status, 400, "terms acceptance is required");
     const b = client(); await login(b, "bob@department.acme.co.uk");
-    const grants = await Promise.all([a("/claim", { organisation: "Acme <script>", accept: "2026-09-09" }), b("/claim", { organisation: "Acme duplicate", accept: "2026-09-09" })]);
+    const grants = await Promise.all([a("/claim", { organisation: "Acme <script>", accept: "2026-09-09.2" }), b("/claim", { organisation: "Acme duplicate", accept: "2026-09-09.2" })]);
     assert(grants.every((r) => r.status === 303));
     const certificate = await a("/certificate");
     assert.equal(certificate.status, 200);

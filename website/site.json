@@ -50,13 +50,13 @@
       "slug": "enterprise",
       "file": "enterprise.html",
       "title": "BotHearth for enterprises \u2014 one free perpetual licence per organisation",
-      "description": "Verify your work email to claim one free perpetual BotHearth licence for internal business use. Contact us for additional installations."
+      "description": "One free perpetual business bot per organisation. Sell what it creates. Record your work-domain certificate; additional bots cost US$49 each, once."
     },
     {
       "slug": "terms",
       "file": "terms.html",
-      "title": "BotHearth commercial terms \u2014 US$99 perpetual installation licences",
-      "description": "Business licence terms for BotHearth: US$99 per additional installation, one-time payment, internal use, email delivery, and clear alpha software limits."
+      "title": "BotHearth commercial terms \u2014 US$49 per additional business bot",
+      "description": "One-time US$49 business bot licences. Sell outputs; no resale, sublicensing or hosting of BotHearth copies, including modified versions."
     },
     {
       "slug": "refunds",
@@ -69,6 +69,12 @@
       "file": "contact.html",
       "title": "Contact BotHearth \u2014 licences, sales, and support",
       "description": "Contact BotHearth about enterprise licences, billing, or support. Send your enquiry through our private contact form."
+    },
+    {
+      "slug": "security-review",
+      "file": "security-review.html",
+      "title": "BotHearth security review \u2014 dated findings and public test receipts",
+      "description": "An internal engineering review: four fixes, 9 container integration checks and 21 egress probes. Read the tested revision, public receipts and limits."
     }
   ]
 }

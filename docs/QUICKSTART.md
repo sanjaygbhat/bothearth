@@ -14,7 +14,7 @@ You need macOS or Linux, Node.js 22.18 or newer, and either Claude Code or Codex
 
 Your bot works in separate containers. On macOS, install [OrbStack](https://orbstack.dev), [Docker Desktop](https://www.docker.com/products/docker-desktop/), or Colima. On Linux, use Docker Engine. Start the runtime and leave it running.
 
-BotHearth has no software charge for permitted noncommercial use. Docker Desktop and OrbStack apply their own eligibility rules: [Docker Desktop license](https://docs.docker.com/subscription-billing/desktop-license/) and [OrbStack licensing](https://docs.orbstack.dev/licensing). Model accounts and optional rented servers are separate costs.
+BotHearth offers one free business bot under its [business permission](../COMMERCIAL.md), with additional business bots at US$49 each, once. Outputs may be sold; reselling or hosting a copy of the BotHearth service is excluded from standard grants. Docker Desktop and OrbStack apply their own eligibility rules: [Docker Desktop license](https://docs.docker.com/subscription-billing/desktop-license/) and [OrbStack licensing](https://docs.orbstack.dev/licensing). Model accounts and optional rented servers are separate costs.
 
 Docker Engine, OrbStack, Colima and Docker Desktop are all supported. Podman is experimental. Windows needs WSL2.
 
