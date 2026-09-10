@@ -34,13 +34,13 @@ export function parseCookies(header: string | undefined): Record<string, string>
  * session away and force a fresh `modelbot pair`. The server still decides when
  * the session dies; the cookie only has to outlive the browser.
  */
-export function sessionCookieHeader(sessionId: string, secure = false): string {
+export function sessionCookieHeader(sessionId: string, secure = false, name = SESSION_COOKIE): string {
   const maxAge = Math.floor(SESSION_MAX_LIFETIME_MS / 1000);
-  return `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+  return `${name}=${encodeURIComponent(sessionId)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
 }
 
-export function clearSessionCookieHeader(secure = false): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}`;
+export function clearSessionCookieHeader(secure = false, name = SESSION_COOKIE): string {
+  return `${name}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 function safeEqualStr(a: string, b: string): boolean {

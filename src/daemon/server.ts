@@ -1588,6 +1588,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     });
   }
 
+  // Cookies ignore ports. Local and tunneled daemons need distinct names.
+  function sessionCookieName(req: IncomingMessage): string {
+    const origin = new URL(requestOrigin(req) ?? `http://127.0.0.1:${wantPort}`);
+    return `${SESSION_COOKIE}_${origin.port || (origin.protocol === "https:" ? 443 : 80)}`;
+  }
+
   function requireUiSession(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1601,7 +1607,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return null;
     }
     const cookies = parseCookies(req.headers.cookie);
-    const sid = cookies[SESSION_COOKIE];
+    const sid = cookies[sessionCookieName(req)] ?? cookies[SESSION_COOKIE];
     if (!sid) {
       writeJson(res, 401, { error: "E_AUTH", message: "missing session" });
       return null;
@@ -1620,6 +1626,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         });
         return null;
       }
+    }
+    if (!cookies[sessionCookieName(req)]) {
+      res.setHeader("set-cookie", sessionCookieHeader(session.id, Boolean(requestOrigin(req)?.startsWith("https://")), sessionCookieName(req)));
     }
     return { sessionId: session.id, csrf: session.csrf };
   }
@@ -1761,7 +1770,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         res,
         200,
         { ok: true, csrf: session.csrf, mode: opts.mode ?? "supervised", ...executionInfo, licence: licenceState(store, opts.licencePolicy) },
-        { "set-cookie": sessionCookieHeader(session.id, origin.startsWith("https://")) },
+        { "set-cookie": sessionCookieHeader(session.id, origin.startsWith("https://"), sessionCookieName(req)) },
       );
       return;
     }
@@ -1776,7 +1785,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         res,
         200,
         { ok: true },
-        { "set-cookie": clearSessionCookieHeader(Boolean(requestOrigin(req)?.startsWith("https://"))) },
+        { "set-cookie": clearSessionCookieHeader(Boolean(requestOrigin(req)?.startsWith("https://")), sessionCookieName(req)) },
       );
       return;
     }
@@ -3016,7 +3025,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return;
     }
     const cookies = parseCookies(req.headers.cookie);
-    const sid = cookies[SESSION_COOKIE];
+    const sid = cookies[sessionCookieName(req)] ?? cookies[SESSION_COOKIE];
     const session = sid ? store.getSession(sid) : undefined;
     if (!session || !sessionOriginMatches(req, session.origin) || origin !== requestOrigin(req)) {
       rejectUpgrade(socket, 401, "Unauthorized");

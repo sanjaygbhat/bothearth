@@ -11,6 +11,39 @@ import {
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { Store } from "../../../src/daemon/store.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
+import { until } from "../../helpers/until.ts";
+
+test("two loopback daemons share a browser without replacing each other's session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bothearth-cookie-ports-"));
+  const first = await startDaemon({ port: 0, workspaceRoot: join(root, "a"), bootstrapToken: "first-boot" });
+  const second = await startDaemon({ port: 0, workspaceRoot: join(root, "b"), bootstrapToken: "second-boot" });
+  const sockets: WebSocket[] = [];
+  try {
+    const a = await bootstrapSession(first, "first-boot"), b = await bootstrapSession(second, "second-boot");
+    assert.notEqual(a.cookie.split("=")[0], b.cookie.split("=")[0], "browsers scope cookies to hosts, not ports");
+    const cookie = `${a.cookie}; ${b.cookie}`;
+    for (const [daemon, session] of [[first, a], [second, b]] as const) {
+      const response = await fetch(daemon.baseUrl + "/api/v1/session", { headers: { ...session.headers, cookie } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json() as { csrf: string }).csrf, session.csrf);
+      const ws = new WebSocket(daemon.baseUrl.replace("http", "ws") + "/api/v1/events", { headers: { Origin: daemon.baseUrl, Cookie: cookie } });
+      sockets.push(ws);
+      await until(() => ws.readyState === WebSocket.OPEN);
+    }
+    const legacy = first.store.createSession(undefined, first.baseUrl);
+    const migrated = await fetch(first.baseUrl + "/api/v1/session", { headers: { origin: first.baseUrl, cookie: `modelbot_session=${legacy.id}` } });
+    assert.equal(migrated.status, 200);
+    assert.match(migrated.headers.get("set-cookie") ?? "", new RegExp(`^modelbot_session_${first.port}=`));
+    const logout = await fetch(first.baseUrl + "/api/v1/session/logout", { method: "POST", headers: { ...a.headers, cookie } });
+    assert.equal(logout.status, 200);
+    assert.match(logout.headers.get("set-cookie") ?? "", new RegExp(`^modelbot_session_${first.port}=;`));
+    assert.equal((await fetch(second.baseUrl + "/api/v1/session", { headers: { ...b.headers, cookie } })).status, 200);
+  } finally {
+    for (const ws of sockets) ws.close();
+    await first.close(); await second.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("a session outlives the daemon that issued it", async () => {
   const root = mkdtempSync(join(tmpdir(), "modelbot-session-restart-"));
