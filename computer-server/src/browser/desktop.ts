@@ -96,7 +96,7 @@ export class Desktop {
     else if (p.action === "up") { args.push("mouseup", String(button)); this.heldButtons.delete(button); }
     else if (p.action === "wheel") {
       for (const [delta, negative, positive] of [[p.dy ?? 0, 4, 5], [p.dx ?? 0, 6, 7]])
-        if (delta) args.push("click", "--repeat", String(Math.min(10, Math.max(1, Math.ceil(Math.abs(delta!) / 100)))), String(delta! < 0 ? negative : positive));
+        if (delta) args.push("click", "--delay", "0", "--repeat", String(Math.min(10, Math.max(1, Math.ceil(Math.abs(delta!) / 100)))), String(delta! < 0 ? negative : positive));
     }
     await this.run("xdotool", args);
   }
