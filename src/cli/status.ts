@@ -23,7 +23,7 @@ function baseUrlFromEnv(): string {
 function cookieFromSetCookie(headers: Headers): string {
   for (const raw of headers.getSetCookie()) {
     const part = String(raw).split(";")[0];
-    if (part?.startsWith(`${SESSION_COOKIE}=`)) return part;
+    if (part && new RegExp(`^${SESSION_COOKIE}(?:_[0-9]+)?=`).test(part)) return part;
   }
   return "";
 }

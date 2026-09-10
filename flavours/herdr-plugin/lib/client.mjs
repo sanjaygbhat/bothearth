@@ -32,7 +32,7 @@ function cookieFromSetCookie(headers) {
         : [];
   for (const raw of list) {
     const part = String(raw).split(";")[0];
-    if (part && part.startsWith(`${SESSION_COOKIE}=`)) return part;
+    if (part && new RegExp(`^${SESSION_COOKIE}(?:_[0-9]+)?=`).test(part)) return part;
   }
   return "";
 }

@@ -58,7 +58,7 @@ final class Workspace {
             synchronized(this) { if(version != generation) throw new Exception("The connection changed. Open the current workspace again."); if (code == 401 || code == 403) { generation++; cookie=""; csrf=""; vault.clear(); throw new Expired(); } }
             if (code < 200 || code >= 300) throw new Exception("The workspace could not complete this request (" + code + "). Check its status before trying again.");
             String setCookie = connection.getHeaderField("Set-Cookie");
-            synchronized(this) { if(version != generation) throw new Exception("The connection changed."); if (setCookie != null) for (HttpCookie value : HttpCookie.parse(setCookie)) if (value.getName().equals("modelbot_session")) cookie = value.getName() + "=" + value.getValue(); }
+            synchronized(this) { if(version != generation) throw new Exception("The connection changed."); if (setCookie != null) for (HttpCookie value : HttpCookie.parse(setCookie)) if (value.getName().matches("modelbot_session(?:_[0-9]+)?")) cookie = value.getName() + "=" + value.getValue(); }
             try (InputStream stream = connection.getInputStream()) {
                 java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(); byte[] chunk = new byte[8192]; int count;
                 while ((count = stream.read(chunk)) != -1) { if (buffer.size() + count > 2_000_000) throw new Exception("Workspace response exceeds this app’s size limit."); buffer.write(chunk, 0, count); }

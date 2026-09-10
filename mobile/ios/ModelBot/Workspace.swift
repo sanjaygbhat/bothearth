@@ -170,7 +170,7 @@ enum WorkspaceError: LocalizedError {
     }
     if let fields = response.allHeaderFields as? [String: String],
       let received = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url).first(where: {
-        $0.name == "modelbot_session"
+        $0.name.range(of: #"^modelbot_session(?:_[0-9]+)?$"#, options: .regularExpression) != nil
       })
     {
       cookie = "\(received.name)=\(received.value)"
