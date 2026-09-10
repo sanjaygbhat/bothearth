@@ -2,7 +2,7 @@
   "name": "BotHearth",
   "url": "https://bothearth.com/",
   "repository": "https://github.com/sanjaygbhat/bothearth",
-  "reviewed": "2026-09-09",
+  "reviewed": "2026-09-10",
   "pages": [
     {
       "slug": "",
@@ -32,7 +32,7 @@
       "slug": "examples",
       "file": "examples.html",
       "title": "What BotHearth can do — tasks to try with your AI agent",
-      "description": "Ask BotHearth to research a topic, compare options from pages you provide, or summarize a personal reading log. Try a prompt and open the result it saves."
+      "description": "Try BotHearth on live web research, product comparisons, website audits and temporary server environments. Browser prompts, saved results and checks you can repeat."
     },
     {
       "slug": "faq",
@@ -69,6 +69,72 @@
       "file": "contact.html",
       "title": "Contact BotHearth — licences, sales, and support",
       "description": "Check contact-form availability for BotHearth enterprise licences, billing and support. One free business bot requires no registration or enquiry."
+    },
+    {
+      "slug": "when-agent-needs-browser-computer",
+      "file": "when-agent-needs-browser-computer.html",
+      "title": "When Does an AI Agent Need Its Own Browser and Computer?",
+      "description": "See when an AI agent needs its own browser and computer, with a decision table, three practical workflows, and a test for whether persistence earns its cost."
+    },
+    {
+      "slug": "browser-agent-local-vs-vm",
+      "file": "browser-agent-local-vs-vm.html",
+      "title": "Browser Agent: Local or VM? A Practical Decision Guide",
+      "description": "Compare running a browser agent locally or on a VM: privacy, availability, setup, private access, costs, persistence, and checks before your first task."
+    },
+    {
+      "slug": "temporary-environments-browser-agent-troubleshooting",
+      "file": "temporary-environments-browser-agent-troubleshooting.html",
+      "title": "Temporary Test Environments: A Browser-Agent Workflow",
+      "description": "Plan a temporary browser-agent workflow: reproduce faults, inspect server logs, preserve findings and authorize cleanup separately from paid infrastructure."
+    },
+    {
+      "slug": "monitor-server-health-logs-agent-computer",
+      "file": "monitor-server-health-logs-agent-computer.html",
+      "title": "Monitor Server Health and Logs with an Agent Computer",
+      "description": "Use a separate agent computer to investigate server health and logs, with read-only access, redaction, practical checks, tested alerts and recovery planning."
+    },
+    {
+      "slug": "collect-invoices-billing-portals-without-passwords",
+      "file": "collect-invoices-billing-portals-without-passwords.html",
+      "title": "Collect Portal Invoices Without Sharing Your Passwords",
+      "description": "Collect billing-portal invoices with human sign-in, limited access, a download ledger, duplicate checks and durable files—then verify totals before filing."
+    },
+    {
+      "slug": "evidence-backed-competitor-report",
+      "file": "evidence-backed-competitor-report.html",
+      "title": "Build an Evidence-Backed Competitor Report | BotHearth",
+      "description": "Compare competitors from live websites with dated source URLs, a repeatable evidence table, clear uncertainty labels, and a browser-agent prompt you can copy."
+    },
+    {
+      "slug": "browser-agent-sign-in-human-takeover",
+      "file": "browser-agent-sign-in-human-takeover.html",
+      "title": "Browser Agent Sign-In: Keep Control with Human Takeover",
+      "description": "Learn how to watch, message and take over a browser agent for sign-in, return control safely, and understand what account content may reach the model afterward."
+    },
+    {
+      "slug": "organise-gmail-browser-agent-supervised-test",
+      "file": "organise-gmail-browser-agent-supervised-test.html",
+      "title": "Organise Gmail with a browser agent: a supervised test",
+      "description": "See BotHearth’s real Gmail test: 51 minutes across two runs, reported results, and a cautious workflow for labels, filters, privacy, human review and undo."
+    },
+    {
+      "slug": "ai-visibility-seo-website-audit",
+      "file": "ai-visibility-seo-website-audit.html",
+      "title": "Audit Your Website for AI Answers and SEO | BotHearth",
+      "description": "Use a browser agent to audit crawl access, HTML answers and evidence, then check Search Console and measure AI citations without promising better rankings."
+    },
+    {
+      "slug": "choose-browser-agent-model-recover-stalled-tasks",
+      "file": "choose-browser-agent-model-recover-stalled-tasks.html",
+      "title": "Choose a Browser Agent Model and Recover Stalled Tasks",
+      "description": "Choose a model for browser work by task, cost and account access. Learn how to switch connections, save results and recover stalled BotHearth tasks safely."
+    },
+    {
+      "slug": "guides",
+      "file": "guides.html",
+      "title": "BotHearth practical guides — browser tasks, setup and control",
+      "description": "Ten practical guides to choosing a host, using human control, researching competitors, reviewing invoices and checking the results of a browser agent."
     }
   ]
 }

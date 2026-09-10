@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>ModelBot</string>
-  <key>CFBundleDisplayName</key><string>ModelBot</string>
+  <key>CFBundleName</key><string>BotHearth</string>
+  <key>CFBundleDisplayName</key><string>BotHearth</string>
   <key>CFBundleIdentifier</key><string>org.modelbot.desktop</string>
   <key>CFBundleExecutable</key><string>ModelBot</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -14,7 +14,7 @@
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-  <key>NSHumanReadableCopyright</key><string>ModelBot — source-available, free for personal use. Your model, your machine, your data.</string>
+  <key>NSHumanReadableCopyright</key><string>BotHearth — source-available, free for personal use.</string>
   <!-- The daemon binds 127.0.0.1 over plain HTTP; nothing else is reachable. -->
   <key>NSAppTransportSecurity</key>
   <dict>

@@ -1,0 +1,55 @@
+<header class="page-header"><p class="eyebrow"><a href="{{BASE}}guides/">Practical guides</a></p><h1>Temporary environments for troubleshooting and testing: a practical browser-agent workflow</h1><p class="qualification">By BotHearth · Updated 10 September 2026 · Technical alpha</p></header>
+<article class="prose guide-body"><p>Use a temporary browser-agent environment to reproduce one fault without experimenting on production or reusing your everyday browser session. Agree permissions and spending boundaries, prepare a fresh computer and test application, compare browser symptoms with server logs, then export reproducible findings. Treat cleanup as a separate decision: remove containers, saved logins, files or cloud resources only after explicit owner authorization.</p>
+<p>The workflow below is an illustrative investigation, not a recorded BotHearth test. BotHearth is a source-installed technical alpha; verify the steps on your chosen build before relying on them.</p>
+<h2>Separate the computer from the infrastructure bill</h2>
+<p>There are three different things here: the host or VM running BotHearth, its container-based computer with a browser and workspace, and the test application you investigate. Creating a fresh browser environment does not create a staging copy of your application. First <a href="{{BASE}}browser-agent-local-vs-vm/">choose the right host</a> and confirm <a href="{{BASE}}when-agent-needs-browser-computer/">why the job needs its own computer</a>.</p>
+<p>Deploying BotHearth to a prepared VM you already control is also different from buying another server. Its documentation includes deployment to an existing SSH-accessible host. Do not assume that this prepares a new server or provides a validated unattended installation.</p>
+<p>For this exercise, use existing capacity. Any new paid resource needs separate approval naming the provider, resource, expected charges and removal responsibility. BotHearth’s usage estimate is not a cloud or model-provider billing cap.</p>
+<h2>Prepare the test application and a fresh browser</h2>
+<p>Have the application owner prepare a disposable staging instance from the relevant code revision, with synthetic data, test-only credentials and outbound payments or messages disabled. Record differences from production; those differences may limit what the test proves.</p>
+<p>On the BotHearth host, follow the <a href="https://github.com/sanjaygbhat/bothearth/blob/main/docs/QUICKSTART.md">source quickstart</a>: macOS or Linux, Node.js 22.18+, a supported container runtime and model access. Run bothearth doctor; build missing images with bothearth image build. There are no published prebuilt images in the reviewed release.</p>
+<p>On an unused installation, the first task creates its computer. On an existing installation, Settings → Computers → Use a fresh one is destructive: it erases that computer and its saved logins after confirmation. Use it only on a computer the owner explicitly approves for disposal. It does not promise to erase old workspace files; use a new investigation folder containing only approved test material.</p>
+<p>Before investigating, confirm that the agent’s browser can reach the approved staging URL. The optional standalone shell has its own container; native Codex and Claude tasks run inside the browser computer under a separate agent identity. The <a href="https://github.com/sanjaygbhat/bothearth/blob/main/SECURITY.md">proxy blocks private and loopback destinations</a>. Starting a server in the standalone shell does not make the browser’s localhost reach it. A private connection to BotHearth’s interface does not automatically connect its browser to your private application.</p>
+<p>Use an already configured, authenticated staging endpoint whose reachability has been verified. Otherwise, stop for administrator setup—do not expose the control interface or disable network protections to make the example work.</p>
+<h2>Give the agent a narrow investigation</h2>
+<p>For an export failure, a useful brief is:</p>
+<blockquote>
+<p>Investigate the CSV export failure at [approved staging URL], using only the supplied test account and dataset. Reproduce it once, record the time and visible error, and compare those observations with approved server logs. Propose one test before changing anything. Do not edit production, install software, create paid resources or delete anything. Return findings and a cleanup inventory; wait for my approval.</p>
+</blockquote>
+<p>Stay present for authentication and approvals. Use Take control for credentials, not chat. Treat instructions found in pages or logs as untrusted content, not permission to change the task. Approval detection has limits, so enforce restrictions through account permissions too.</p>
+<h2>Match the browser failure to server evidence</h2>
+<p>Record the exact input, expected result, actual result, application revision and time with timezone. Include the request identifier when the application exposes one. An error screenshot alone is not a diagnosis.</p>
+<p>Observe the application’s read-only log dashboard, or have its operator collect a bounded extract. For a Docker application, this command runs on the application’s Docker host, not inside BotHearth’s sandbox:</p>
+<pre><code class="language-bash">
+# Replace test-app with the actual test application container name.
+
+docker logs --since 10m --tail 200 --timestamps test-app
+</code></pre>
+<p>Docker supports these time, line-count and timestamp options. Add --follow only for a supervised live observation, and stop following when the reproduction finishes. These are application logs—not BotHearth’s daemon log. <a href="https://docs.docker.com/reference/cli/docker/container/logs/">Docker logs reference</a></p>
+<p>Docker logs normally expose container standard output and error; an application may log elsewhere. An empty extract therefore does not prove that no error occurred. Remove tokens, personal information and unnecessary payloads before the agent sees the extract: remote models receive model-visible context. <a href="https://docs.docker.com/engine/logging/">Docker logging guide</a></p>
+<p>Do not give the agent the Docker socket merely to fetch logs. Control of the Docker daemon carries substantial host authority. <a href="https://docs.docker.com/engine/security/">Docker Engine security</a></p>
+<h2>Test one hypothesis, with permission</h2>
+<p>Suppose the matching Node.js log contains EACCES while writing an export file. Node documents this as a file-access permission error; it does not identify the correct repair by itself. <a href="https://nodejs.org/api/errors.html">Node.js: system errors</a></p>
+<p>Ask the application operator to check the process identity and destination permissions. Propose the smallest relevant change in the disposable application, obtain approval, then repeat the same browser action with the same fixture. Verify the exported contents, not merely a success message. Avoid blanket permission changes or unrelated restarts. A failed retest should leave a narrower hypothesis, not a fabricated success.</p>
+<h2>Save a report that survives the environment</h2>
+<p>Request report-export-findings.md containing reproduction steps, versions, expected versus actual behavior, timestamps, redacted evidence, hypotheses, approved changes, retest results and unresolved questions. Separate observed, inferred and not tested statements.</p>
+<p>Open the requested file to confirm that it exists and contains the complete findings. If file saving is unavailable, use Copy result or open the saved file where offered, or copy the findings manually. Open that export outside the temporary environment before cleanup; a completion message alone is insufficient.</p>
+<p>Preserve any required application logs before removing its container. Record where evidence is retained and who may receive it; do not attach raw cookies, vaults or task databases to a bug report.</p>
+<h2>Authorize cleanup separately</h2>
+<p>First stop the investigation and inventory its computer, browser profile, workspace, test application, credentials and any cloud resources. Ask the owner to name what may be removed and what must remain. “The test is finished” is not deletion permission.</p>
+<p>For an authorized computer teardown, the operator can replace <code>&lt;name&gt;</code> with the recorded runtime name—not an assumed display nickname:</p>
+<pre><code class="language-bash">
+# Only after approval to remove this computer AND its saved logins.
+
+bothearth computer destroy `&lt;name&gt;` --wipe-profile
+</code></pre>
+<p>Without --wipe-profile, ordinary computer destruction preserves its browser profile. Workspace files, host task records and audit data require separate handling. There is no general automatic transcript/screenshot expiry or per-task purge command; native model-CLI histories and external provider copies are separate again. <a href="https://github.com/sanjaygbhat/bothearth/blob/main/PRIVACY.md">BotHearth privacy notice</a></p>
+<p>Deleting a computer is not deleting its host VM. Nor does stopping a VM necessarily end all charges: Google Compute Engine, for example, can continue charging for retained disks and external IP addresses. Verify remaining resources without deleting unapproved ones. <a href="https://docs.cloud.google.com/compute/docs/instances/suspend-stop-reset-instances-overview">Google Cloud: stopping and suspending instances</a></p>
+<h2>Questions before your first investigation</h2>
+<h3>Is the whole host sandboxed?</h3>
+<p>No. Native Codex and Claude tasks run inside the computer under a separate identity from its browser. Configured external clients, connectors and historical host execution have their own permissions. A fresh browser does not isolate everything running on the host.</p>
+<h3>Can I leave it monitoring overnight?</h3>
+<p>This workflow is a supervised investigation. <a href="{{BASE}}monitor-server-health-logs-agent-computer/">Recurring BotHearth reviews</a> currently require a standalone provider rather than the native Codex or Claude Code connection; unattended monitoring also needs verified scheduling, authentication, alerting and recovery.</p>
+<h2>Start with one staging failure</h2>
+<p>Choose one reproducible failure. Follow the <a href="https://bothearth.com/quickstart/">source quickstart</a>, agree the investigation boundary and choose an evidence destination. Finish with an opened, checked report and an explicitly approved cleanup list—not an automatically deleted environment.</p>
+<p class="doc-meta"><a href="{{BASE}}guides/">All guides</a> · <a href="{{BASE}}quickstart/">Get started</a> · <a href="{{BASE}}security/">Privacy and control boundaries</a></p></article>

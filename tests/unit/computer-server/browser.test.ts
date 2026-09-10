@@ -145,7 +145,7 @@ describe("computer-server browser tools (Playwright)", () => {
 
   });
 
-  it("launches without the automation fingerprints Google rejects", { skip: !hasChromium && "Host Chromium unavailable" }, async (t) => {
+  it("uses Chromium's own identity and retains private credential preferences", { skip: !hasChromium && "Host Chromium unavailable" }, async (t) => {
     process.env.MODELBOT_WORKSPACE = mkdtempSync(join(tmpdir(), "mb-fp-ws-"));
     const profile = mkdtempSync(join(tmpdir(), "mb-fp-pf-"));
     process.env.MODELBOT_PROFILE = profile;
@@ -162,17 +162,13 @@ describe("computer-server browser tools (Playwright)", () => {
       userAgent: navigator.userAgent,
       languages: [...navigator.languages],
     }));
-    // Real Chrome reports false. Forcing undefined is itself a stealth-patch tell.
-    assert.equal(fingerprint.webdriver, false);
-    assert.ok(!fingerprint.userAgent.includes("Headless"), fingerprint.userAgent);
-    assert.deepEqual(fingerprint.languages, ["en-US"]);
-    assert.ok(LAUNCH_ARGS.includes("--disable-blink-features=AutomationControlled"));
+    assert.match(fingerprint.userAgent, /Chrome/);
+    assert.ok(fingerprint.languages.length);
+    assert.ok(!LAUNCH_ARGS.some(arg => /AutomationControlled|user-agent|no-sandbox/.test(arg)));
 
     // Chrome's own password manager, off in the profile it just ran on — read
     // after the shutdown that rewrites Preferences, so this is Chromium's copy,
-    // not ours. Dropping `--enable-automation` for the fingerprint is what
-    // turned the manager back on, and a credential it fills is one no gated
-    // tool call ever asked for.
+    // not ours. Credential filling remains disabled across browser restarts.
     await session.close();
     const live = JSON.parse(readFileSync(join(profile, "Default", "Preferences"), "utf8")) as
       { credentials_enable_service?: boolean; profile?: { password_manager_enabled?: boolean } };

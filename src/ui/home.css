@@ -120,6 +120,69 @@
   flex: 0 0 auto;
 }
 
+.task-run-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: var(--hairline) solid var(--color-border);
+}
+
+.home-model-fields {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.65fr) minmax(0, 1fr);
+  gap: var(--space-xs);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.home-model-field {
+  display: grid;
+  gap: var(--space-2xs);
+  min-width: 0;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.home-model-field select,
+.home-model-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--tap-target);
+  padding: 6px 8px;
+  border: var(--hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-elevated);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.home-model-custom,
+.home-model-hint,
+.home-executor-options { grid-column: 1 / -1; }
+
+.home-orchestrator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap-target);
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.home-orchestrator input { accent-color: var(--color-accent); }
+.home-model-hint { margin: 0; font-size: var(--text-caption); color: var(--color-muted); }
+.home-model-retry { grid-column: 1 / -1; justify-self: start; }
+.home-executor-options summary { min-height: var(--tap-target); padding-top: 10px; cursor: pointer; font-size: var(--text-caption); overflow-wrap: anywhere; }
+
+@media (max-width: 620px) {
+  .task-run-options { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* The reason a start failed, in the same line-length as the box's own text. */
 .taskbox-message:empty {
   display: none;

@@ -1,5 +1,15 @@
 import type { TaskBudget } from "../types/contracts.ts";
 import { harnessSpendUsd, type Store, type TaskRow } from "./store.ts";
+import { redactStringValue } from "./log.ts";
+
+/** Only the human-facing handoff instruction and its identity, never tool arguments. */
+export function takeoverContext(source: Record<string, unknown>): Record<string, string> {
+  const body: Record<string, string> = {};
+  if (typeof source.takeover_id === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(source.takeover_id))
+    body.takeover_id = source.takeover_id;
+  if (typeof source.reason === "string") body.reason = redactStringValue(source.reason).trim().slice(0, 2000);
+  return body;
+}
 
 /**
  * What this task has spent and what it may spend, read from the same counter
@@ -38,15 +48,29 @@ export function taskBudget(
 export function taskActivity(store: Store, taskId: string) {
   const rows = store.db.prepare(`
     SELECT kind, body_json, created_at, result_id FROM (
-      SELECT kind, body_json, created_at, NULL AS result_id FROM steps WHERE task_id = ? AND kind IN ('assistant', 'user')
+      SELECT kind, body_json, created_at, NULL AS result_id FROM steps WHERE task_id = ? AND kind IN ('assistant', 'user', 'native_tool')
       UNION ALL
       SELECT type AS kind, body_json, ts AS created_at, seq AS result_id FROM audit_refs WHERE task_id = ?
         AND type IN ('task.completed','task.failed','task.cancelled','task.resumed','task.step','tool.call','tool.result',
           'tool.error','usage','policy.denied','approval.requested','takeover.requested')
     ) ORDER BY created_at DESC LIMIT 101
   `).all(taskId, taskId) as Array<{ kind: string; body_json: string; created_at: string; result_id: number | null }>;
+  const recent = rows.slice(0, 100);
+  const task = store.getTask(taskId);
+  const active = task && store.activeTakeoverForComputer(task.computer_id, taskId);
+  if (active) {
+    // Polling during a long human wait must not push its instruction out of history.
+    const handoff = store.db.prepare(`SELECT type AS kind, body_json, ts AS created_at, seq AS result_id
+      FROM audit_refs WHERE task_id = ? AND type = 'takeover.requested'
+        AND json_extract(body_json, '$.takeover_id') = ? ORDER BY seq DESC LIMIT 1`)
+      .get(taskId, active.id) as (typeof rows)[number] | undefined;
+    if (handoff && !recent.some(row => row.result_id === handoff.result_id)) {
+      if (recent.length === 100) recent.pop();
+      recent.push(handoff);
+    }
+  }
   let textTruncated = false;
-  const steps = rows.slice(0, 100).reverse().map((row) => {
+  const steps = recent.reverse().map((row) => {
     const source = JSON.parse(row.body_json) as Record<string, unknown>;
     const body: Record<string, unknown> = {};
     if (row.kind === "assistant" || row.kind === "user") {
@@ -65,8 +89,9 @@ export function taskActivity(store: Store, taskId: string) {
       textTruncated ||= source.summary.length > 16000;
       if (["task.completed", "task.failed", "task.cancelled"].includes(row.kind)) resultId = row.result_id ?? undefined;
     }
-    for (const key of ["name", "tool", "status", "reason", "code", "failure_kind", "provider_limit_reason", "provider_limit_resets_at"])
+    for (const key of ["name", "tool", "type", "status", "reason", "code", "failure_kind", "provider_limit_reason", "provider_limit_resets_at"])
       if (typeof source[key] === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(source[key])) body[key] = source[key];
+    if (row.kind === "takeover.requested") Object.assign(body, takeoverContext(source));
     if (row.kind === "usage") for (const key of ["tokens_in", "tokens_out", "usd_est", "steps"])
       if (typeof source[key] === "number" && Number.isFinite(source[key])) body[key] = source[key];
     return { kind: row.kind, body, created_at: row.created_at, ...(resultId === undefined ? {} : { result_id: resultId }) };

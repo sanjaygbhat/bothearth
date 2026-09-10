@@ -61,6 +61,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "disposable-email-domains": "1.0.62",
+    "jose": "6.2.10",
     "tldts": "7.4.12",
     "yaml": "^2.9.0"
   },

@@ -1,0 +1,86 @@
+<header class="page-header"><p class="eyebrow"><a href="{{BASE}}guides/">Practical guides</a></p><h1>When do you need an agent with its own browser and computer?</h1><p class="qualification">By BotHearth · Updated 10 September 2026 · Technical alpha</p></header>
+<article class="prose guide-body"><p>You need an agent with its own browser and computer when work requires live websites, account actions, files or installed tools, rather than advice alone. Keep the environment persistent when reusing sessions and working files saves more effort than setup, supervision and maintenance consume. For simple questions or jobs already handled by an integration, start with the simpler option instead.</p>
+<h2>Start with the job, not the chat interface</h2>
+<p>Ordinary chat is enough when you need a plan and will perform the actions yourself. Browser access becomes useful when the job requires navigating a live portal, using an account or checking what a website actually does. A computer with file and command-line tools can also process what the browser retrieves. <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool">Anthropic: computer use</a></p>
+<p>This is not a clean divide between chat products and agents. ChatGPT Work, for example, already offers a cloud browser with its own computer and saved sign-in sessions. Your existing assistant may be sufficient. The additional decision is whether you need to control the environment where the work happens. <a href="https://help.openai.com/en/articles/20001280-using-cloud-browser-in-chatgpt">OpenAI: cloud browser in ChatGPT</a></p>
+<p>Use the least complicated option that completes the job:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Your job</th>
+<th>Start with</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Plan the checks for a website release</td>
+<td>Ordinary chat</td>
+<td>You need a plan, not delegated access.</td>
+</tr>
+<tr>
+<td>Collect invoices from portals without a suitable integration</td>
+<td>Browser agent</td>
+<td>The work requires account navigation and downloads.</td>
+</tr>
+<tr>
+<td>Check a form or customer journey on a staging site</td>
+<td>Browser agent</td>
+<td>You need observed behaviour, not assumptions from page text.</td>
+</tr>
+<tr>
+<td>Convert an image archive using installed tools</td>
+<td>Temporary computer or an existing code tool</td>
+<td>Execution matters; long-term persistence may not.</td>
+</tr>
+<tr>
+<td>Synchronise records using fixed rules and a supported API</td>
+<td>An integration or script</td>
+<td>Prefer a narrow, defined action path.</td>
+</tr>
+<tr>
+<td>Return to the same accounts, tools and working files</td>
+<td>Persistent agent environment</td>
+<td>Reusing useful state is part of the job.</td>
+</tr>
+</tbody></table></div>
+<p>These are selection guidelines, not performance rankings. OpenAI also recommends a connected app or plugin when it supports the task directly. <a href="https://help.openai.com/en/articles/20001280-using-cloud-browser-in-chatgpt">OpenAI: cloud browser in ChatGPT</a></p>
+<h2>When persistence earns its cost</h2>
+<p>Think about what you would otherwise rebuild: sign-ins, installed tools, working folders and the files needed for the next run. Persistence is valuable when that preparation repeats. A one-off conversion can justify a separate computer without justifying keeping it indefinitely.</p>
+<p>Saved authentication is not permanent access. Playwright’s documentation describes both reusing authenticated browser state and refreshing it when it expires. It also warns that saved cookies and headers can allow someone to impersonate the account. <a href="https://playwright.dev/docs/auth">Playwright: authentication</a></p>
+<p>Evaluate the trade-off using your own trial:</p>
+<blockquote>
+<p>Net hands-on time saved = manual task time − setup time allocated to the run − supervision − corrections.</p>
+</blockquote>
+<p>Compare the value of that time with model usage, machine or hosting costs, and maintenance. Count failed attempts. An agent working for an hour has not necessarily saved you an hour. BotHearth’s displayed usage estimate is not a provider bill or a provider-enforced spending cap.</p>
+<h2>Three concrete workflows to test</h2>
+<p>These are proposed supervised trials, not reported customer results.</p>
+<h3>1. Collect a month’s invoices from supplier portals</h3>
+<p>Give the agent three approved supplier portals and a date range. Ask it to collect invoice documents and create a register containing supplier, invoice number, date, currency, total and filename. Explicitly prohibit payments, subscription changes and messages.</p>
+<p><a href="{{BASE}}browser-agent-sign-in-human-takeover/">Sign in yourself using Take control</a>, then Give control back. In BotHearth, downloaded files remain quarantined until the operator promotes them into the workspace; do that before relying on them as saved working files.</p>
+<p>Check the register against each portal’s invoice count and spot-check the amounts. Require missing documents to be flagged, not guessed.</p>
+<p>Why keep the environment? The next monthly run can reuse the same profile and register. Check whether authentication still works before starting.</p>
+<h3>2. Check a customer journey after a website change</h3>
+<p>On a staging copy of your site, ask the agent to follow a defined route: homepage → product page → basket → checkout. Use test data and stop before any payment or live order.</p>
+<p>Specify what counts as success: the right product and quantity, expected delivery information, and a working route to the final review screen. Require the URL, screenshot and reproduction steps for each observed failure. Record blocked or untested steps separately from failures.</p>
+<p>Review the evidence, apply fixes yourself, then rerun the same route.</p>
+<p>Why a browser? The task is testing interaction. A persistent workspace can retain the checklist and evidence, but a fresh browser profile may better represent a first-time visitor.</p>
+<h3>3. Prepare a product-image batch in a temporary workspace</h3>
+<p>Start with an archive of 120 licensed product JPEGs from an approved supplier portal. Confirm access to command-line tools and suitable image-processing software before the trial; do not assume they are installed.</p>
+<p>Keep originals untouched. Ask for copies with a maximum dimension of 1,600 pixels, without enlarging smaller images, plus a contact sheet and a file manifest. Prohibit publishing or uploading the results.</p>
+<p>Verify the output count, dimensions and any conversion failures. Inspect the contact sheet, then export the accepted files and processing instructions.</p>
+<p>Why a separate computer? It provides a place to run the batch tools without installing them into your everyday working environment. Keep it only when another batch will reuse that setup.</p>
+<h2>What choosing BotHearth involves</h2>
+<p>A separate environment need not mean buying another physical computer. BotHearth provides a containerised browser and a workspace on your Mac or Linux host; <a href="{{BASE}}browser-agent-local-vs-vm/">a privately accessed VM</a> is another deployment route. It is a <a href="https://github.com/sanjaygbhat/bothearth/blob/main/README.md">source-installed technical alpha</a>, requiring Node.js 22.18 or newer, a supported container runtime and model access. Its native task connections use the official Codex or Claude Code CLIs. There are no published prebuilt images to pull.</p>
+<p>Separation is not a guarantee of safety. Anthropic recommends minimal privileges and human confirmation for consequential actions, and warns that malicious instructions in webpages can misdirect computer-use agents. <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool">Anthropic: computer use</a></p>
+<p>Nor does self-hosting mean offline processing. BotHearth sends model-visible task context to remote providers. Its <a href="https://github.com/sanjaygbhat/bothearth/blob/main/PRIVACY.md">privacy notice</a> documents unencrypted browser profiles and no general automatic expiry for transcripts or screenshots.</p>
+<h2>Questions to settle before committing</h2>
+<h3>Will it work with every website and login?</h3>
+<p>No. Sites may block automation, and BotHearth documents that passkeys and hardware security keys generally do not work inside its browser. Test your exact login flow before depending on it.</p>
+<h3>Does keeping the environment make tasks run automatically?</h3>
+<p>No. <a href="{{BASE}}monitor-server-health-logs-agent-computer/">Persistence is not scheduling</a>. BotHearth’s scheduled tasks require a standalone provider rather than its native Codex or Claude Code connection. Unattended work also needs a running host, valid access, alerts and a recovery plan.</p>
+<h3>Does deleting a temporary computer erase everything?</h3>
+<p>No. BotHearth documents separate lifecycles for containers, browser profiles, workspace files and task records. Destroying the containers is not a complete purge. Decide what to retain and follow the separate removal instructions.</p>
+<h2>Try one bounded task before committing</h2>
+<p>Choose one workflow, define the permitted sites and actions, and write down the evidence that would prove completion. Keep the first run supervised. Measure your intervention time and check the output yourself; repeat the trial to see whether saved state actually helps.</p>
+<p>Start with <a href="https://bothearth.com/quickstart/">BotHearth’s source-install quickstart</a>. Keep the environment only when the checked result and reduced hands-on work justify its ongoing cost.</p>
+<p class="doc-meta"><a href="{{BASE}}guides/">All guides</a> · <a href="{{BASE}}quickstart/">Get started</a> · <a href="{{BASE}}security/">Privacy and control boundaries</a></p></article>

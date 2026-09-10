@@ -199,6 +199,7 @@ export type PolicyGate =
 
 /** ARCH §6 event enum (shared with audit). */
 export type EventType =
+  | "native_tool"
   | "task.started"
   | "task.step"
   | "task.completed"
@@ -228,6 +229,7 @@ export type EventType =
   | "error";
 
 export const EVENT_TYPES = [
+  "native_tool",
   "task.started",
   "task.step",
   "task.completed",
@@ -415,11 +417,26 @@ export interface CreateHarnessBindingBody {
   max_steps: number;
 }
 
+export type NativeProvider = "codex" | "claude";
+
+export interface NativeTaskSettings {
+  adapter: NativeProvider;
+  model: string;
+  execution_mode: "executor" | "orchestrator";
+  reasoning_effort?: "low" | "medium" | "high";
+  execution_location?: "computer" | "host";
+  executor?: { adapter: NativeProvider; model: string };
+}
+
 export interface CreateTaskBody {
   /** Omit to use the operator's default browser workspace. */
   computer_id?: string;
   goal: string;
   adapter?: string;
+  model?: string;
+  execution_mode?: NativeTaskSettings["execution_mode"];
+  reasoning_effort?: NativeTaskSettings["reasoning_effort"];
+  executor?: NativeTaskSettings["executor"];
   /** Internal ladder hint only — never a user-facing driver picker. */
   driver?: DriverKind;
   capabilities?: ComputerCapability[];

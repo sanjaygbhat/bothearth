@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   deleteStoredOsKey,
+  linuxSecretToolProvider,
   macosKeychainProvider,
 } from "../../../src/vault/providers.ts";
 import type { KeyStoreRunner } from "../../../src/vault/providers.ts";
@@ -9,6 +10,20 @@ import type { KeyStoreRunner } from "../../../src/vault/providers.ts";
 const SERVICE = "com.modelbot.test-vault";
 const ACCOUNT = "master-key";
 const GOOD = "a".repeat(64);
+
+test("an unavailable headless keyring fails before generating or storing a replacement key", async () => {
+  for (const failure of [
+    { status: null, stdout: "", stderr: "" },
+    { status: 1, stdout: "", stderr: "secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY" },
+  ]) {
+    const calls: string[] = [];
+    const provider = linuxSecretToolProvider(SERVICE, ACCOUNT, (_bin, args) => {
+      calls.push(args[0]!); return failure;
+    });
+    await assert.rejects(provider.resolve(true), /Secret Service is unavailable.*encrypted systemd credential/);
+    assert.deepEqual(calls, ["lookup"], "unavailable does not mean the vault key is missing");
+  }
+});
 
 /** `security -i` tokenises its stdin command on whitespace, honouring `"`. */
 function parseInteractive(input: string): string[] {

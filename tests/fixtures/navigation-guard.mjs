@@ -6,20 +6,23 @@ import { createState, dispatch } from "/opt/computer-server/src/dispatch.ts";
 
 let origin, destination;
 const hits = [];
+const posts = [];
 const fixture = createServer((req, res) => {
   hits.push(`${req.headers.host}${req.url}`);
+  if (req.method === "POST") posts.push(`${req.headers.host}${req.url}`);
   res.setHeader("Content-Type", "text/html");
   if (req.url === "/redirect") { res.writeHead(302, { location: destination + "/landing" }); res.end(); }
+  else if (req.url === "/post-redirect") { res.writeHead(307, { location: destination + "/send" }); res.end(); }
   else if (req.url === "/landing") res.end("Destination reached");
-  else res.end(`<a href="${destination}/landing">Direct</a><a href="${origin}/redirect" target="_blank">Popup</a><button onclick="location.href='${destination}/landing'">Script</button><button onclick="setTimeout(() => location.href='${destination}/landing', 500)">Delayed</button>`);
+  else res.end(`<a href="${destination}/landing">Direct</a><a href="${origin}/redirect" target="_blank">Popup</a><button onclick="location.href='${destination}/landing'">Script</button><button onclick="setTimeout(() => location.href='${destination}/landing', 500)">Delayed</button><form method="post" action="${destination}/send"><button>Send</button></form><form method="post" action="${origin}/post-redirect"><button>Send redirect</button></form>`);
 });
 await new Promise((resolve) => fixture.listen(0, resolve));
 origin = `http://127.0.0.1:${fixture.address().port}`;
 destination = `http://localhost:${fixture.address().port}`;
 const state = createState("browser");
 let id = 0;
-const call = (method, params = {}, origins = [origin]) => dispatch(state, {
-  jsonrpc: "2.0", id: ++id, method: "policy.call", params: { method, params, navigation_origins: origins },
+const call = (method, params = {}, origins = [origin], publicBrowsing = false) => dispatch(state, {
+  jsonrpc: "2.0", id: ++id, method: "policy.call", params: { method, params, navigation_origins: origins, allow_public_navigation: publicBrowsing },
 });
 const raw = (method, params = {}) => dispatch(state, { jsonrpc: "2.0", id: ++id, method, params });
 const notContacted = () => assert.ok(!hits.some((hit) => hit.startsWith("localhost:")), JSON.stringify(hits));
@@ -28,6 +31,7 @@ async function home() {
   const result = await call("browser_navigate", { url: origin });
   assert.equal(result.ok, true, JSON.stringify(result));
   hits.length = 0;
+  posts.length = 0;
 }
 async function ref(label) {
   const snapshot = await call("browser_snapshot", {});
@@ -96,6 +100,28 @@ try {
   assert.ok(hits.some((hit) => hit.startsWith("localhost:")));
 
   await home();
+  result = await call("browser_navigate", { url: origin + "/redirect" }, [origin], true);
+  assert.equal(result.ok, true, "ordinary public GET redirects need no domain approval");
+  assert.ok(hits.some((hit) => hit.startsWith("localhost:")));
+  for (const publicBrowsing of [false, true]) {
+    await home();
+    const send = await ref("Send");
+    result = await call("browser_click", send, [origin], publicBrowsing);
+    assert.equal(result.error?.code, "E_POLICY", "a cross-origin POST needs its own consent in either mode");
+    notContacted();
+    assert.deepEqual(posts, []);
+    result = await call("browser_click", send, [origin, destination], publicBrowsing);
+    assert.equal(result.ok, true, "the exact approved form submission remains usable");
+    assert.deepEqual(posts, [new URL(destination).host + "/send"]);
+  }
+
+  await home();
+  result = await call("browser_click", await ref("Send redirect"), [origin], true);
+  assert.equal(result.error?.code, "E_POLICY", "a 307 redirect must preserve the POST restriction");
+  notContacted();
+  assert.deepEqual(posts, [new URL(origin).host + "/post-redirect"], "only the permitted first POST reached the server");
+
+  await home();
   const request = await raw("request_takeover", { reason: "operator navigation test" });
   const takeover_id = request.data.takeover_id;
   assert.equal((await raw("takeover.grant", { takeover_id })).ok, true);
@@ -103,7 +129,7 @@ try {
   await state.browser.page.goto(origin + "/redirect");
   assert.ok(hits.some((hit) => hit.startsWith("localhost:")), "operator navigation remains usable");
   assert.equal(state.browser.consumeNavigationDenied(), null);
-  console.log("NAVIGATION_PRECONTACT_PASS: anchor, redirect, Enter, coordinates, delayed script, popup, explicit tab, approved origin, HUMAN");
+  console.log("NAVIGATION_PRECONTACT_PASS: strict anchor, redirect, Enter, coordinates, delayed script, popup, explicit tab; public GET redirect; strict/normal POST consent; 307 POST redirect; HUMAN");
 } finally {
   await state.browser?.close();
   await new Promise((resolve) => fixture.close(resolve));

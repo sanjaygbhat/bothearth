@@ -82,6 +82,14 @@ describe("design tokens", () => {
     }
   });
 
+  it("contains task card layers below the shell's Settings and command overlays", () => {
+    const view = block(read("shell.css"), /^\.shell-view\s*\{/m);
+    assert.match(view, /isolation:\s*isolate/, "a takeover card must not escape above the modal scrim");
+    const settings = read("settings.css");
+    assert.match(block(settings, /^\.set-scrim\s*\{/m), /z-index:\s*var\(--z-backdrop\)/);
+    assert.match(block(settings, /^\.set-sheet\s*\{/m), /z-index:\s*var\(--z-modal\)/);
+  });
+
   it("declares every colour with a resolvable colour value", () => {
     const light = block(tokens, /^:root \{/m);
     let checked = 0;

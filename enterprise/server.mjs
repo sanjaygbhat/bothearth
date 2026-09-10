@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { parse } from "tldts";
 import disposable from "disposable-email-domains/index.json" with { type: "json" };
 import wildcard from "disposable-email-domains/wildcard.json" with { type: "json" };
+import { accountConfigFromEnv, cleanupAccountChallenges, createAccounts } from "./accounts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const version = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).version;
@@ -36,7 +37,7 @@ export function workEmail(value) {
   return { email: `${parts[0].toLowerCase()}@${host}`, domain: parsed.domain };
 }
 
-export function createEnterpriseServer({ database, origin, secret, from, contact, sendMail, now = Date.now }) {
+export function createEnterpriseServer({ database, origin, secret, from, contact, sendMail, accounts, now = Date.now }) {
   const url = new URL(origin);
   const local = url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname);
   if ((!local && url.protocol !== "https:") || url.origin !== origin || secret.length < 32 || !from || !sendMail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) throw new Error("Configure an HTTPS origin, a 32+ character secret, email sender, and contact address.");
@@ -49,16 +50,19 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
     CREATE TABLE IF NOT EXISTS enquiries (id TEXT PRIMARY KEY, email TEXT NOT NULL, domain TEXT NOT NULL, seats INTEGER NOT NULL, message TEXT NOT NULL, created INTEGER NOT NULL, delivered INTEGER);`);
   const hash = (value) => createHmac("sha256", secret).update(value).digest("hex");
   const cookieName = local ? "enterprise" : "__Host-enterprise";
-  const setCookie = (res, id, age = 86400) => res.setHeader("set-cookie", `${cookieName}=${id}.${hash(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${local ? "" : "; Secure"}`);
+  const setCookie = (res, id, age = 86400, name = cookieName) => res.setHeader("set-cookie", `${name}=${id}.${hash(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${local ? "" : "; Secure"}`);
   const csrf = (id) => `<input type="hidden" name="csrf" value="${hash(`csrf:${id}`)}">`;
   const form = (id, action, content, button) => `<form class="enterprise-form" method="post" action="${action}">${csrf(id)}${content}<button class="button" type="submit">${button}</button></form>`;
-  const page = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>${escape(title)} — BotHearth</title><link rel="stylesheet" href="https://bothearth.com/tokens.css"><link rel="stylesheet" href="/style.css"></head><body><a class="skip" href="#main">Skip to content</a><div class="wrap"><header class="site-header"><a class="wordmark" href="https://bothearth.com/">BotHearth</a><nav aria-label="Main navigation"><a href="https://bothearth.com/enterprise/">Enterprise offer</a></nav></header><main class="page-header prose" id="main"><h1>${escape(title)}</h1>${body}</main><footer class="site-footer"><p><a href="https://bothearth.com/security/#website">Privacy</a> · <a href="https://bothearth.com/contact/">Contact us</a></p></footer></div></body></html>`;
+  const page = (title, body, account = false) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>${escape(title)} — BotHearth</title><link rel="stylesheet" href="https://bothearth.com/tokens.css"><link rel="stylesheet" href="/style.css">${account ? '<link rel="stylesheet" href="/account/style.css">' : ""}</head><body><a class="skip" href="#main">Skip to content</a><div class="wrap"><header class="site-header"><a class="wordmark" href="https://bothearth.com/">BotHearth</a><nav aria-label="Main navigation"><a href="${account ? "/account" : "https://bothearth.com/enterprise/"}">${account ? "Your account" : "Enterprise offer"}</a></nav></header><main class="page-header prose" id="main"><h1>${escape(title)}</h1>${body}</main><footer class="site-footer"><p><a href="${account ? "/account/privacy" : "https://bothearth.com/security/#website"}">Privacy</a> · <a href="https://bothearth.com/contact/">Contact us</a></p></footer></div></body></html>`;
   const limit = (key, count, period) => {
     const window = Math.floor(now() / period);
     const result = db.prepare("INSERT INTO limits VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count").get(hash(`${key}:${window}`), (window + 1) * period);
     if (result.count > count) fail(429, "Too many attempts. Please try again later.");
   };
   const certificate = (licence) => page("Enterprise licence certificate", `<p>Issued by BotHearth to <strong>${escape(licence.organisation)}</strong>.</p><dl><dt>Licence ID</dt><dd>${escape(licence.id)}</dd><dt>Organisation domain</dt><dd>${escape(licence.domain)}</dd><dt>Issued</dt><dd>${new Date(licence.issued).toISOString()}</dd><dt>BotHearth version</dt><dd>${escape(licence.version)}</dd><dt>Terms version</dt><dd>${escape(licence.terms_version)}</dd><dt>Allowance</dt><dd>One running installation under the recorded terms below. Perpetual; no renewal fee.</dd></dl>${licence.terms_html}`);
+  let accountRoute;
+  try { accountRoute = createAccounts({ db, config: accounts, origin, hash, now, limit, from, sendMail }); }
+  catch (error) { db.close(); throw error; }
   const server = createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -66,9 +70,13 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
     res.setHeader("content-security-policy", "default-src 'none'; style-src 'self' https://bothearth.com; font-src 'self' https://bothearth.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     if (!local) res.setHeader("strict-transport-security", "max-age=31536000");
     res.setHeader("content-type", "text/html; charset=utf-8");
-    let id;
+    let id; let isAccount = false;
     try {
       const path = new URL(req.url, origin).pathname;
+      isAccount = path === "/account" || path.startsWith("/account/");
+      const activeCookieName = isAccount ? (local ? "bothearth-account" : "__Host-bothearth-account") : cookieName;
+      const emailCapability = isAccount && ["/account/newsletter/confirm", "/account/newsletter/unsubscribe"].includes(path);
+      if (isAccount) res.setHeader("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self' https://bothearth.com; font-src 'self' https://bothearth.com; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'");
       if (req.method === "GET" && path === "/health") { res.end("ok"); return; }
       if (req.method === "GET" && ["/style.css", "/fonts/fraunces-latin-wght.woff2"].includes(path)) {
         res.setHeader("content-type", path.endsWith(".css") ? "text/css" : "font/woff2");
@@ -80,23 +88,27 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
       const timestamp = now();
       for (const table of ["challenges", "sessions", "limits"]) db.prepare(`DELETE FROM ${table} WHERE expires <= ?`).run(timestamp);
       db.prepare("DELETE FROM enquiries WHERE created < ?").run(timestamp - 90 * 86400000);
-      const raw = (req.headers.cookie || "").split("; ").find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
+      const raw = (req.headers.cookie || "").split(/;\s*/).find((part) => part.startsWith(`${activeCookieName}=`))?.slice(activeCookieName.length + 1);
       const match = /^(\d+_[a-f0-9]{48})\.([a-f0-9]{64})$/.exec(raw || "");
       if (match && Number(match[1].split("_")[0]) > timestamp - 86400000 && equal(match[2], hash(match[1]))) id = match[1];
       if (!id) {
-        if (req.method === "POST") fail(403, "Your session expired. Sign in again.");
-        id = `${timestamp}_${randomBytes(24).toString("hex")}`; setCookie(res, id);
+        if (req.method === "POST" && !emailCapability) fail(403, "Your session expired. Sign in again.");
+        id = `${timestamp}_${randomBytes(24).toString("hex")}`; setCookie(res, id, 86400, activeCookieName);
       }
       let body;
       if (req.method === "POST") {
-        if (req.headers.origin !== origin || !req.headers["content-type"]?.startsWith("application/x-www-form-urlencoded")) fail(403, "This form must be submitted from the enterprise site.");
+        if ((!emailCapability && req.headers.origin !== origin) || !req.headers["content-type"]?.startsWith("application/x-www-form-urlencoded")) fail(403, "This form must be submitted from the enterprise site.");
         let size = 0; const chunks = [];
         for await (const chunk of req) { size += chunk.length; if (size > 16384) fail(413, "The message is too large."); chunks.push(chunk); }
         body = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
-        if (!equal(body.get("csrf"), hash(`csrf:${id}`))) fail(403, "The form expired. Reload and try again.");
+        if (!emailCapability && !equal(body.get("csrf"), hash(`csrf:${id}`))) fail(403, "The form expired. Reload and try again.");
+      }
+      const redirect = (location) => { res.writeHead(303, { location }); res.end(); };
+      if (isAccount) {
+        await accountRoute({ req, res, path, query: new URL(req.url, origin).searchParams, id, body, timestamp,
+          setCookie: (next, age) => setCookie(res, next, age, activeCookieName), form, page: (title, content) => page(title, content, true), redirect }); return;
       }
       const session = db.prepare("SELECT * FROM sessions WHERE id=? AND expires>?").get(hash(id), timestamp);
-      const redirect = (location) => { res.writeHead(303, { location }); res.end(); };
       if (req.method === "POST" && path === "/sign-in") {
         const { email, domain } = workEmail(body.get("email"));
         limit(`email:${email}`, 1, 60000); limit(`email:${email}`, 5, 3600000);
@@ -183,12 +195,15 @@ export function createEnterpriseServer({ database, origin, secret, from, contact
       if (error.status === 429) res.setHeader("retry-after", "60");
       // Do not log email addresses, codes, cookies, or provider response bodies.
       if (!error.status) console.error("Enterprise request failed");
-      res.end(page("Please try again", `<p role="alert">${escape(error.status ? error.message : "Something went wrong. Please try again or contact us.")}</p><p><a href="/">Return to your account</a> · <a href="/verify">Return to the code form</a></p>`));
+      res.end(page("Please try again", `<p role="alert">${escape(error.status ? error.message : "Something went wrong. Please try again or contact us.")}</p><p><a href="${isAccount ? "/account" : "/"}">Return to your account</a>${isAccount ? ' · <a href="https://bothearth.com/contact/">Contact us</a>' : ' · <a href="/verify">Return to the code form</a>'}</p>${isAccount && id && error.status === 401 ? form(id, "/account/auth/google/start", "", "Sign in again with Google") : ""}`, isAccount));
     }
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  server.on("close", () => db.close());
+  const housekeeping = accounts ? setInterval(() => {
+    try { cleanupAccountChallenges(db, now()); } catch { console.error("Account housekeeping failed"); }
+  }, 60000).unref() : undefined;
+  server.on("close", () => { if (housekeeping) clearInterval(housekeeping); db.close(); });
   return server;
 }
 
@@ -197,7 +212,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (!env.ENTERPRISE_ORIGIN || !env.ENTERPRISE_SECRET || !env.RESEND_API_KEY || !env.ENTERPRISE_FROM || !env.ENTERPRISE_DB || !env.ENTERPRISE_CONTACT) throw new Error("Set ENTERPRISE_ORIGIN, ENTERPRISE_SECRET, RESEND_API_KEY, ENTERPRISE_FROM, ENTERPRISE_DB, and ENTERPRISE_CONTACT. See enterprise/README.md.");
   process.umask(0o077);
   mkdirSync(dirname(resolve(env.ENTERPRISE_DB)), { recursive: true, mode: 0o700 });
-  const server = createEnterpriseServer({ database: env.ENTERPRISE_DB, origin: env.ENTERPRISE_ORIGIN, secret: env.ENTERPRISE_SECRET, from: env.ENTERPRISE_FROM, contact: env.ENTERPRISE_CONTACT,
+  const server = createEnterpriseServer({ database: env.ENTERPRISE_DB, origin: env.ENTERPRISE_ORIGIN, secret: env.ENTERPRISE_SECRET, from: env.ENTERPRISE_FROM, contact: env.ENTERPRISE_CONTACT, accounts: accountConfigFromEnv(env),
     sendMail: async (payload, key) => {
       const response = await fetch("https://api.resend.com/emails", { method: "POST", signal: AbortSignal.timeout(10000), headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json", "user-agent": "BotHearth-enterprise/1.0", "idempotency-key": key }, body: JSON.stringify(payload) });
       if (!response.ok || !(await response.json()).id) throw new Error("Email delivery failed");

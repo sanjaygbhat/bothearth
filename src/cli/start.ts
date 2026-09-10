@@ -9,6 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalHttpsOrigin } from "../daemon/auth.ts";
 import { startDaemon, type DaemonOptions } from "../daemon/server.ts";
+import { readLicencePolicy } from "../daemon/licence.ts";
 import { logInfo, logError } from "../daemon/log.ts";
 import { clearOwnPid } from "./daemon-ctl.ts";
 import { configPath, expandHome, modelbotHome, tokensPath } from "./paths.ts";
@@ -88,10 +89,15 @@ export async function buildProductionComposition(
   const vaultPath = expandHome(config.vault.path);
   const vault = await openVault({ path: vaultPath, keychain: config.vault.keychain });
   await ensureAuditHmacKey(vault);
+  const auditPath = expandHome(config.audit.path);
+  const newAudit = !existsSync(auditPath) && !existsSync(`${auditPath}.head`);
   const auditLog = new AuditLog({
-    path: expandHome(config.audit.path),
+    path: auditPath,
     keyProvider: vaultAuditKeyProvider(vault),
   });
+  // A fresh install needs a signed head before its first task. Existing logs
+  // and heads stay untouched so doctor can still detect missing/truncated data.
+  if (newAudit) await auditLog.appendAnchor();
 
   // `adapters.<name>` blocks, keyed by registered adapter name (`default` aside).
   const endpoints = config.adapters as unknown as Record<
@@ -137,12 +143,15 @@ export async function buildProductionComposition(
       sqlitePath: process.env.MODELBOT_SQLITE_PATH ?? join(dataDir, "modelbot.sqlite"),
       workspaceRoot,
       idlePauseMin: config.sandbox.idle_pause_min,
+      schedulerEnabled: config.scheduler.enabled,
       ...(process.env.MODELBOT_CODEX_HOME ? { codexRunner: {
         codexHome: expandHome(process.env.MODELBOT_CODEX_HOME),
         model: process.env.MODELBOT_CODEX_MODEL ?? "gpt-6-astra",
       } } : {}),
       allowedHosts: config.remote.allowed_hosts ?? [],
       publicOrigin: process.env.MODELBOT_PUBLIC_ORIGIN ?? config.remote.public_origin,
+      headless: Boolean(process.env.SSH_CONNECTION)
+        || (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY),
       vault,
       auditLog,
       mode: config.mode,
@@ -159,6 +168,8 @@ export async function buildProductionComposition(
       maxRuntimeSec: config.agent.max_runtime_sec,
       dataDir,
       autoConnectProvider: true,
+      nativeExecutionLocation: "computer",
+      licencePolicy: readLicencePolicy(process.env.BOTHEARTH_LICENCE_POLICY),
       agentLoop: {
         adapter: defaultAdapter,
         adapters,

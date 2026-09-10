@@ -1,6 +1,6 @@
 import type { ScreencastFrameHeader, ToolResult } from "../types/contracts.ts";
 
-export interface ComputerCallContext { navigationOrigins: string[]; }
+export interface ComputerCallContext { navigationOrigins: string[]; allowPublicNavigation?: boolean; }
 
 export interface LiveFrameEvent {
   header: ScreencastFrameHeader;

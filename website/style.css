@@ -41,6 +41,10 @@ svg { flex-shrink: 0; }
 .ember { display: inline-block; width: 7px; height: 7px; background: var(--color-accent); border-radius: 50%; flex: 0 0 auto; }
 .eyebrow { display: flex; align-items: center; gap: 0.65rem; font: 500 0.7rem/1.6 var(--font-ui); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-muted); margin-bottom: 1.2rem; }
 .hero { padding: 3.4rem 0 3rem; }
+.guide-body { max-width: 76ch; margin: 0 auto 5rem; }
+.guide-body > article { padding-block: 1.5rem; border-bottom: 1px solid var(--color-border); }
+.guide-body table { min-width: 48rem; }
+.demo-video { display: block; width: 100%; height: auto; border-radius: 12px; }
 .hero-copy { display: grid; grid-template-columns: 1.1fr 1fr; column-gap: 3.5rem; align-items: start; }
 .hero .eyebrow { grid-column: 1 / -1; }
 .hero h1 { grid-column: 1; grid-row: 2 / span 3; }
@@ -129,7 +133,7 @@ blockquote { margin: 1.3rem 0; border-left: 3px solid var(--color-accent); backg
 .callout { margin: 1.5rem 0; padding: 1.25rem 1.5rem; border: 1px solid var(--color-border-strong); border-left: 3px solid var(--color-accent); border-radius: 5px; }
 .callout h3 { margin: 0 0 0.6rem; }
 .callout p { font-size: 0.9rem; }
-.table-scroll { overflow-x: auto; margin: 1.5rem 0; }
+.table-scroll { overflow-x: auto; max-width: 100%; margin: 1.5rem 0; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left; }
 caption { text-align: left; color: var(--color-muted); padding-bottom: 0.6rem; font-size: 0.75rem; }
 th, td { border-bottom: 1px solid var(--color-border); padding: 0.8rem 0.85rem 0.8rem 0; vertical-align: top; overflow-wrap: anywhere; }

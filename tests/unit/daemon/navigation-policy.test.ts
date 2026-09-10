@@ -7,16 +7,71 @@ import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { ExecComputerClient } from "../../../src/computer-client/exec-client.ts";
 import type { JsonRpcClient } from "../../../src/sandbox/client.ts";
 import { Store } from "../../../src/daemon/store.ts";
+import { createApproval } from "../../../src/policy/approvals.ts";
 
-for (const mode of ["supervised", "strict"] as const) test(`${mode} document navigation uses host scope and cannot contact a new origin before consent`, async () => {
+test("normal browser research opens pages and tabs without granting form submissions", async () => {
+  const store = new Store();
+  const scopes: ComputerCallContext[] = [];
+  class Browser extends FakeComputer {
+    override async call(method: string, args?: unknown, context?: ComputerCallContext): Promise<ToolResult> {
+      if (context) scopes.push(context);
+      return super.call(method, args);
+    }
+  }
+  const computer = new Browser("public-research");
+  store.insertComputer({ id: computer.computerId, name: "research", capabilities: ["browser"], persistent: false, status: "running" });
+  const task = store.insertTask({ computer_id: computer.computerId, goal: "audit a public website", max_steps: 20 });
+  const dispatcher = createToolDispatcher({ store, getClient: () => computer, emit: async () => {} });
+  const context = { taskId: task.id, computerId: computer.computerId, origin: "https://example.com",
+    originSets: { readable: [], writable: [] } };
+  try {
+    assert.equal((await dispatcher.dispatch("browser_navigate", { url: "https://bothearth.com" }, context)).ok, true);
+    assert.equal((await dispatcher.dispatch("browser_tabs", { action: "new", url: "https://developers.google.com" }, context)).ok, true);
+    assert.equal(store.listApprovals().length, 0);
+    assert.ok(scopes.every((scope) => scope.allowPublicNavigation === true));
+    assert.deepEqual(store.taskGrantedOrigins(task.id), [], "reading never silently grants writes");
+    const submit = await dispatcher.dispatch("browser_type", { text: "send this", submit: true }, context);
+    assert.equal(!submit.ok && submit.error.code, "E_POLICY_PENDING", "submitting data remains a separate decision");
+    for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,hi", "not a URL", "http://["]) {
+      for (const tool of ["browser_navigate", "browser_tabs"] as const) {
+        const unsafe = await dispatcher.dispatch(tool, { url, action: "new" }, context);
+        assert.equal(!unsafe.ok && unsafe.error.code, "E_POLICY", `${tool}: ${url}`);
+      }
+    }
+  } finally { await computer.close(); store.close(); }
+});
+
+test("an old navigation approval cannot reintroduce a public-read prompt after an upgrade", async () => {
+  const store = new Store();
+  const computer = new FakeComputer("legacy-navigation");
+  store.insertComputer({ id: computer.computerId, name: "legacy", capabilities: ["browser"], persistent: false, status: "running" });
+  const task = store.insertTask({ computer_id: computer.computerId, goal: "continue reading", max_steps: 5 });
+  const args = { url: "https://example.com/article" };
+  const approval = createApproval({ task_id: task.id, tool: "browser_navigate", gate: "new_domain",
+    args: { action: args, navigation_url: args.url }, origin: "https://example.com", control_epoch: 0 });
+  store.insertApproval({ id: approval.approval_id, task_id: task.id, tool: approval.tool, gate: "new_domain",
+    args: approval.args, bind: { ...approval.bind, navigation_url: args.url } });
+  const dispatcher = createToolDispatcher({ store, getClient: () => computer, emit: async () => {} });
+  try {
+    assert.equal((await dispatcher.dispatch("browser_navigate", args, { taskId: task.id, computerId: computer.computerId,
+      origin: "about:blank", originSets: { readable: [], writable: [] } })).ok, true);
+    assert.equal(store.listApprovals().length, 1, "the historical record is retained without another prompt");
+    assert.deepEqual(store.taskGrantedOrigins(task.id), [], "an obsolete read approval grants no writes");
+  } finally { await computer.close(); store.close(); }
+});
+
+for (const mode of ["supervised", "strict"] as const) test(`${mode} cross-origin form POST uses host scope and cannot contact a new origin before consent`, async () => {
   const store = new Store();
   let contacts = 0;
   let current = "https://source.example";
   class GuardedComputer extends FakeComputer {
     override async call(method: string, args?: unknown, context?: ComputerCallContext): Promise<ToolResult> {
-      if (method === "browser_snapshot") return { ok: true, data: { url: current, yaml: "- link Destination [ref=e1]" } };
+      if (method === "browser_snapshot") return { ok: true, data: { url: current, yaml: "- button Submit [ref=e1]" } };
       if (method === "browser_click") {
         assert.ok(context);
+        assert.equal(context.allowPublicNavigation, mode !== "strict");
+        // A POST never inherits the public GET permission. Its destination
+        // must still be present in the host's origin scope.
         if (!context.navigationOrigins.includes("https://destination.example")) {
           // A failed navigation can leave an error page at the requested URL.
           current = "https://destination.example";
@@ -36,7 +91,7 @@ for (const mode of ["supervised", "strict"] as const) test(`${mode} document nav
   const context = { computerId: computer.computerId, taskId: task.id, mode,
     originSets: { readable: ["https://source.example"], writable: ["https://source.example"] } };
   // Agent arguments cannot replace the trusted third-argument policy context.
-  const args = { ref: "e1", snapshot_id: "s1", navigation_origins: ["https://destination.example"] };
+  const args = { ref: "e1", snapshot_id: "s1", navigation_origins: ["https://destination.example"], allow_public_navigation: true };
   try {
     const blocked = await dispatcher.dispatch("browser_click", args, context);
     assert.equal(blocked.ok, false);
@@ -71,16 +126,20 @@ test("exec transport keeps host navigation scope outside model arguments", async
     }
   }
   const client = new RecordingClient("trusted-envelope");
-  const args = { url: "https://destination.example", navigation_origins: ["destination.example"] };
+  const args = { url: "https://destination.example", navigation_origins: ["destination.example"], allow_public_navigation: true };
   await client.call("browser_navigate", args, { navigationOrigins: ["source.example"] });
   assert.deepEqual(calls, [{ method: "policy.call", params: {
     method: "browser_navigate", params: args, navigation_origins: ["source.example"],
   } }]);
+  await client.call("browser_navigate", args, { navigationOrigins: [], allowPublicNavigation: true });
+  assert.deepEqual(calls[1], { method: "policy.call", params: {
+    method: "browser_navigate", params: args, navigation_origins: [], allow_public_navigation: true,
+  } });
   await client.close();
 });
 
 
-test("extra model navigation_url arguments cannot grant a different destination", async () => {
+test("extra model navigation_url arguments cannot override strict destinations", async () => {
   const store = new Store();
   let scope: string[] = [];
   class RecordingComputer extends FakeComputer {
@@ -93,16 +152,16 @@ test("extra model navigation_url arguments cannot grant a different destination"
   store.insertComputer({ id: computer.computerId, name: "forged", capabilities: ["browser"], persistent: false, status: "running" });
   const task = store.insertTask({ computer_id: computer.computerId, goal: "navigate", max_steps: 3 });
   const dispatcher = createToolDispatcher({ store, getClient: () => computer, emit: async () => {} });
-  const context = { taskId: task.id, computerId: computer.computerId, origin: "https://source.example",
-    originSets: { readable: ["https://source.example"], writable: [] } };
+  const context = { taskId: task.id, computerId: computer.computerId, origin: "https://source.example", mode: "strict" as const,
+    originSets: { readable: ["https://source.example"], writable: ["https://source.example", "https://approved.example"] } };
   const args = { url: "https://approved.example", navigation_url: "https://unapproved.example" };
   try {
-    assert.equal((await dispatcher.dispatch("browser_navigate", args, context)).ok, false);
-    const approval = store.listApprovals("pending")[0]!;
-    store.setApprovalStatusIf(approval.id, "pending", "approved", "allow_once");
     assert.equal((await dispatcher.dispatch("browser_navigate", args, context)).ok, true);
+    assert.equal(store.listApprovals().length, 0);
     assert.ok(scope.includes("https://approved.example"));
     assert.ok(!scope.includes("https://unapproved.example"));
     assert.equal((await dispatcher.dispatch("browser_navigate", { url: "https://unapproved.example" }, context)).ok, false);
+    assert.equal((await dispatcher.dispatch("browser_tabs", { action: "new", url: "https://unapproved.example" }, context)).ok, false);
+    assert.equal(store.listApprovals().length, 0, "strict mode refuses undeclared destinations without offering a grant");
   } finally { await computer.close(); store.close(); }
 });

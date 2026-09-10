@@ -1,0 +1,5 @@
+.account-terms { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.account-badge { display: inline-block; padding: .3rem .65rem; border: 1px solid currentColor; border-radius: 1rem; }
+#licence-key { box-sizing: border-box; display: block; width: 100%; max-width: 100%; font: .85rem/1.5 monospace; overflow-wrap: anywhere; }
+.enterprise-form button, button, input { max-width: 100%; }
+button:disabled { opacity: .65; cursor: not-allowed; }

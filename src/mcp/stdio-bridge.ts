@@ -11,11 +11,15 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../index.ts";
+import type { Readable, Writable } from "node:stream";
 
 interface StdioBridgeOptions {
   /** Full MCP HTTP URL, e.g. http://127.0.0.1:7777/mcp */
   endpoint: string;
   mcpToken: string;
+  input?: Readable;
+  output?: Writable;
+  signal?: AbortSignal;
 }
 
 function assertLoopbackEndpoint(endpoint: string): URL {
@@ -26,7 +30,7 @@ function assertLoopbackEndpoint(endpoint: string): URL {
     throw new Error(`invalid MCP endpoint: ${endpoint}`);
   }
   const host = url.hostname;
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") {
     throw new Error(
       `stdio bridge refuses non-loopback MCP endpoint host: ${host}`,
     );
@@ -61,9 +65,9 @@ export function resolveStdioBridgeConfig(env: NodeJS.ProcessEnv = process.env): 
 /** Run stdio ↔ HTTP MCP proxy until stdin closes. */
 export async function runMcpStdioBridge(
   opts?: Partial<StdioBridgeOptions>,
-): Promise<void> {
+): Promise<{ close(): Promise<void> }> {
   const resolved = {
-    ...resolveStdioBridgeConfig(),
+    ...(opts?.endpoint && opts.mcpToken ? { endpoint: opts.endpoint, mcpToken: opts.mcpToken } : resolveStdioBridgeConfig()),
     ...opts,
   };
   const url = assertLoopbackEndpoint(resolved.endpoint);
@@ -79,8 +83,6 @@ export async function runMcpStdioBridge(
       },
     },
   });
-  await remote.connect(httpTransport);
-
   const local = new Server(
     { name: "modelbot-mcp-stdio", version: VERSION },
     { capabilities: { tools: {} } },
@@ -98,6 +100,11 @@ export async function runMcpStdioBridge(
     });
   });
 
-  const stdio = new StdioServerTransport();
-  await local.connect(stdio);
+  const stdio = new StdioServerTransport(resolved.input, resolved.output);
+  const close = async () => { await Promise.allSettled([local.close(), remote.close()]); };
+  try {
+    await remote.connect(httpTransport, { signal: resolved.signal });
+    await local.connect(stdio);
+    return { close };
+  } catch (error) { await close(); throw error; }
 }

@@ -1,6 +1,6 @@
 # Harness connections
 
-BotHearth exposes a computer through MCP. The harness supplies the model and its own authentication; BotHearth does not replay consumer OAuth credentials. Use the [quickstart](QUICKSTART.md) to start the daemon. This manual integration is separate from connecting an account in the task workspace.
+BotHearth exposes a computer through MCP. This manual integration leaves the harness and its authentication wherever you run it. The built-in task runner instead launches stock Codex/Claude Code inside the computer; historical host sessions keep their original location. Use the [quickstart](QUICKSTART.md) for that simpler path. Neither path copies consumer OAuth credentials between hosts.
 
 ## Generate a connection
 
@@ -51,9 +51,9 @@ For a harness that uses stdio, configure its command as `node`, with arguments `
 
 ## Verify the boundary
 
-After creating the operator task binding, give the harness its task and computer identifiers. Verify a public navigation and snapshot before attempting login. During takeover, model tools must return `E_TAKEOVER_BUSY`; only the authenticated operator UI receives live frames and controls the browser. Release control before asking the harness to continue.
+After creating the operator task binding, give the harness its task and computer identifiers. Verify a public navigation and snapshot before attempting login. During takeover, MCP computer tools must return `E_TAKEOVER_BUSY`; only the authenticated operator UI receives live frames and controls the desktop. BotHearth freezes built-in guest model processes, but cannot freeze an independently connected host harness. Release control before asking that harness to continue.
 
-The MCP token cannot approve requests, create computers, or open operator live view. Keep bootstrap URLs, UI cookies, and credentials out of harness prompts and configuration. An MCP connection does not restrict the harness's separate host shell or filesystem privileges.
+The MCP token cannot approve requests, create computers, or open operator live view. Keep bootstrap URLs, UI cookies and credentials out of harness prompts and configuration. MCP action checks and usage estimates cover BotHearth calls; they do not restrict or fully meter a harness’s separate shell, files or network tools.
 
 Use [troubleshooting](TROUBLESHOOTING.md) for connection failures; test a small task through your actual model connection before relying on the integration. A generated configuration or mock test pass does not demonstrate task success on that harness.
 

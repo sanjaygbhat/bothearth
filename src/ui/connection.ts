@@ -1,8 +1,8 @@
 /**
- * Settings → AI connection.
+ * Settings → Model connection.
  *
  * Two selectable rows — Claude Code and Codex — each showing what was actually
- * found on this Mac, then one status line, one action, and the fine print.
+ * found, then one status line, one action, and the fine print.
  * Detection comes from `GET /api/v1/runtime` (the `ai` block) and
  * `GET /api/v1/connection`, which is also where every action posts back.
  *
@@ -17,7 +17,7 @@
  *     a row. It lives behind "Details", and nowhere else.
  */
 
-import { ApiError, apiGet, apiPost } from "./api.ts";
+import { apiGet, apiPost } from "./api.ts";
 import { publishStatusPill } from "./home.ts";
 import { limitTime, type ProviderLimit } from "./runtime.ts";
 import { appendTextChild } from "./safe.ts";
@@ -35,7 +35,10 @@ export type Provider = "codex" | "claude";
 export type Connection = {
   status: ConnectionStatus;
   login_mode?: "browser" | "device" | "terminal";
+  execution_location?: "host" | "computer";
+  computer_id?: string;
   device_auth?: { verification_uri: string; user_code: string; expires_at: string };
+  native_terminal?: { output: string; can_reply: true };
   provider: Provider;
   model: string;
   message?: string;
@@ -89,24 +92,25 @@ export function providerRowCopy(
   connection: Connection | null,
   detected: boolean,
 ): string {
-  if (!connection) return detected ? "Found on this Mac" : "Checking this Mac";
+  if (!connection) return detected ? "Found" : "Checking connection";
+  const found = connection.execution_location === "computer" ? "In the bot’s computer" : "Found";
   switch (connection.status) {
     case "connected":
       return [
-        "Signed in as you",
+        connection.execution_location === "computer" ? "Connected in the bot’s computer" : "Signed in as you",
         connection.model || null,
         limitWord(connection.limit) ?? `billed on ${PLAN_NAME[provider]}`,
       ]
         .filter(Boolean)
         .join(" · ");
     case "signed_in":
-      return "Found on this Mac · signed in, not connected yet";
+      return `${found} · signed in, not connected yet`;
     case "signing_in":
-      return "Found on this Mac · signing in now";
+      return `${found} · signing in now`;
     case "signed_out":
-      return "Found on this Mac · not signed in";
+      return `${found} · not signed in`;
     case "missing":
-      return "Not on this Mac yet";
+      return connection.execution_location === "computer" ? "Not in the bot’s computer yet" : "Not installed yet";
     default:
       return "Couldn’t check this one just now";
   }
@@ -169,25 +173,25 @@ function https(value: string | undefined): string | null {
 }
 
 /**
- * Render the AI connection section into `pane`. Returns a disposer that stops
+ * Render the Model connection section into `pane`. Returns a disposer that stops
  * every timer; call it before the pane is cleared.
  */
 export function renderAiConnection(pane: HTMLElement): () => void {
   let disposed = false;
   const live = () => !disposed && pane.isConnected;
 
-  appendTextChild(pane, "h3", "AI connection");
+  appendTextChild(pane, "h3", "Model connection");
   appendTextChild(
     pane,
     "p",
-    "BotHearth connects to your installed Codex or Claude Code CLI. Use its native sign-in; provider eligibility, limits, and charges apply.",
+    "Choose an account to run your tasks. Sign in with Codex or Claude Code.",
     "set-lede",
   );
 
   const group = document.createElement("div");
   group.className = "set-rows";
   group.setAttribute("role", "radiogroup");
-  group.setAttribute("aria-label", "Which AI does the thinking");
+  group.setAttribute("aria-label", "Model provider");
   pane.append(group);
 
   const order: Provider[] = ["claude", "codex"];
@@ -203,7 +207,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     const text = document.createElement("span");
     text.className = "set-grow";
     appendTextChild(text, "span", PROVIDER_NAME[provider], "set-n");
-    const sub = appendTextChild(text, "span", "Checking this Mac", "set-w");
+    const sub = appendTextChild(text, "span", "Checking connection", "set-w");
     button.append(radio, text);
     group.append(button);
     rows.set(provider, { button, sub });
@@ -257,10 +261,38 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   const verify = document.createElement("a");
   verify.target = "_blank";
   verify.rel = "noopener noreferrer";
-  verify.textContent = "Open the official Codex sign-in page";
+  verify.textContent = "Copy code and open ChatGPT";
+  verify.className = "btn primary";
   const deviceCode = document.createElement("p");
   devicePanel.append(verify, deviceCode);
+  appendTextChild(devicePanel, "p", "Enter this code on the ChatGPT page. BotHearth connects automatically when you finish.");
+  appendTextChild(devicePanel, "p", "If ChatGPT asks, enable device code login in Settings → Security.", "set-fine");
   pane.append(devicePanel);
+
+  // Official CLI output stays plain text and exists only during this operator’s sign-in.
+  const terminalPanel = document.createElement("form");
+  terminalPanel.className = "set-terminal";
+  terminalPanel.hidden = true;
+  const terminalTitle = appendTextChild(terminalPanel, "p", "Official sign-in", "set-n");
+  const terminalOutput = appendTextChild(terminalPanel, "pre", "");
+  terminalOutput.tabIndex = 0;
+  terminalOutput.setAttribute("aria-label", "Official sign-in output");
+  const terminalLabel = appendTextChild(terminalPanel, "label", "Reply to sign-in", "set-field");
+  const terminalReply = document.createElement("input");
+  terminalReply.type = "text";
+  terminalReply.autocomplete = "off";
+  terminalReply.spellcheck = false;
+  terminalReply.maxLength = 8192;
+  terminalReply.placeholder = "Reply, or leave empty to press Enter";
+  terminalLabel.append(terminalReply);
+  const terminalSend = document.createElement("button");
+  terminalSend.textContent = "Send to sign-in";
+  terminalSend.className = "btn";
+  terminalSend.type = "submit";
+  terminalSend.disabled = true;
+  terminalPanel.append(terminalSend);
+  appendTextChild(terminalPanel, "p", "Sent to the provider’s sign-in process, separate from task chat.", "set-fine");
+  pane.append(terminalPanel);
 
   const details = document.createElement("details");
   details.className = "set-details";
@@ -271,6 +303,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   modelField.className = "set-field";
   modelField.textContent = "Model";
   const model = document.createElement("input");
+  model.maxLength = 512;
   model.setAttribute("autocomplete", "off");
   model.setAttribute("spellcheck", "false");
   modelField.append(model);
@@ -295,7 +328,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   appendTextChild(
     pane,
     "p",
-    "BotHearth is independent of OpenAI and Anthropic. Your provider receives model-visible task context and applies its own terms and data policy. Select a supported model and authentication method for your account.",
+    "Your chosen provider receives task context. Its eligibility rules, usage limits and charges apply.",
     "set-fine",
   );
 
@@ -313,6 +346,8 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let clock: ReturnType<typeof setInterval> | undefined;
   let revision = 0;
+  let terminalRevision = 0;
+  let terminalBusy = false;
 
   /**
    * The titlebar chip names the AI on every screen, and this pane is the only
@@ -336,6 +371,31 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     verify.removeAttribute("href");
   };
 
+  const clearTerminal = () => {
+    terminalRevision += 1;
+    terminalBusy = false;
+    terminalPanel.hidden = true;
+    terminalOutput.textContent = "";
+    terminalReply.value = "";
+    terminalReply.disabled = true;
+    terminalSend.disabled = true;
+    if (connection) delete connection.native_terminal;
+    for (const cached of others.values()) if (cached) delete cached.native_terminal;
+  };
+
+  const showTerminal = (result: Connection) => {
+    if (result.status !== "signing_in" || result.execution_location !== "computer" ||
+        result.native_terminal?.can_reply !== true || typeof result.native_terminal.output !== "string") {
+      clearTerminal();
+      return;
+    }
+    terminalTitle.textContent = `Official ${PROVIDER_NAME[result.provider]} sign-in`;
+    terminalOutput.textContent = result.native_terminal.output.slice(-32_768);
+    terminalPanel.hidden = false;
+    terminalReply.disabled = terminalBusy;
+    terminalSend.disabled = terminalBusy;
+  };
+
   const paintDetails = () => {
     list.replaceChildren();
     const add = (term: string, value: string) => {
@@ -345,18 +405,20 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     add("Chosen", PROVIDER_NAME[selected]);
     add("State", statusWord(connection?.status ?? null, connection?.limit));
     if (connection?.model) add("Model", connection.model);
-    if (runtimeAi) {
+    if (connection?.execution_location === "computer") {
+      add("Runs in", "The bot’s computer");
+    } else if (runtimeAi && runtimeAi.provider === selected) {
       add(
         "Where it was found",
         runtimeAi.cli_found
           ? runtimeAi.cli_path_kind === "path"
             ? "On your command-line PATH"
-            : "In its usual place on this Mac"
-          : "Not found on this Mac",
+            : "In its usual place on the host"
+          : "Not found on the host",
       );
       if (runtimeAi.detail) add("Last check said", runtimeAi.detail);
     }
-    model.placeholder = selected === "claude" ? "Claude Code default" : "gpt-6-astra";
+    model.placeholder = "Exact model ID";
     authField.hidden =
       selected !== "claude" ||
       connection?.login_mode === "terminal" ||
@@ -407,7 +469,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         break;
       case "signed_out":
         action.textContent =
-          connection?.login_mode === "terminal"
+          connection?.login_mode === "terminal" && connection.execution_location !== "computer"
             ? "Check again"
             : selected === "claude"
               ? "Sign in through Claude Code"
@@ -429,7 +491,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     const url = https(connection?.install_url);
     install.hidden = status !== "missing" || !url;
     if (url) install.href = url;
-    install.textContent = `Install ${name}`;
+    install.textContent = `Install ${name}${connection?.execution_location === "computer" ? " in the bot’s computer" : ""}`;
   };
 
   const paint = () => {
@@ -442,16 +504,15 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   const failed = (error: unknown) => {
     if (!live()) return;
     clearDevice();
+    clearTerminal();
     busy = false;
     connectAfterSignIn = false;
-    connection = { status: "error", provider: selected, model: model.value };
+    connection = { ...connection, status: "error", provider: selected, model: model.value };
     message.dataset.tone = "danger";
     message.textContent =
-      error instanceof ApiError && error.status === 409
-        ? "Finish or stop your current task before changing the AI connection."
-        : error instanceof Error
-          ? error.message
-          : "The connection could not be checked. Choose Check again in a moment.";
+      error instanceof Error
+        ? error.message
+        : "The connection could not be checked. Choose Check again in a moment.";
     paint();
   };
 
@@ -471,15 +532,42 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     clearDevice();
   };
 
+  verify.addEventListener("click", (event) => {
+    const challenge = connection?.device_auth;
+    if (!live() || connection?.status !== "signing_in" || challenge?.verification_uri !== DEVICE_VERIFICATION_URL
+      || !DEVICE_CODE.test(challenge.user_code) || !(Date.parse(challenge.expires_at) > Date.now())) {
+      event.preventDefault();
+      clearDevice();
+      return;
+    }
+    const copyFailed = () => {
+      if (live()) message.textContent = "Select and copy the code shown here, then enter it on the ChatGPT page.";
+    };
+    try { void navigator.clipboard.writeText(challenge.user_code).catch(copyFailed); }
+    catch { copyFailed(); }
+    // Keep the ordinary link navigation in this click so popup blockers do not
+    // swallow the official sign-in page while the clipboard promise settles.
+  });
+
   const refresh = async (): Promise<void> => {
     if (!live()) {
       clearDevice();
+      clearTerminal();
       return;
     }
     clearTimeout(timer);
     const mine = ++revision;
-    const query = providerEdited ? `?provider=${selected}` : "";
-    const result = (await apiGet(`/api/v1/connection${query}`)) as Connection;
+    const params = new URLSearchParams();
+    if (providerEdited || connection?.status === "signing_in") params.set("provider", selected);
+    if (connection?.computer_id) params.set("computer_id", connection.computer_id);
+    const query = params.toString();
+    let result: Connection;
+    try {
+      result = (await apiGet(`/api/v1/connection${query ? `?${query}` : ""}`)) as Connection;
+    } catch (error) {
+      if (!live() || mine !== revision) return;
+      throw error;
+    }
     if (!live() || mine !== revision) return;
     checkedAt = Date.now();
     if (!providerEdited && (result.provider === "claude" || result.provider === "codex")) {
@@ -487,6 +575,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     }
     connection = result;
     showDevice(result);
+    showTerminal(result);
     if (!modelEdited && typeof result.model === "string") model.value = result.model;
 
     switch (result.status) {
@@ -510,22 +599,28 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         message.textContent =
           result.message ||
           (result.login_mode === "terminal"
-            ? `Sign in to ${PROVIDER_NAME[selected]} on this machine, then check again.`
-            : `Sign in through ${PROVIDER_NAME[selected]}’s own browser page. ModelBot never sees your password.`);
+            ? result.execution_location === "computer"
+              ? `Start the official ${PROVIDER_NAME[selected]} sign-in in the bot’s computer.`
+              : `Sign in to ${PROVIDER_NAME[selected]} on the BotHearth host, then check again.`
+            : `Sign in through ${PROVIDER_NAME[selected]}’s own browser page. BotHearth never sees your password.`);
         break;
       case "signing_in":
         message.dataset.tone = "ok";
         message.textContent =
           result.login_mode === "device"
             ? result.message || "Finish the official Codex sign-in, then come back here."
-            : "Finish signing in in your browser, then come back here. ModelBot connects on its own.";
+            : result.login_mode === "terminal"
+              ? result.message || (result.native_terminal
+                ? "Follow the official sign-in steps below."
+                : `Finish signing in to ${PROVIDER_NAME[selected]} on the BotHearth host, then check again.`)
+            : "Finish signing in in your browser, then come back here. BotHearth connects on its own.";
         timer = setTimeout(() => {
           void refresh().catch(failed);
         }, POLL_MS);
         break;
       case "missing":
         message.dataset.tone = "warn";
-        message.textContent = `Install ${PROVIDER_NAME[selected]} first, then come back here.`;
+        message.textContent = result.message || `Install ${PROVIDER_NAME[selected]}${result.execution_location === "computer" ? " in the bot’s computer" : " on the BotHearth host"}, then check again.`;
         break;
       case "error":
         message.dataset.tone = "danger";
@@ -545,6 +640,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
       model: model.value.trim(),
       provider: selected,
       auth: auth.value,
+      ...(connection?.computer_id ? { computer_id: connection.computer_id } : {}),
     })) as Connection;
     if (!live()) return;
     busy = false;
@@ -559,6 +655,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
       message.dataset.tone = "ok";
       message.textContent = "";
       clearDevice();
+      clearTerminal();
       paint();
       return;
     }
@@ -576,6 +673,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     model.value = "";
     message.textContent = "";
     clearDevice();
+    clearTerminal();
     paint();
     void refresh().catch(failed);
   };
@@ -605,15 +703,16 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         paintAction();
         return;
       }
-      if (status === "signed_out" && connection?.login_mode !== "terminal") {
+      if (status === "signed_out" && (connection?.login_mode !== "terminal" || connection.execution_location === "computer")) {
         connectAfterSignIn = true;
         const result = (await apiPost("/api/v1/connection/sign-in", {
           model: model.value.trim(),
           provider: selected,
           auth: auth.value,
+          ...(connection?.computer_id ? { computer_id: connection.computer_id } : {}),
         })) as Connection;
         if (result.status === "error") {
-          throw new Error(result.message ?? "Sign-in could not start. Check that ModelBot is running, then try again.");
+          throw new Error(result.message ?? "Sign-in could not start. Check that BotHearth is running, then try again.");
         }
       }
       busy = false;
@@ -635,9 +734,14 @@ export function renderAiConnection(pane: HTMLElement): () => void {
   cancel.addEventListener("click", () => {
     if (cancel.disabled) return;
     cancel.disabled = true;
+    revision += 1;
+    clearTimeout(timer);
     clearDevice();
+    clearTerminal();
     connectAfterSignIn = false;
-    void apiPost("/api/v1/connection/cancel", { provider: selected })
+    void apiPost("/api/v1/connection/cancel", { provider: selected,
+      ...(connection?.computer_id ? { computer_id: connection.computer_id } : {}),
+    })
       .then(() => {
         busy = false;
         return refresh();
@@ -646,6 +750,31 @@ export function renderAiConnection(pane: HTMLElement): () => void {
       .finally(() => {
         if (live()) cancel.disabled = false;
       });
+  });
+
+  terminalPanel.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (terminalBusy || terminalPanel.hidden || !connection?.native_terminal?.can_reply) return;
+    const text = terminalReply.value;
+    if (text.length > 8192 || /[\r\n\0]/.test(text)) {
+      message.dataset.tone = "warn";
+      message.textContent = "Send one line of up to 8,192 characters to sign-in.";
+      return;
+    }
+    const mine = terminalRevision;
+    terminalBusy = true;
+    terminalReply.value = "";
+    terminalReply.disabled = true;
+    terminalSend.disabled = true;
+    void apiPost("/api/v1/connection/input", { provider: selected, text,
+      ...(connection.computer_id ? { computer_id: connection.computer_id } : {}),
+    }).then(async () => {
+      if (!live() || mine !== terminalRevision) return;
+      terminalBusy = false;
+      await refresh();
+    }).catch((error) => {
+      if (live() && mine === terminalRevision) failed(error);
+    });
   });
 
   model.addEventListener("input", () => {
@@ -674,7 +803,10 @@ export function renderAiConnection(pane: HTMLElement): () => void {
       const other = order.find((p) => p !== selected);
       if (!other || others.has(other)) return;
       try {
-        others.set(other, (await apiGet(`/api/v1/connection?provider=${other}`)) as Connection);
+        const result = (await apiGet(`/api/v1/connection?provider=${other}`)) as Connection;
+        if (!live()) return;
+        delete result.native_terminal;
+        others.set(other, result);
       } catch {
         others.set(other, null);
       }
@@ -692,5 +824,6 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     clearTimeout(timer);
     if (clock !== undefined) clearInterval(clock);
     clearDevice();
+    clearTerminal();
   };
 }

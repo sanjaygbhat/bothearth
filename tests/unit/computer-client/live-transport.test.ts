@@ -108,3 +108,27 @@ test("a dead RPC is replaced on the next call without replaying the failed actio
     assert.ok(methods.includes("browser_tabs"));
   } finally { await client.close(); }
 });
+
+test("a control change while live startup is queued subscribes again after its unsubscribe", async () => {
+  const stdout = new PassThrough();
+  const methods: string[] = [];
+  const child = fakeExec(stdout, new Writable({ write(chunk, _encoding, callback) {
+    const frame = decodeStdioBody(chunk.subarray(4));
+    assert.equal(frame.type, 0);
+    const request = frame.message as { id: number; method: string };
+    methods.push(request.method);
+    stdout.write(encodeRpcFrame({ jsonrpc: "2.0", id: request.id, result: { ok: true, data: {} } }));
+    callback();
+  } }));
+  const client = new ExecComputerClient("queued_live_start", {
+    capabilities: ["browser"],
+    cli: { binary: "fixture", run: async () => "", runSync: () => "", spawn: () => child },
+  });
+  try {
+    client.startLive();
+    client.stopLive();
+    client.startLive();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(methods, ["screencast.subscribe", "screencast.unsubscribe", "screencast.subscribe"]);
+  } finally { await client.close(); }
+});

@@ -20,6 +20,8 @@ import type {
   CreateTaskBody,
   DriverKind,
   Driver,
+  NativeProvider,
+  NativeTaskSettings,
   EventType,
   ProviderAdapter,
   SandboxRuntime,
@@ -65,8 +67,11 @@ import {
   type McpToolBackend,
 } from "../mcp/index.ts";
 import { DEFAULT_MAX_STEPS, DEFAULT_SPEND_CAP_MAX_USD, DEFAULT_SPEND_CAP_USD, browserUnavailableDetail, maxRuntimeStopDetail, maxStepsStopDetail, runAgentLoop, spendCapStopDetail, type AgentLoopOptions } from "./agent-loop.ts";
-import { taskActivity, taskBudget, taskResult } from "./task-view.ts";
+import { taskActivity, taskBudget, taskResult, takeoverContext } from "./task-view.ts";
 import { MAX_RUNTIME_STOP, runCodexTask, type CodexRunnerConfig } from "./codex-runner.ts";
+import { getNativeModelCatalog, resolveNativeTaskSettings } from "./native-models.ts";
+import { GUEST_CLAUDE_HOME, GUEST_CODEX_HOME, guestSpawn, setGuestComputerPaused } from "./guest-native.ts";
+import { activateLicence, licenceState, type LicencePolicy } from "./licence.ts";
 import {
   createA11yDriver,
   createHybridDriver,
@@ -130,6 +135,7 @@ export interface DaemonOptions {
   port?: number;
   /** In-process route tests can exercise the HTTP listener without opening a socket. */
   listen?: boolean;
+  schedulerEnabled?: boolean;
   allowPublicBind?: boolean;
   mcpToken: string;
   bootstrapToken: string;
@@ -143,6 +149,8 @@ export interface DaemonOptions {
   allowedHosts?: string[];
   /** Canonical HTTPS proxy origin; transport stays on loopback. */
   publicOrigin?: string;
+  /** A host without a local browser, including an SSH-only VM. */
+  headless?: boolean;
   /** Enables standalone execution for tasks created through `POST /api/v1/tasks`. */
   agentLoop?: StandaloneAgentConfig;
   /** Explicit opt-in to the existing Codex login; never inferred from installed binaries. */
@@ -150,6 +158,9 @@ export interface DaemonOptions {
   /** Native login executable/home; credentials remain owned by Codex. */
   codexLogin?: CodexLoginOptions;
   claudeLogin?: CodexLoginOptions;
+  /** The application runs new native sessions in its computer. Host is for legacy integrations. */
+  nativeExecutionLocation?: "computer" | "host";
+  licencePolicy?: LicencePolicy;
   /** Pre-built connector broker (tests). */
   connectorBroker?: ConnectorBroker;
   /** Or configs (+ optional vault) to build a broker under workspaceRoot. */
@@ -404,6 +415,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     budget: { default_usd: spendCapDefault(), max_usd: spendCapMax(), per_call_usd: perCallUsd },
   };
   const providerLimits = createProviderLimits();
+  const guestExecution = opts.nativeExecutionLocation === "computer";
+  function nativeRunnerConfig(provider: NativeProvider): CodexRunnerConfig {
+    if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider) return opts.codexRunner;
+    const login = provider === "codex" ? opts.codexLogin : opts.claudeLogin;
+    return { provider, codexHome: login?.codexHome
+      ?? (provider === "codex" ? process.env.CODEX_HOME : process.env.CLAUDE_CONFIG_DIR)
+      ?? (provider === "codex" ? join(homedir(), ".codex") : ""),
+      model: provider === "codex" ? "gpt-6-astra" : "claude-fable-5-1",
+      runsRoot: opts.codexRunner?.runsRoot,
+      ...(login?.binary ? { binary: login.binary } : {}) };
+  }
   const connections = Object.fromEntries((["codex", "claude"] as const).map(provider => {
     const configured = opts.codexRunner?.provider ?? "codex";
     const loginOptions = provider === "codex" ? opts.codexLogin : opts.claudeLogin;
@@ -412,14 +434,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       ?? (provider === "codex" ? join(homedir(), ".codex") : "");
     return [provider, createCodexConnection({ ...loginOptions, provider, codexHome: loginHome,
       authorized: (owner) => Boolean(store.getSession(owner)),
-      loginMode: loginOptions?.loginMode ?? (publicOrigin ? provider === "codex" ? "device" : "terminal" : "browser"),
+      loginMode: loginOptions?.loginMode ?? (publicOrigin || opts.headless ? provider === "codex" ? "device" : "terminal" : "browser"),
       binary: (configured === provider ? opts.codexRunner?.binary : undefined) ?? loginOptions?.binary,
       model: () => opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider ? opts.codexRunner.model : provider === "codex" ? "gpt-6-astra" : "",
       configured: () => Boolean(opts.codexRunner) && (opts.codexRunner?.provider ?? "codex") === provider,
       connected(model) {
-        if (closing || store.listTasks().some((task) => ["running", "paused"].includes(task.status))) return false;
+        if (closing) return false;
         const same = (opts.codexRunner?.provider ?? "codex") === provider;
-        opts.codexRunner = { ...(same ? opts.codexRunner : {}), provider, codexHome: loginHome, model,
+        opts.codexRunner = { runsRoot: opts.codexRunner?.runsRoot, ...(same ? opts.codexRunner : {}), provider, codexHome: loginHome, model,
           ...(loginOptions?.binary ? { binary: loginOptions.binary } : {}) };
         store.setCodexConnection(loginHome, model, provider);
         Object.assign(executionInfo, { task_start_available: true, execution_mode: provider, model,
@@ -429,16 +451,52 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       },
     })];
   })) as Record<"codex" | "claude", ReturnType<typeof createCodexConnection>>;
+  const guestConnections = new Map<string, ReturnType<typeof createCodexConnection>>();
+  function connectionFor(provider: NativeProvider, computerId?: string) {
+    if (!guestExecution) return connections[provider];
+    if (!computerId) return undefined;
+    const key = `${computerId}:${provider}`;
+    let connection = guestConnections.get(key);
+    if (!connection) {
+      connection = createCodexConnection({ provider,
+        codexHome: provider === "codex" ? GUEST_CODEX_HOME : GUEST_CLAUDE_HOME,
+        loginMode: provider === "codex" ? "device" : "terminal",
+        spawn: args => guestSpawn(computerId, provider, args),
+        authorized: owner => Boolean(store.getSession(owner)),
+        model: () => nativeRunnerConfig(provider).model,
+        configured: () => Boolean(opts.codexRunner) && (opts.codexRunner?.provider ?? "codex") === provider,
+        connected(model) {
+          if (closing) return false;
+          // Keep the legacy host location for saved sessions; new tasks record
+          // their guest location independently and never copy its credentials.
+          opts.codexRunner = { ...nativeRunnerConfig(provider), model };
+          store.setCodexConnection(opts.codexRunner.codexHome, model, provider);
+          Object.assign(executionInfo, { task_start_available: true, execution_mode: provider, model,
+            spend_cap_usd: spendCap(), budget_kind: "tool_proxy" });
+          return true;
+        },
+      });
+      guestConnections.set(key, connection);
+    }
+    return connection;
+  }
+  const allConnections = () => [...Object.values(connections), ...guestConnections.values()];
   /**
    * `codex login status` exits 0 on a plan whose quota is spent, so a signed-in
    * connection is not the same as a usable one: a remembered refusal rides
    * along on the status the UI reads.
    */
-  async function connectionStatus(provider: "codex" | "claude" = opts.codexRunner?.provider ?? "codex", audience?: string) {
-    const state = await connections[provider].status(audience);
-    if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider) executionInfo.task_start_available = state.status === "connected";
+  async function connectionStatus(provider: NativeProvider = opts.codexRunner?.provider ?? "codex", audience?: string, computerId = defaultComputer()?.id) {
+    const connection = connectionFor(provider, computerId);
+    const state = connection ? await connection.status(audience) : {
+      status: "signed_out", provider, model: nativeRunnerConfig(provider).model,
+      login_mode: provider === "codex" ? "device" as const : "terminal" as const,
+      message: "Sign in to your model account. BotHearth will prepare your computer first.",
+    };
+    if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider)
+      executionInfo.task_start_available = state.status === "connected" || state.status === "signed_in";
     const limit = providerLimits.get(provider);
-    return limit ? { ...state, limit } : state;
+    return { ...state, ...(limit ? { limit } : {}), execution_location: guestExecution ? "computer" : "host", ...(computerId ? { computer_id: computerId } : {}) };
   }
   if (opts.codexRunner) await connectionStatus();
 
@@ -483,7 +541,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
    * only reads the CLI's own `auth status`.
    */
   async function adoptSignedInProvider(): Promise<void> {
-    if (!opts.autoConnectProvider || opts.codexRunner) return;
+    if (guestExecution || !opts.autoConnectProvider || opts.codexRunner) return;
     if (adopting) { await adopting; return; }
     if (Date.now() < adoptNextAt) return;
     adopting = (async () => {
@@ -550,6 +608,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const runtimeProbe = createRuntimeProbe({
     preparer: imagePreparer,
     configuredProvider: () => opts.codexRunner ? opts.codexRunner.provider ?? "codex" : null,
+    nativeInComputer: () => guestExecution,
     async providerStatus(provider) {
       await adoptSignedInProvider();
       return (await connectionStatus(provider)).status;
@@ -598,6 +657,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   let closing = false;
   const clients = new Map<string, ComputerClient>();
+  const controlChanges = new Map<string, Promise<unknown>>();
+  async function changeControl<T>(computerId: string, action: () => Promise<T>): Promise<T> {
+    const pending = (controlChanges.get(computerId) ?? Promise.resolve()).catch(() => {}).then(action);
+    controlChanges.set(computerId, pending);
+    try { return await pending; }
+    finally { if (controlChanges.get(computerId) === pending) controlChanges.delete(computerId); }
+  }
+  const hasGuestComputer = (computerId: string) => store.listTasks().some(task =>
+    task.computer_id === computerId && task.execution_location === "computer");
   const taskControllers = new Map<string, AbortController>();
   const taskRuns = new Map<string, Promise<unknown>>();
   const liveSubs = new Map<string, Set<WsSocket>>();
@@ -612,7 +680,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   // Close idle revoked sockets too; every send and queued input checks immediately.
   const socketSessionTimer = setInterval(() => {
     for (const ws of socketSessions.keys()) authorizeSocket(ws);
-    for (const connection of Object.values(connections)) {
+    for (const connection of allConnections()) {
       const owner = connection.loginSession();
       if (owner && !store.getSession(owner)) void connection.cancel(false);
     }
@@ -632,7 +700,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     },
     listComputers: () =>
       store.listComputers().filter((c) => c.status === "running").map((c) => c.id),
-    isTakeoverActive: (id) => isTakeoverPending(store.activeTakeoverForComputer(id)),
+    isTakeoverActive: (id) => isTakeoverPending(store.activeTakeoverForComputer(id)) || store.listTasks().some(task =>
+      task.computer_id === id && task.status === "running" && (task.adapter === "codex" || task.adapter === "claude")),
   });
   idlePause.start();
   const approvalExpiryTimer = setInterval(() => {
@@ -672,7 +741,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   async function resolveDefaultComputer(): Promise<ComputerRow> {
     const selected = defaultComputer();
     if (selected) return selected;
-    // Only a submitted task provisions; overlapping first submissions share one browser.
+    // An explicit task or native sign-in provisions; overlapping requests share one computer.
     defaultProvision ??= (async () => {
       const computer = await provisionComputer({ name: `browser-${randomBytes(6).toString("hex")}`,
         capabilities: ["browser"], persistent: true });
@@ -721,8 +790,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   async function reconcileComputerImages(): Promise<void> {
     if (useFakeComputer() || !sandbox.refreshImage) return;
     for (const computer of store.listComputers()) {
-      // Never pull the floor out from under a task that is mid-run.
-      if (store.listTasks().some((task) => task.computer_id === computer.id && task.status === "running")) continue;
+      // A paused task or private handoff still owns its browser session.
+      if (store.activeTakeoverForComputer(computer.id) || store.listTasks().some((task) =>
+        task.computer_id === computer.id && ["running", "paused"].includes(task.status))) continue;
       try {
         const refreshed = await sandbox.refreshImage(
           computer.id,
@@ -757,10 +827,49 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         };
       }
       c.call = withWake(c.call.bind(c), (method) => method !== "takeover_status");
-      c.grantTakeover = withWake(c.grantTakeover.bind(c));
-      c.releaseTakeover = withWake(c.releaseTakeover.bind(c));
-      c.expireTakeover = withWake(c.expireTakeover.bind(c));
-      c.declineTakeover = withWake(c.declineTakeover.bind(c));
+      const grant = c.grantTakeover.bind(c), release = c.releaseTakeover.bind(c), decline = c.declineTakeover.bind(c);
+      const thawIfAgent = async () => {
+        const state = await c!.call("takeover_status", {});
+        if (state.ok && (state.data as { state?: string })?.state === "agent") await setGuestComputerPaused(computerId, false);
+      };
+      c.grantTakeover = withWake(id => changeControl(computerId, async () => {
+        // Native shell/file tools bypass MCP. Stop them before acknowledging
+        // human control; the computer's pause marker also blocks new processes.
+        const native = hasGuestComputer(computerId);
+        try {
+          if (native) await setGuestComputerPaused(computerId, true);
+          const result = await grant(id);
+          if (native && result.ok && (result.data as { state?: string })?.state === "human") {
+            for (const { scope } of scopedMcp.values())
+              if (scope.active && scope.computerId === computerId) scope.waitGeneration++;
+          }
+          if (!result.ok && native) await thawIfAgent();
+          return result;
+        } catch (error) {
+          // A failed scan may have stopped only some processes. Thaw only if
+          // the authoritative browser gate already permits model access.
+          if (native) await thawIfAgent().catch(() => {});
+          throw error;
+        }
+      }));
+      const returnNativeControl = async (call: typeof release, id: string) => {
+        let result = await call(id);
+        const native = hasGuestComputer(computerId);
+        // The browser may have returned successfully before native thaw failed.
+        // Retry that same lease without changing another person's control.
+        if (!result.ok && native) {
+          const status = await c!.call("takeover_status", { takeover_id: id });
+          const data = status.ok ? status.data as { state?: string; takeover_id?: string } : undefined;
+          if (data?.state === "agent" && data.takeover_id === id) result = status;
+        }
+        if (result.ok && (result.data as { state?: string })?.state === "agent" && native)
+          await setGuestComputerPaused(computerId, false);
+        return result;
+      };
+      c.releaseTakeover = withWake(id => changeControl(computerId, () => returnNativeControl(release, id)));
+      const expire = c.expireTakeover.bind(c);
+      c.expireTakeover = withWake(id => changeControl(computerId, () => expire(id)));
+      c.declineTakeover = withWake(id => changeControl(computerId, () => returnNativeControl(decline, id)));
       const startLive = c.startLive.bind(c), stopLive = c.stopLive.bind(c);
       let liveGeneration = 0;
       c.startLive = (interval) => {
@@ -838,14 +947,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     publicOrigin ?? null,
   );
 
-  type TaskScope = { taskId: string; computerId: string; token: string; active: boolean; waitGeneration: number; messageGeneration: number; awaitingMessage?: boolean; connectionFailed?: boolean };
+  type TaskScope = { taskId: string; computerId: string; token: string; active: boolean; waitGeneration: number; awaitingMessage?: boolean };
   const scopedMcp = new Map<string, { scope: TaskScope; handler: ReturnType<typeof createMcpHttpHandler> }>();
 
   function takeOperatorMessages(taskId: string): string[] {
-    const messages = store.takeMessages(taskId);
-    const scope = scopedMcp.get(taskId)?.scope;
-    if (scope && messages.length) scope.messageGeneration++;
-    return messages;
+    return store.takeMessages(taskId);
   }
 
   function resolveMcpComputer(scope?: TaskScope): { id: string } | null {
@@ -933,11 +1039,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           // The harness is the shipping execution mode: without this a dead
           // browser never raises `browser_unavailable` and never gets relaunched.
           noteBrowserHealth(computerId, name, result);
-          if (scope) {
-            if (!result.ok && ["E_IO", "E_SANDBOX_DEAD"].includes(result.error.code) &&
-              /stream closed|computer-server exited|client closed|not running|no such container/i.test(result.error.message)) scope.connectionFailed = true;
-            else if (result.ok) scope.connectionFailed = false;
-          }
           if (scope && ((!result.ok && ["E_TAKEOVER_BUSY", "E_POLICY_PENDING"].includes(result.error.code))
             || (name === "request_takeover" && result.ok))) scope.waitGeneration++;
           if (
@@ -1016,19 +1117,47 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
    * agent has control, the row is a leftover, so close it.
    */
   async function closeForeignTakeover(task: TaskRow): Promise<void> {
-    const stale = store.activeTakeoverForComputer(task.computer_id);
-    if (!stale?.task_id || stale.task_id === task.id) return;
-    const status = await getClient(task.computer_id).call("takeover_status", { takeover_id: stale.id });
-    if (!status.ok || (status.data as { state?: string })?.state !== "agent") return;
-    store.updateTakeoverState(stale.id, "terminated");
-    logInfo("closed a takeover another task left open", {
-      takeover_id: stale.id, task_id: task.id, left_by: stale.task_id,
+    await changeControl(task.computer_id, async () => {
+      const stale = store.activeTakeoverForComputer(task.computer_id) ?? store.latestTakeoverForComputer(task.computer_id);
+      if (!stale?.task_id || stale.task_id === task.id) return;
+      const client = getClient(task.computer_id);
+      let status = await client.call("takeover_status", { takeover_id: stale.id });
+      const data = status.ok ? status.data as { state?: string; takeover_id?: string } : undefined;
+      const owner = store.getTask(stale.task_id);
+      if (!stale.granted_to && (!owner || ["completed", "failed", "cancelled"].includes(owner.status))
+        && data?.takeover_id === stale.id && ["requested", "paused"].includes(data.state ?? "")) {
+        // Nobody took this task's unanswered request. Its ended RPC session
+        // must not leave the next task behind a requested computer gate.
+        clients.delete(task.computer_id);
+        await client.close();
+        status = await getClient(task.computer_id).call("takeover_status", { takeover_id: stale.id });
+      }
+      if (!status.ok || (status.data as { state?: string })?.state !== "agent") return;
+      if (hasGuestComputer(task.computer_id)) await setGuestComputerPaused(task.computer_id, false);
+      if (stale.state === "agent" || stale.state === "terminated") return;
+      store.updateTakeoverState(stale.id, "terminated");
+      logInfo("closed a takeover another task left open", {
+        takeover_id: stale.id, task_id: task.id, left_by: stale.task_id,
+      });
     });
   }
 
   function taskWaiting(taskId: string, computerId: string) {
-    return isTakeoverPending(store.activeTakeoverForComputer(computerId, taskId))
+    // Expiry pauses control; only the operator can release the computer gate.
+    return Boolean(store.activeTakeoverForComputer(computerId, taskId))
       || store.listApprovals("pending").some((approval) => approval.task_id === taskId);
+  }
+
+  async function pauseNativeForRestart(task: TaskRow): Promise<void> {
+    if (!["running", "paused"].includes(task.status) || !["codex", "claude"].includes(task.adapter ?? "")) return;
+    // The replacement computer-server has a fresh input epoch. Keep capture
+    // blocked, and require a fresh operator grant instead of replaying input.
+    const takeover = store.activeTakeoverForComputer(task.computer_id, task.id);
+    if (takeover) store.updateTakeoverState(takeover.id, "paused");
+    if (task.status !== "running" || !store.pauseTask(task.id)) return;
+    await emit("task.step", { status: "paused", reason: "daemon_restart",
+      detail: "BotHearth stopped. Your task and conversation are saved. Review the current page, then resume when ready." },
+      { task_id: task.id, computer_id: task.computer_id });
   }
 
   async function cancelTask(id: string) {
@@ -1041,14 +1170,30 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     if (computersCancelling.has(computerId)) { await revokeRunner(id); return task; }
     computersCancelling.add(computerId);
     try {
-      await revokeRunner(id);
-      // Explicit standalone tasks can share a computer. Stop this task's work,
-      // but retain the transport while another active task still uses it.
-      if (store.listTasks().some((other) => other.id !== id && other.computer_id === computerId
-        && !["completed", "failed", "cancelled"].includes(other.status))) return task;
-      const client = clients.get(computerId);
-      clients.delete(computerId);
-      await client?.close();
+      await changeControl(computerId, async () => {
+        await revokeRunner(id);
+        // Return control must not thaw a cancelled child before it is killed.
+        if (task.execution_location === "computer") await taskRuns.get(id)?.catch(error => {
+          if (!(error instanceof Error) || error.message !== "Task cancelled") throw error;
+        });
+        // Explicit standalone tasks can share a computer. Retain the transport
+        // while another active task still uses it.
+        if (store.listTasks().some((other) => other.id !== id && other.computer_id === computerId
+          && !["completed", "failed", "cancelled"].includes(other.status))) return;
+        // Cancelling work does not cancel a person's control of the desktop.
+        if (store.activeTakeoverForComputer(computerId)) return;
+        const client = clients.get(computerId);
+        const state = await client?.call("takeover_status", {});
+        if (state && (!state.ok || !["agent", "requested", "terminated"].includes(String((state.data as { state?: string })?.state)))) return;
+        clients.delete(computerId);
+        await client?.close();
+        if (hasGuestComputer(computerId)) {
+          const fresh = await getClient(computerId).call("takeover_status", {
+            takeover_id: store.latestTakeoverForComputer(computerId)?.id,
+          });
+          if (fresh.ok && (fresh.data as { state?: string })?.state === "agent") await setGuestComputerPaused(computerId, false);
+        }
+      });
       return task;
     } finally { computersCancelling.delete(computerId); }
   }
@@ -1131,14 +1276,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   async function runStoredTask(task: TaskRow, controller: AbortController, origins?: string[], resume = false) {
     await closeForeignTakeover(task);
     const runnerProvider = task.adapter === "codex" || task.adapter === "claude" ? task.adapter : null;
-    if (runnerProvider && opts.codexRunner) {
-      const scope: TaskScope = { taskId: task.id, computerId: task.computer_id, token: randomBytes(32).toString("hex"), active: true, waitGeneration: 0, messageGeneration: 0 };
+    if (runnerProvider) {
+      const scope: TaskScope = { taskId: task.id, computerId: task.computer_id, token: randomBytes(32).toString("hex"), active: true, waitGeneration: 0 };
       scopedMcp.set(task.id, { scope, handler: createMcpHttpHandler(makeMcpOptions(scope)) });
       try {
         const saved = resume ? store.db.prepare("SELECT body_json FROM steps WHERE task_id = ? AND kind = 'runner_session' ORDER BY rowid DESC LIMIT 1")
           .get(task.id) as { body_json: string } | undefined : undefined;
         const session = saved ? JSON.parse(saved.body_json) as { thread_id: string; provider: string } : undefined;
-        await runCodexTask(opts.codexRunner, task, {
+        const config = nativeRunnerConfig(runnerProvider);
+        await runCodexTask({ ...config, execution_location: task.execution_location ?? "host",
+          ...(task.model ? { model: task.model } : {}) }, task, {
           url: `http://${host === "::1" ? "[::1]" : host}:${mcpOpts.port}/mcp/tasks/${encodeURIComponent(task.id)}`,
           token: scope.token, signal: controller.signal,
           threadId: session?.provider === runnerProvider ? session.thread_id : undefined,
@@ -1152,9 +1299,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
             void emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id })
               .catch((error) => logError("task event failed", { task_id: task.id, error: String(error) }));
           },
+          onActivity(activity) {
+            if (controller.signal.aborted || store.getTask(task.id)?.status !== "running") return;
+            store.insertStep(task.id, 0, "native_tool", activity);
+            void emit("native_tool", activity, { task_id: task.id, computer_id: task.computer_id })
+              .catch(error => logError("task event failed", { error: String(error) }));
+          },
           hasMessages: () => store.pendingMessages(task.id).length > 0,
           takeMessages: () => takeOperatorMessages(task.id),
-          messageGeneration: () => scope.messageGeneration,
           onWaitingForMessage(waiting) {
             scope.awaitingMessage = waiting;
             void emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id })
@@ -1168,10 +1320,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         providerLimits.clear(runnerProvider);
         runtimeProbe.invalidate();
         return { status: store.getTask(task.id)!.status, reason: "completed", steps: 0, usage: { tokens_in: 0, tokens_out: 0, steps: 0 } } as Awaited<ReturnType<typeof runAgentLoop>>;
-      } catch (error) {
-        if (scope.connectionFailed && error instanceof Error && /^(Codex|Claude Code) ended without marking the task done$/.test(error.message))
-          throw new Error("The browser connection closed before the task could finish. Review any completed actions before starting the task again.");
-        throw error;
       } finally { await revokeRunner(task.id); }
     }
     const agent = opts.agentLoop;
@@ -1219,7 +1367,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           } else {
             const takeover = store.activeTakeoverForComputer(task.computer_id, task.id);
             if (!takeover) return finish(true);
-            if (!isTakeoverPending(takeover)) return finish(false);
           }
           timer = setTimeout(check, 100);
         };
@@ -1274,6 +1421,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   const routines = startRoutines({
     store,
+    autoStart: false,
     createTask: async (input) => {
       if (closing) throw new Error("daemon is shutting down");
       if (!opts.agentLoop) throw new Error("routine execution requires a configured standalone provider");
@@ -1296,6 +1444,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     body: Record<string, unknown>,
     ids?: { task_id?: string; computer_id?: string },
   ): Promise<void> {
+    if (type === "takeover.requested") body = takeoverContext(body);
     if (type.startsWith("takeover.") && ids?.computer_id) sendLiveControl(ids.computer_id);
     if (type === "takeover.requested" && typeof body.takeover_id === "string") scheduleTakeoverExpiry(body.takeover_id);
     const ev = makeEvent(type, body, ids);
@@ -1399,10 +1548,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   await restoreTakeoverExpiries(store, scheduleTakeoverExpiry, expireTakeover);
 
-  // A persistent computer outlives every image build, so check once at boot
-  // whether the containers are still the ones their tags name.
-  void reconcileComputerImages();
-
   async function callTool(
     computerId: string,
     method: string,
@@ -1493,7 +1638,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     return origin ? current === origin : Boolean(current?.startsWith("http://"));
   }
   function closeSessionSockets(id: string): void {
-    for (const connection of Object.values(connections)) if (connection.loginSession() === id) void connection.cancel(false);
+    for (const connection of allConnections()) if (connection.loginSession() === id) void connection.cancel(false);
     for (const [ws, sessionId] of socketSessions) if (sessionId === id) ws.close(1008, "operator session revoked");
   }
   function gateHttp(req: IncomingMessage, res: ServerResponse): boolean {
@@ -1615,7 +1760,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       writeJson(
         res,
         200,
-        { ok: true, csrf: session.csrf, mode: opts.mode ?? "supervised", ...executionInfo },
+        { ok: true, csrf: session.csrf, mode: opts.mode ?? "supervised", ...executionInfo, licence: licenceState(store, opts.licencePolicy) },
         { "set-cookie": sessionCookieHeader(session.id, origin.startsWith("https://")) },
       );
       return;
@@ -1641,7 +1786,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const session = requireUiSession(req, res, false);
       if (!session) return;
       if (opts.codexRunner) await connectionStatus();
-      writeJson(res, 200, { ok: true, csrf: session.csrf, public_origin: publicOrigin ?? null, origin: requestOrigin(req), expires_at: store.getSession(session.sessionId)!.expires_at, mode: opts.mode ?? "supervised", ...executionInfo });
+      writeJson(res, 200, { ok: true, csrf: session.csrf, public_origin: publicOrigin ?? null, origin: requestOrigin(req), expires_at: store.getSession(session.sessionId)!.expires_at, mode: opts.mode ?? "supervised", ...executionInfo, licence: licenceState(store, opts.licencePolicy) });
       return;
     }
 
@@ -1703,36 +1848,78 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     const session = requireUiSession(req, res, mutating);
     if (!session) return;
 
+    if (path === "/api/v1/licence" && method === "GET") {
+      writeJson(res, 200, licenceState(store, opts.licencePolicy), { "cache-control": "no-store" }); return;
+    }
+    if (path === "/api/v1/licence/activate" && method === "POST") {
+      if (!opts.licencePolicy) { writeJson(res, 409, { error: "E_LICENCE", message: "This release uses its existing licence terms. No activation is required." }); return; }
+      try {
+        const body = JSON.parse(await readBody(req));
+        if (typeof body?.certificate !== "string") throw new Error("Paste your BotHearth licence key.");
+        const state = activateLicence(store, opts.licencePolicy, body.certificate);
+        writeJson(res, 200, state, { "cache-control": "no-store" });
+      } catch (error) {
+        writeJson(res, 400, { error: "E_LICENCE", message: error instanceof SyntaxError ? "Send a licence key as JSON."
+          : error instanceof Error ? error.message : "This key could not be verified." });
+      }
+      return;
+    }
+
     if (path === "/api/v1/connection" && method === "GET") {
       const provider = url.searchParams.get("provider");
       if (provider && provider !== "codex" && provider !== "claude") { writeJson(res, 400, { error: "E_PROVIDER" }); return; }
-      writeJson(res, 200, await connectionStatus(provider === "claude" ? "claude" : provider === "codex" ? "codex" : undefined, session.sessionId), { "cache-control": "no-store" }); return;
+      const computerId = url.searchParams.get("computer_id") ?? undefined;
+      if (computerId && !store.getComputer(computerId)) { writeJson(res, 404, { error: "not_found" }); return; }
+      writeJson(res, 200, await connectionStatus(provider === "claude" ? "claude" : provider === "codex" ? "codex" : undefined, session.sessionId, computerId), { "cache-control": "no-store" }); return;
     }
-    const connectionAction = /^\/api\/v1\/connection\/(connect|sign-in|cancel)$/.exec(path);
+    const connectionAction = /^\/api\/v1\/connection\/(connect|sign-in|cancel|input)$/.exec(path);
     if (connectionAction && method === "POST") {
-      let body: { model?: string; provider?: "codex" | "claude"; auth?: "subscription" | "console" };
+      let body: { model?: string; provider?: "codex" | "claude"; auth?: "subscription" | "console"; computer_id?: string; text?: string };
       try { body = JSON.parse(await readBody(req) || "{}"); }
       catch { writeJson(res, 400, { error: "E_IO", message: "Invalid connection request." }); return; }
       if (!body || typeof body !== "object") { writeJson(res, 400, { error: "E_IO", message: "Invalid connection request." }); return; }
-      if (body.model !== undefined && (typeof body.model !== "string" || (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(body.model) && !(body.model === "" && (body.provider ?? opts.codexRunner?.provider) === "claude")))) {
+      if (body.model !== undefined && (typeof body.model !== "string" || (!/^[a-zA-Z0-9][a-zA-Z0-9_.:/@+\[\]-]{0,511}$/.test(body.model) && !(body.model === "" && (body.provider ?? opts.codexRunner?.provider) === "claude")))) {
         writeJson(res, 400, { error: "E_IO", message: "Enter a supported model name." }); return;
       }
       if ((body.provider !== undefined && !["codex", "claude"].includes(body.provider)) || (body.auth !== undefined && !["subscription", "console"].includes(body.auth))) { writeJson(res, 400, { error: "E_PROVIDER" }); return; }
       const provider = body.provider ?? opts.codexRunner?.provider ?? "codex";
-      const connection = connections[provider];
       const action = connectionAction[1];
-      if (action !== "cancel" && store.listTasks().some((task) => ["running", "paused"].includes(task.status))) {
-        writeJson(res, 409, { error: "E_TASK_ACTIVE", message: "Finish or stop your current tasks before changing the AI connection." }); return;
+      if (body.computer_id !== undefined && (typeof body.computer_id !== "string" || !store.getComputer(body.computer_id))) {
+        writeJson(res, 404, { error: "not_found", message: "Computer not found." }); return;
       }
-      if (action !== "cancel") await connections[provider === "codex" ? "claude" : "codex"].cancel(false);
-      writeJson(res, 200, action === "connect" ? await connection.connect(body.model, session.sessionId) :
-        action === "sign-in" ? await connection.signIn(body.model, body.auth, session.sessionId) : await connection.cancel(), { "cache-control": "no-store" });
+      let computerId = body.computer_id ?? defaultComputer()?.id;
+      if (guestExecution && (action === "sign-in" || action === "connect")) {
+        try {
+          computerId ??= (await resolveDefaultComputer()).id;
+          if (sandbox.start) await sandbox.start(computerId);
+          store.setComputerStatus(computerId, "running");
+          await idlePause.wake(computerId);
+        } catch {
+          writeJson(res, 503, { error: "E_RUNTIME", message: "Your computer could not start. Complete computer setup, then try sign-in again." }); return;
+        }
+      }
+      const connection = connectionFor(provider, computerId);
+      if (!connection) { writeJson(res, 409, { error: "E_STATE", message: "Start sign-in first." }); return; }
+      if (action === "input") {
+        if (typeof body.text !== "string" || !connection.input(body.text, session.sessionId)) {
+          writeJson(res, 409, { error: "E_STATE", message: "This sign-in is not waiting for a reply from this window." }); return;
+        }
+        writeJson(res, 202, { ok: true }, { "cache-control": "no-store" }); return;
+      }
+      if (action !== "cancel") await connectionFor(provider === "codex" ? "claude" : "codex", computerId)?.cancel(false);
+      const result = action === "connect" ? await connection.connect(body.model || undefined, session.sessionId) :
+        action === "sign-in" ? await connection.signIn(body.model || undefined, body.auth, session.sessionId) : await connection.cancel();
+      writeJson(res, 200, { ...result, execution_location: guestExecution ? "computer" : "host", ...(computerId ? { computer_id: computerId } : {}) }, { "cache-control": "no-store" });
       return;
     }
 
     if (path === "/api/v1/runtime" && method === "GET") {
       const snapshot = await runtimeProbe.snapshot();
-      writeJson(res, 200, withoutBuildLog(snapshot), { "cache-control": "no-store" });
+      const licence = licenceState(store, opts.licencePolicy);
+      const blocked = licence.required && licence.status !== "active";
+      writeJson(res, 200, { ...withoutBuildLog(snapshot), ...(blocked ? { task_start_available: false,
+        blockers: [...snapshot.blockers, { id: "licence_required", title: "Add your licence key",
+          detail: "Get your key from your BotHearth account, then add it in Settings.", action: { kind: "open_settings", url: "#/settings/licence" } }] } : {}), licence }, { "cache-control": "no-store" });
       return;
     }
 
@@ -2047,11 +2234,36 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return;
     }
 
+    if (path === "/api/v1/models" && method === "GET") {
+      const requested = url.searchParams.get("provider");
+      const computerId = url.searchParams.get("computer_id") ?? defaultComputer()?.id;
+      if (computerId && !store.getComputer(computerId)) { writeJson(res, 404, { error: "not_found" }); return; }
+      if (requested && requested !== "codex" && requested !== "claude") {
+        writeJson(res, 400, { error: "E_PROVIDER", message: "Choose Codex or Claude Code." }); return;
+      }
+      // Opening the task composer is activity; ordinary status polls still leave idle computers asleep.
+      if (guestExecution && computerId && !store.activeTakeoverForComputer(computerId)) await idlePause.wake(computerId);
+      const providers = await Promise.all((requested ? [requested as NativeProvider] : ["codex", "claude"] as const).map(async (provider) => {
+        const config = nativeRunnerConfig(provider);
+        const [catalog, state] = await Promise.all([
+          getNativeModelCatalog(provider, { home: config.codexHome, binary: config.binary, configuredModel: config.model,
+            ...(guestExecution ? { computerId: computerId ?? "unprepared", spawn: (args: string[]) => computerId
+              ? guestSpawn(computerId, provider, args) : Promise.reject(new Error("Computer not prepared")) } : {}) }),
+          connectionStatus(provider, undefined, computerId),
+        ]);
+        const connected = state.status === "connected" || state.status === "signed_in";
+        return { ...catalog, id: provider, label: provider === "codex" ? "Codex" : "Claude Code",
+          connected, connection_status: state.status, limit: state.limit ?? null,
+          start_available: connected && !state.limit };
+      }));
+      writeJson(res, 200, { providers });
+      return;
+    }
+
     if (path === "/api/v1/tasks" && method === "POST") {
-      if (opts.codexRunner) await connectionStatus();
-      if (!executionInfo.task_start_available) {
-        writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: "Configure a task runner before starting a task." });
-        return;
+      const licence = licenceState(store, opts.licencePolicy);
+      if (licence.required && licence.status !== "active") {
+        writeJson(res, 403, { error: "E_LICENCE_REQUIRED", message: "Add your BotHearth licence key in Settings to start a task." }); return;
       }
       const raw = await readBody(req);
       let body: CreateTaskBody;
@@ -2064,6 +2276,38 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       if (typeof body?.goal !== "string" || !body.goal.trim() ||
           (body.computer_id !== undefined && (typeof body.computer_id !== "string" || !body.computer_id))) {
         writeJson(res, 400, { error: "E_IO", message: "Describe the task you want completed." }); return;
+      }
+      const native = Boolean(opts.codexRunner) || body.adapter === "codex" || body.adapter === "claude";
+      let nativeSettings: NativeTaskSettings | undefined;
+      if (native) {
+        try {
+          const adapter = opts.codexRunner?.provider ?? "codex";
+          nativeSettings = resolveNativeTaskSettings(body, { adapter, model: nativeRunnerConfig(adapter).model,
+            models: { codex: nativeRunnerConfig("codex").model, claude: nativeRunnerConfig("claude").model } });
+        } catch (error) {
+          writeJson(res, 400, { error: "E_MODEL", message: error instanceof Error ? error.message : "Invalid model selection." }); return;
+        }
+        const selectedComputer = body.computer_id ?? defaultComputer()?.id;
+        if (guestExecution && selectedComputer) {
+          if (!store.getComputer(selectedComputer)) { writeJson(res, 404, { error: "not_found", message: "Computer not found." }); return; }
+          if (store.activeTakeoverForComputer(selectedComputer)) { writeJson(res, 409, { error: "E_STATE", message: "Return control of this computer before starting another task." }); return; }
+          if (sandbox.start) await sandbox.start(selectedComputer);
+          await idlePause.wake(selectedComputer);
+        }
+        const state = await connectionStatus(nativeSettings.adapter, session.sessionId, body.computer_id);
+        if (state.status !== "connected" && state.status !== "signed_in") {
+          writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: `Connect ${nativeSettings.adapter === "codex" ? "Codex" : "Claude Code"} before starting.`,
+            provider: nativeSettings.adapter, status: state.status }); return;
+        }
+        if (nativeSettings.executor && nativeSettings.executor.adapter !== nativeSettings.adapter) {
+          const executorState = await connectionStatus(nativeSettings.executor.adapter, session.sessionId, body.computer_id);
+          if (executorState.status !== "connected" && executorState.status !== "signed_in") {
+            writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: "Connect the selected executor before starting orchestration.",
+              provider: nativeSettings.executor.adapter, status: executorState.status }); return;
+          }
+        }
+      } else if (!executionInfo.task_start_available) {
+        writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: "Configure a task runner before starting a task." }); return;
       }
       if (body.max_steps !== undefined && (!Number.isInteger(body.max_steps) || body.max_steps < 1)) {
         writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a positive integer" }); return;
@@ -2079,7 +2323,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       // An unvalidated adapter name is later looked up on a plain object,
       // where "constructor" resolves to `Object` — truthy, so it survives every
       // fallback and fails deep inside the run instead of here.
-      if (body.adapter !== undefined && !opts.codexRunner) {
+      if (body.adapter !== undefined && !native) {
         const known = new Set(Object.keys(opts.agentLoop?.adapters ?? {}));
         if (opts.agentLoop) known.add(opts.agentLoop.adapter.kind);
         if (typeof body.adapter !== "string" || !known.has(body.adapter)) {
@@ -2106,7 +2350,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       }
       const rejectBusy = () => {
         const activeTask = store.listTasks().find((task) => task.computer_id === computerId && ["running", "paused"].includes(task.status));
-        if (!computersCancelling.has(computerId) && (!(automatic || opts.codexRunner) || (!harnessCallsInFlight.has(computerId) && !activeTask))) return false;
+        if (!computersCancelling.has(computerId) && (!(automatic || native) || (!harnessCallsInFlight.has(computerId) && !activeTask))) return false;
         writeJson(res, 409, { error: "E_TASK_ACTIVE", message: "Your current task is still working. Open it to continue or stop it before starting another.", task_id: activeTask?.id });
         return true;
       };
@@ -2123,13 +2367,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       if (closing) { writeJson(res, 503, { error: "E_IO", message: "The application is restarting. Try again shortly." }); return; }
       if (automatic) store.setDefaultComputerId(computerId);
       let task: TaskRow;
-      if (opts.codexRunner) {
+      if (nativeSettings) {
         const taskId = `task_${randomBytes(12).toString("hex")}`;
         store.insertHarnessTaskBinding({ task_id: taskId, computer_id: computerId,
           spend_cap_usd: spendCap(body.spend_cap_usd), max_steps: body.max_steps ?? defaultMaxSteps,
           proxy_usd_per_tool_call: perCallUsd });
         store.db.prepare("UPDATE tasks SET goal = ?, adapter = ?, capabilities = ? WHERE id = ?")
-          .run(body.goal, opts.codexRunner.provider ?? "codex", JSON.stringify(capabilities), taskId);
+          .run(body.goal, nativeSettings.adapter, JSON.stringify(capabilities), taskId);
+        store.insertStep(taskId, 0, "native_settings", { ...nativeSettings, execution_location: guestExecution ? "computer" : "host" });
         task = store.getTask(taskId)!;
       } else task = store.insertTask({
         computer_id: computerId,
@@ -2152,7 +2397,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         { tokens_in: 0, tokens_out: 0, usd_est: 0, steps: 0 },
         { task_id: task.id, computer_id: task.computer_id },
       );
-      if (executionInfo.task_start_available) void startStoredTask(task).catch((error) => logError("task execution failed", { task_id: task.id, error: String(error) }));
+      if (nativeSettings || executionInfo.task_start_available) void startStoredTask(task).catch((error) => logError("task execution failed", { task_id: task.id, error: String(error) }));
       writeJson(res, 201, { task });
       return;
     }
@@ -2254,6 +2499,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         writeJson(res, 400, { error: "E_IO", message: "invalid JSON" });
         return;
       }
+      if (task.status !== "paused") {
+        writeJson(res, 409, { error: "E_STATE", message: "Only a paused task can be resumed.", status: task.status });
+        return;
+      }
       // Budget and step count are totals for the task, not an allowance every
       // click re-buys. A task that stopped on one can only go on against a
       // bigger one. `taskBudget` reads whichever counter actually stopped it:
@@ -2277,6 +2526,48 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           message: `It used every one of the ${maxSteps} steps set for this task. Give it more steps to carry on.`,
           max_steps: maxSteps, steps: usedSteps });
         return;
+      }
+      // A host reboot can stop the browser while its durable row still says
+      // running. Resume starts the existing containers and retains the profile.
+      if (task.status === "paused" && sandbox.start && (!useFakeComputer() || opts.sandbox)) {
+        try {
+          await sandbox.start(task.computer_id);
+          store.setComputerStatus(task.computer_id, "running");
+        } catch (error) {
+          logError("resume computer start failed", { computer_id: task.computer_id, error: String(error) });
+          writeJson(res, 503, { error: "E_RUNTIME", message: "Couldn’t restart this computer. Check that Docker is running on BotHearth’s host, then try Resume again." });
+          return;
+        }
+      }
+      const takeover = store.activeTakeoverForComputer(task.computer_id);
+      if (takeover) {
+        if (takeover.task_id !== id || takeover.state !== "paused") {
+          writeJson(res, 409, { error: "E_TAKEOVER_BUSY", message: "Return control of this computer before resuming the task." });
+          return;
+        }
+        // Resume is an explicit return of this task's expired control. Check
+        // for private input even if the old lease never recorded its holder.
+        const client = getClient(task.computer_id);
+        const observation = await client.call("takeover.masked-observation", {});
+        if (!observation.ok || (observation.data as { still_sensitive?: unknown })?.still_sensitive !== false) {
+          writeJson(res, 409, { error: "E_TAKEOVER_BUSY",
+            message: "Take control, finish or clear any private input, then return control before resuming." });
+          return;
+        }
+        const current = store.activeTakeoverForComputer(task.computer_id);
+        if (current?.id !== takeover.id || current.state !== "paused" || store.getTask(id)?.status !== "paused") {
+          writeJson(res, 409, { error: "E_TAKEOVER_BUSY", message: "Control changed while resuming. Check the computer and try again." });
+          return;
+        }
+        const released = await client.declineTakeover(takeover.id);
+        if (!released.ok) { writeJson(res, 409, released); return; }
+        // This returns control; it does not declare a sensitive field safe.
+        store.updateTakeoverState(takeover.id, "agent");
+        clearTimeout(takeoverTimers.get(takeover.id));
+        takeoverTimers.delete(takeover.id);
+        takeoverGapStarts.delete(takeover.id);
+        await emit("takeover.released", { takeover_id: takeover.id, actor: deviceId(session.sessionId) },
+          { task_id: id, computer_id: task.computer_id });
       }
       if (!store.resumeTask(id)) {
         writeJson(res, 409, { error: "E_STATE", message: "Only a paused task can be resumed.", status: task.status });
@@ -2524,6 +2815,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         expires_at: null,
         epoch: takeoverEpochFromData(data),
       });
+      if (prior?.state === "paused" && prior.granted_to) {
+        // Renewal still covers the previous human's private desktop until a
+        // fresh grant or an explicit return. Keep that provenance on cancel.
+        store.grantTakeoverTo(takeover.id, prior.granted_to);
+        store.updateTakeoverState(takeover.id, "takeover_requested");
+      }
       await emit(
         "takeover.requested",
         { takeover_id: data.takeover_id, reason: body.reason ?? "ui" },
@@ -2868,6 +3165,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   const port = (server.address() as AddressInfo | null)?.port ?? wantPort;
   mcpOpts.port = port;
+  // Recover only after binding: a second start that loses the port must not
+  // pause the original daemon's task. A rebooted task needs an explicit Resume.
+  for (const task of store.listTasks()) await pauseNativeForRestart(task);
+  routines.routines.recoverInterrupted();
+  if (opts.schedulerEnabled !== false) routines.scheduler.start();
+  // Only the daemon that owns the port may refresh idle computers.
+  void reconcileComputerImages();
   if (server.listening) logInfo("daemon listening", { host, port });
 
   return {
@@ -2887,13 +3191,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         ? new Promise<void>((resolveClose) => server.close(() => resolveClose()))
         : Promise.resolve();
       clearInterval(socketSessionTimer);
-      await Promise.all(Object.values(connections).map(connection => connection.close()));
       idlePause.stop();
       routines.stop();
       for (const [id, controller] of taskControllers) {
-        store.cancelTask(id);
+        const task = store.getTask(id);
+        if (task && ["codex", "claude"].includes(task.adapter ?? "")) await pauseNativeForRestart(task);
+        else store.cancelTask(id);
         controller.abort();
       }
+      await Promise.all(allConnections().map(connection => connection.close()));
       await connectors.close().catch(() => undefined);
       for (const ws of eventSubs) ws.close();
       eventSubs.clear();

@@ -48,7 +48,7 @@ async function withDaemon(fn: (ctx: {
   const daemon = await startDaemon({
     port: 0, mcpToken: "spend-mcp", bootstrapToken: "spend-boot",
     workspaceRoot: join(home, "workspace"),
-    codexRunner: { binary, codexHome: home, model: "stub", runsRoot: join(home, "runs") },
+    codexRunner: { execution_location: "host", binary, codexHome: home, model: "stub", runsRoot: join(home, "runs") },
   });
   try {
     const { headers } = await bootstrapSession(daemon, "spend-boot");

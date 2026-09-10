@@ -55,6 +55,7 @@ describe("buildProductionComposition agent.max_steps", () => {
 
       const shipped = await buildProductionComposition({ home, port: 0 });
       assert.equal(shipped.daemon.maxSteps, shipped.config.agent.max_steps);
+      assert.equal(shipped.daemon.schedulerEnabled, true);
 
       // init pins no limits, so a fresh install runs on the daemon default and
       // picks up any later change to it.
@@ -62,11 +63,12 @@ describe("buildProductionComposition agent.max_steps", () => {
 
       const cfg = configPath(home);
       const raw = readFileSync(cfg, "utf8");
-      writeFileSync(cfg, `${raw}agent:\n  max_steps: 123\n`);
+      writeFileSync(cfg, `${raw}agent:\n  max_steps: 123\nscheduler:\n  enabled: false\n`);
 
       const edited = await buildProductionComposition({ home, port: 0 });
       assert.equal(edited.config.agent.max_steps, 123);
       assert.equal(edited.daemon.maxSteps, 123);
+      assert.equal(edited.daemon.schedulerEnabled, false);
     });
   });
 });

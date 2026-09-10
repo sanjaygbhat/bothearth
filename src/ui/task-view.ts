@@ -6,6 +6,9 @@
 export type TaskRow = {
   id: string; computer_id: string; goal: string; status: string; created_at: string;
   adapter?: string | null; max_steps: number;
+  model?: string | null;
+  execution_mode?: "executor" | "orchestrator" | null;
+  executor?: { adapter: string; model: string } | null;
 };
 export type TaskStep = { kind: string; body: Record<string, unknown>; created_at: string; result_id?: number };
 

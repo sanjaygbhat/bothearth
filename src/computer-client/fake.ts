@@ -271,7 +271,8 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
   private takeoverStatus(params: unknown): ToolResult {
     const p = (params ?? {}) as { takeover_id?: string };
     const id = p.takeover_id ?? this.takeoverId;
-    if (!id || (this.takeoverId && id !== this.takeoverId)) {
+    // The real RPC also reports agent control before the first lease exists.
+    if (this.takeoverId && id !== this.takeoverId) {
       return toolError("E_IO", "unknown takeover_id");
     }
     return {

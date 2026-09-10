@@ -11,11 +11,11 @@ enum MainMenu {
     // MARK: App
     let appItem = NSMenuItem()
     let appMenu = NSMenu()
-    add(appMenu, "About ModelBot", #selector(AppDelegate.showAbout), "", target)
+    add(appMenu, "About BotHearth", #selector(AppDelegate.showAbout), "", target)
     appMenu.addItem(.separator())
     add(appMenu, "Settings…", #selector(AppDelegate.openSettings), ",", target)
     appMenu.addItem(.separator())
-    appMenu.addItem(withTitle: "Hide ModelBot",
+    appMenu.addItem(withTitle: "Hide BotHearth",
                     action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     let hideOthers = NSMenuItem(title: "Hide Others",
                                 action: #selector(NSApplication.hideOtherApplications(_:)),
@@ -25,7 +25,7 @@ enum MainMenu {
     appMenu.addItem(withTitle: "Show All",
                     action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
     appMenu.addItem(.separator())
-    add(appMenu, "Quit ModelBot", #selector(AppDelegate.quit), "q", target)
+    add(appMenu, "Quit BotHearth", #selector(AppDelegate.quit), "q", target)
     appItem.submenu = appMenu
     main.addItem(appItem)
 
@@ -104,7 +104,7 @@ enum MainMenu {
     let helpMenu = NSMenu(title: "Help")
     add(helpMenu, "Keyboard shortcuts", #selector(AppDelegate.openKeys), "/", target)
     helpMenu.addItem(.separator())
-    add(helpMenu, "ModelBot Help", #selector(AppDelegate.openHelp), "?", target)
+    add(helpMenu, "BotHearth Help", #selector(AppDelegate.openHelp), "?", target)
     helpItem.submenu = helpMenu
     main.addItem(helpItem)
     NSApp.helpMenu = helpMenu

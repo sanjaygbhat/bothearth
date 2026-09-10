@@ -4,7 +4,7 @@ import { all, byText, installDom, settle, type FakeElement } from "./fake-dom.ts
 
 const json = (body: unknown) => Response.json(body as Record<string, unknown>);
 
-/** Answers every request the five sections make on mount. */
+/** Answers every request the settings sections make on mount. */
 function stubApi(overrides: Record<string, unknown> = {}) {
   return async (path: string) => {
     for (const [match, body] of Object.entries(overrides)) {
@@ -39,7 +39,7 @@ async function openSheet(startHash = "#/settings", overrides: Record<string, unk
   return { dom, module, view, gear, sheet: dom.root.querySelector(".set-sheet") as FakeElement };
 }
 
-test("the sheet is one dialog with five sections and the AI connection open first", async () => {
+test("the sheet is one dialog with six sections and the Model connection open first", async () => {
   const { dom, sheet, view } = await openSheet();
   try {
     assert.equal(sheet.getAttribute("role"), "dialog");
@@ -47,12 +47,12 @@ test("the sheet is one dialog with five sections and the AI connection open firs
     const rail = sheet.querySelector(".set-rail") as FakeElement;
     assert.deepEqual(
       rail.children.map((b) => b.textContent),
-      ["AI connection", "Computers", "Devices", "Usage", "About"],
+      ["Model connection", "Computers", "Devices", "Usage", "Licence", "About"],
     );
-    assert.equal(rail.querySelector('[aria-current="page"]')?.textContent, "AI connection");
-    assert.ok(byText(sheet, "AI connection"), "the pane names the section it is showing");
+    assert.equal(rail.querySelector('[aria-current="page"]')?.textContent, "Model connection");
+    assert.ok(byText(sheet, "Model connection"), "the pane names the section it is showing");
     // WAI-ARIA APG: focus opens on the first focusable thing inside the dialog.
-    assert.equal(dom.document.activeElement?.textContent, "AI connection");
+    assert.equal(dom.document.activeElement?.textContent, "Model connection");
     assert.ok(sheet.contains(dom.document.activeElement));
   } finally {
     view.unmount();

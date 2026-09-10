@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { claudeEnvironment, claudeTaskArgs } from "../../../src/daemon/claude-code.ts";
@@ -13,6 +13,7 @@ test("default native login keeps its keychain identity and model tools stay scop
   const old = process.env.CLAUDE_CONFIG_DIR; delete process.env.CLAUDE_CONFIG_DIR;
   try {
     assert.equal(claudeEnvironment("").CLAUDE_CONFIG_DIR, undefined);
+    assert.equal(claudeEnvironment("").PATH?.split(delimiter)[0], dirname(process.execPath));
     assert.equal(claudeEnvironment("/custom").CLAUDE_CONFIG_DIR, "/custom");
     process.env.CLAUDE_CONFIG_DIR = "/native-choice";
     assert.equal(claudeEnvironment("").CLAUDE_CONFIG_DIR, "/native-choice");
@@ -59,18 +60,24 @@ else{if(!prompt.includes('no-done-fixture'))await c.callTool({name:'done',argume
   const runsRoot = join(root, "runs");
   const old = process.env.MODELBOT_TEST_FAKE_COMPUTER; process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
   const daemon = await startDaemon({ port: 0, mcpToken: "fixture-general", bootstrapToken: "fixture-boot", workspaceRoot: join(root,"workspace"),
-    codexRunner: { provider: "claude", codexHome: root, binary, model: "sonnet", runsRoot } });
+    claudeLogin: { codexHome: root, binary },
+    codexRunner: { execution_location: "host", provider: "claude", codexHome: root, binary, model: "claude-opus-5", runsRoot } });
   try {
     const { headers } = await bootstrapSession(daemon, "fixture-boot");
     assert.equal(((await fetch(daemon.baseUrl + "/api/v1/session", { headers }).then((r) => r.json())) as any).execution_mode, "claude");
     const api = (path: string, body?: unknown) => fetch(daemon.baseUrl + "/api/v1" + path, { headers, ...(body ? { method:"POST", body:JSON.stringify(body) } : {}) });
     daemon.store.insertComputer({id:"selected",name:"Selected",capabilities:["browser"],persistent:false,status:"running"});
-    for (const [goal, expected] of [["complete-fixture","completed"],["no-done-fixture","failed"],["hold-fixture","cancelled"]]) {
-      const response = await api("/tasks", {computer_id:"selected",goal,max_steps:8,capabilities:["browser"]});
+    for (const [goal, expected] of [["complete-fixture","completed"],["no-done-fixture","cancelled"],["hold-fixture","cancelled"]]) {
+      const response = await api("/tasks", {computer_id:"selected",goal,max_steps:8,capabilities:["browser"],adapter:"claude",model:"claude-opus-5"});
       assert.equal(response.status,201); const task = (await response.json() as any).task; assert.equal(task.adapter,"claude");
+      if (goal === "no-done-fixture") {
+        await until(async () => (await api(`/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message === true);
+        assert.equal(daemon.store.getTask(task.id)?.status, "running");
+      }
       if (expected === "cancelled") {
         await until(()=>readdirSync(runsRoot).some(d=>{try{return JSON.parse(readFileSync(join(runsRoot,d,"scope.json"),"utf8")).url.endsWith(task.id)}catch{return false}}));
-        assert.equal((await api("/connection/connect", {provider:"codex",model:"gpt-6-astra"})).status,409);
+        if (goal === "hold-fixture") assert.equal((await api("/connection/connect", {provider:"codex",model:"gpt-6-astra"})).status,200);
+        assert.equal(daemon.store.getTask(task.id)?.adapter,"claude", "changing defaults cannot replace an active provider");
         assert.equal((await api(`/tasks/${task.id}/cancel`, {})).status,200);
       }
       await until(()=>daemon.store.getTask(task.id)?.status===expected);

@@ -146,7 +146,7 @@ adapters:
   default: openai_compat
   openai_compat:
     base_url: https://api.openai.com/v1
-    model: gpt-5.6-sol
+    model: gpt-5.5
     api_key_vault: providers/openai
 agent:
   spend_cap_usd: 20
@@ -159,6 +159,9 @@ a shorter \`policy.gates\` list is a weaker policy and has to be written out in 
 Security defaults (\`bind: 127.0.0.1\`, \`mode: supervised\`, all six \`policy.gates\`,
 \`policy.kill_switch: true\`) apply when the config is silent; weakening one is an explicit edit.
 The annotated full reference is \`src/config/example.yaml\`, copied into \`$MODELBOT_HOME\` by init.
+
+Standalone adapter settings are separate from the native Codex and Claude Code choices
+in the task interface. Check [provider requirements](PROVIDERS.md) for model compatibility.
 
 ## Fields
 

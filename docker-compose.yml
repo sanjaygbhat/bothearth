@@ -69,6 +69,7 @@ services:
       no_proxy: localhost,127.0.0.1
     volumes:
       - profile:/home/browser/profile
+      - agent-home:/home/agent
       - ${WORKSPACE}:/workspace:rw
     labels:
       modelbot.computer: ${COMPUTER_NAME}
@@ -122,3 +123,5 @@ networks:
 volumes:
   profile:
     name: modelbot-${COMPUTER_NAME}-profile
+  agent-home:
+    name: modelbot-${COMPUTER_NAME}-agent-home

@@ -1,9 +1,9 @@
-# ModelBot.app — native macOS shell
+# BotHearth — native macOS shell
 
 Swift + AppKit + WKWebView. No Xcode project, no SPM, no third-party dep. Shell owns
 window/menus/notifications. Daemon stays Node; UI stays daemon-served.
 
-Optional surface. The shipping path is the server version — `modelbot start` and a browser,
+Optional surface. The shipping path is the server version — `bothearth start` and a browser,
 per [docs/QUICKSTART.md](../../docs/QUICKSTART.md). This app is a window over the same daemon.
 
 ## Build
@@ -35,7 +35,7 @@ NOT `~/ModelBot`, that is the CLI's. Log `~/Library/Logs/ModelBot/daemon.log`, t
 `DaemonSupervisor` spawn, ready handshake, backoff restart max 3, SIGTERM→5s→SIGKILL ·
 `MainWindowController` window, WKWebView, same-origin policy, drag band, states ·
 `NativeBridge` the 7 methods + the one dispatch · `ErrorStateView` calm error + Back + Cairn mark ·
-`AboutPanel` About window, wordmark + version + what/who-is-paid ·
+`AboutPanel` About window, wordmark + version + provider context ·
 `StatusItemController` menu-bar item · `MainMenu` menu bar · `Theme` Open Field tokens ·
 `Paths` node / daemon / PATH / dirs ·
 `NavigationPolicy` what a top-level response may do (pure, selftested) ·
@@ -102,7 +102,7 @@ shell sends the matching event and the page runs the same code path it would in 
 
 Menu-bar glyph = `assets/brand/mark-mono.svg` → `Contents/Resources/mark.svg` as a
 template image; swap by replacing that SVG (must stay monochrome). Absent → code-drawn
-Threshold fallback. Icon = `assets/brand/ModelBot.icns` if present, else built without.
+Cairn fallback. Icon = `assets/brand/ModelBot.icns` if present, else built without.
 
 ## Notifications need a real signature
 
@@ -128,7 +128,7 @@ not deliver with a `notify-failed` event, and the page falls back to
 at all.
 
 Everything else in the loop works ad-hoc and is what a contributor sees: the dock badge
-(`setBadge`), the dock bounce, the window title becoming **● Needs you — ModelBot**, the
+(`setBadge`), the dock bounce, the window title becoming **● Needs you — BotHearth**, the
 menu-bar item flipping to **Waiting for you** with a filled mark (`setAttention`), and the
 in-window card.
 

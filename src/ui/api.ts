@@ -74,13 +74,30 @@ export async function apiFetch(
   if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, {
+  const request = () => fetch(path, {
     ...init,
     headers,
     credentials: "same-origin",
   });
+  let res = await request();
   noteServerClock(res);
-  const body = await parseBody(res);
+  let body = await parseBody(res);
+  // A new pairing in another tab can replace the cookie while this tab keeps
+  // its old token. This exact rejection happens before the action runs: refresh
+  // once and replay only our JSON/empty mutations, never a general failed action.
+  if (mutating && path.startsWith("/api/v1/") && (init.body == null || typeof init.body === "string")
+    && res.status === 403 && typeof body === "object" && body !== null
+    && "error" in body && body.error === "E_AUTH"
+    && "message" in body && body.message === "missing or invalid CSRF") {
+    const session = await apiFetch("/api/v1/session", { cache: "no-store" }) as { csrf?: unknown } | null;
+    if (typeof session?.csrf === "string" && session.csrf) {
+      setCsrfToken(session.csrf);
+      headers.set(CSRF_HEADER, session.csrf);
+      res = await request();
+      noteServerClock(res);
+      body = await parseBody(res);
+    }
+  }
   if (!res.ok) {
     const msg =
       typeof body === "object" &&

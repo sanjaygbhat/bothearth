@@ -2,24 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeComputer } from "../../../src/computer-client/fake.ts";
 import type { ComputerCallContext } from "../../../src/computer-client/types.ts";
-import type { ToolResult } from "../../../src/types/contracts.ts";
+import type { ToolName, ToolResult } from "../../../src/types/contracts.ts";
 import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { MAX_TASK_ORIGIN_GRANTS, Store } from "../../../src/daemon/store.ts";
 import { grantedOriginsFor } from "../../../src/policy/index.ts";
 
 /**
- * Opening one page took four approval cycles: each grant was spent
- * the moment it was read, so the approval the operator had just given was gone
- * by the time the navigation it authorised was retried, and the browser sat on
- * about:blank while the model asked again. The real policy engine, the real
- * dispatcher and a browser that enforces the host navigation allowlist the way
- * computer-server does are all in the loop here.
+ * Public browsing needs no consent. A form submission still needs an exact
+ * approval; consuming that approval must preserve an explicitly remembered
+ * task grant, without turning "allow once" into permission for later writes.
+ * The real policy engine and dispatcher are in the loop.
  */
 
-/** A browser that starts blank, follows redirects, and honours the allowlist. */
+/** Public GETs are free; POSTs still require a host-supplied origin grant. */
 class Browser extends FakeComputer {
   url = "about:blank";
   navigations = 0;
+  submissions = 0;
   redirect: Record<string, string>;
 
   constructor(id: string, redirect: Record<string, string> = {}) {
@@ -34,7 +33,7 @@ class Browser extends FakeComputer {
     if (method === "browser_navigate") {
       const requested = String((args as { url?: string }).url);
       const landed = this.redirect[requested] ?? requested;
-      if (!(context?.navigationOrigins ?? []).includes(new URL(landed).origin)) {
+      if (!context?.allowPublicNavigation && !(context?.navigationOrigins ?? []).includes(new URL(landed).origin)) {
         // Blocked before contact — the browser is left where it was.
         return { ok: false, error: { code: "E_POLICY", message: "blocked before contact",
           details: { navigation_url: landed } } };
@@ -42,6 +41,12 @@ class Browser extends FakeComputer {
       this.navigations += 1;
       this.url = landed;
       return { ok: true, data: { url: landed, title: "T", snapshot_id: "s2" } };
+    }
+    if (method === "browser_type" && (args as { submit?: boolean }).submit) {
+      assert.ok(context?.navigationOrigins.includes(new URL(this.url).origin),
+        "a submission must carry the approved origin to the browser");
+      this.submissions += 1;
+      return { ok: true, data: { url: this.url } };
     }
     return super.call(method, args);
   }
@@ -52,8 +57,9 @@ interface Harness {
   browser: Browser;
   taskId: string;
   requested: Array<Record<string, unknown>>;
-  /** Drive one navigation to completion, approving every ask. Returns the ask count. */
-  navigate(url: string, decide?: "allow_once" | "allow_task"): Promise<number>;
+  navigate(url: string): Promise<number>;
+  /** Drive one submission to completion, approving every ask. Returns the ask count. */
+  submit(text: string, decide?: "allow_once" | "allow_task"): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -68,45 +74,44 @@ function harness(redirect: Record<string, string> = {}): Harness {
     getClient: () => browser,
     emit: async (type, body) => { if (type === "approval.requested") requested.push(body); },
   });
-  const context = { computerId: "churn", taskId: task.id, origin: "about:blank", mode: "supervised" as const };
+  const context = { computerId: "churn", taskId: task.id, mode: "supervised" as const,
+    originSets: { readable: [], writable: [] } };
 
+  const run = async (tool: ToolName, args: Record<string, unknown>, decide: "allow_once" | "allow_task" = "allow_once") => {
+    let asks = 0;
+    // The agent loop retries the same call after an approval resolves; more
+    // than a handful of rounds here IS the churn this test exists to catch.
+    for (let round = 0; round < 6; round += 1) {
+      const result = await dispatcher.dispatch(tool, args, context);
+      if (result.ok) return asks;
+      assert.equal(result.error.code, "E_POLICY_PENDING",
+        `unexpected failure: ${result.error.code} ${result.error.message}`);
+      asks += 1;
+      for (const pending of store.listApprovals("pending")) {
+        store.setApprovalStatusIf(pending.id, "pending", "approved", decide);
+      }
+    }
+    assert.fail("the approved call never completed");
+  };
   return {
     store, browser, taskId: task.id, requested,
-    async navigate(url, decide = "allow_once") {
-      let asks = 0;
-      // The agent loop retries the same call after an approval resolves; more
-      // than a handful of rounds here IS the churn this test exists to catch.
-      for (let round = 0; round < 6; round += 1) {
-        const result = await dispatcher.dispatch("browser_navigate", { url }, context);
-        if (result.ok) return asks;
-        assert.equal(result.error.code, "E_POLICY_PENDING",
-          `unexpected failure: ${result.error.code} ${result.error.message}`);
-        asks += 1;
-        for (const pending of store.listApprovals("pending")) {
-          if (decide === "allow_task") {
-            const bind = JSON.parse(pending.bind_json) as { navigation_url?: string };
-            const args = JSON.parse(pending.args_json) as Record<string, unknown>;
-            const nav = bind.navigation_url ??
-              (typeof args.navigation_url === "string" ? args.navigation_url : undefined);
-            store.grantTaskOrigins(pending.task_id, grantedOriginsFor(nav ?? url));
-          }
-          store.setApprovalStatusIf(pending.id, "pending", "approved", decide);
-        }
-      }
-      assert.fail("the navigation never completed");
-    },
+    navigate: (url) => run("browser_navigate", { url }),
+    submit: (text, decide) => run("browser_type", { text, submit: true }, decide),
     async close() { await browser.close(); store.close(); },
   };
 }
 
-test("one navigation to a new origin asks the operator exactly once", async () => {
+test("public navigation asks nothing; a submission consumes exactly one approval", async () => {
   const h = harness();
   try {
-    const asks = await h.navigate("https://example.com");
-    assert.equal(asks, 1, "one navigation, one approval");
+    assert.equal(await h.navigate("https://example.com"), 0);
+    assert.equal(h.requested.length, 0);
+    assert.deepEqual(h.store.taskGrantedOrigins(h.taskId), []);
+    assert.equal(await h.submit("first submission"), 1, "one submission, one approval");
     assert.equal(h.requested.length, 1, "one approval.requested event");
     assert.equal(h.browser.navigations, 1);
     assert.equal(h.browser.url, "https://example.com");
+    assert.equal(h.browser.submissions, 1);
     // The approval the operator answered is the one that let the tool through.
     const approvals = h.store.listApprovals().filter((a) => a.task_id === h.taskId);
     assert.equal(approvals.length, 1);
@@ -114,28 +119,28 @@ test("one navigation to a new origin asks the operator exactly once", async () =
   } finally { await h.close(); }
 });
 
-test("a site that redirects from its apex to www still asks only once", async () => {
-  // The reported case: the operator allowed wikipedia.org, the site answered on
-  // www.wikipedia.org, and the second origin burned a second approval while the
-  // first was already spent and the browser still on about:blank.
+test("public redirects from apex to www need no approval or write grant", async () => {
   const h = harness({ "https://wikipedia.org/": "https://www.wikipedia.org/" });
   try {
     const asks = await h.navigate("https://wikipedia.org/");
-    assert.equal(asks, 1, "the redirect target is covered by the same grant");
+    assert.equal(asks, 0);
     assert.equal(h.browser.url, "https://www.wikipedia.org/");
-    assert.equal(h.store.listApprovals().filter((a) => a.task_id === h.taskId).length, 1);
+    assert.equal(h.store.listApprovals().length, 0);
+    assert.deepEqual(h.store.taskGrantedOrigins(h.taskId), []);
   } finally { await h.close(); }
 });
 
 test("an approval remembered for the task never resolves without leaving a grant behind", async () => {
   const h = harness();
   try {
-    await h.navigate("https://example.com", "allow_task");
+    await h.navigate("https://example.com");
+    await h.submit("first submission", "allow_task");
     const granted = h.store.taskGrantedOrigins(h.taskId);
     assert.ok(granted.includes("https://example.com"), `granted origins: ${granted.join(", ")}`);
     // Spending the approval is what used to destroy the grant. Going back to the
     // same site inside the same task must not ask a second time.
-    const again = await h.navigate("https://example.com/page-two", "allow_task");
+    await h.navigate("https://example.com/page-two");
+    const again = await h.submit("another submission", "allow_task");
     assert.equal(again, 0, "a granted site is not re-gated inside the same task");
     assert.equal(h.requested.length, 1);
   } finally { await h.close(); }
@@ -147,10 +152,12 @@ test("allow once buys the one call and is never written down", async () => {
     // The card says "just this once". It used to record a task-lifetime write
     // grant on the origin, so every later submit and keystroke there went
     // through unasked on the strength of a question answered about one action.
-    assert.equal(await h.navigate("https://example.com"), 1);
+    assert.equal(await h.navigate("https://example.com"), 0);
+    assert.equal(await h.submit("first submission"), 1);
     assert.deepEqual(h.store.taskGrantedOrigins(h.taskId), [],
       "allow_once recorded a grant the operator never gave");
-    assert.equal(await h.navigate("https://example.com/page-two"), 1,
+    assert.equal(await h.navigate("https://example.com/page-two"), 0);
+    assert.equal(await h.submit("another submission"), 1,
       "the site was trusted for the rest of the task");
     assert.equal(h.requested.length, 2);
   } finally { await h.close(); }
@@ -160,6 +167,8 @@ test("a grant belongs to one task and does not leak to the next", async () => {
   const h = harness();
   try {
     await h.navigate("https://example.com");
+    await h.submit("first submission", "allow_task");
+    assert.ok(h.store.taskGrantedOrigins(h.taskId).includes("https://example.com"));
     const other = h.store.insertTask({ computer_id: "churn", goal: "another", max_steps: 5 });
     assert.deepEqual(h.store.taskGrantedOrigins(other.id), [],
       "a second task starts with no granted origins");
@@ -169,9 +178,11 @@ test("a grant belongs to one task and does not leak to the next", async () => {
 test("remembering a site for the task answers the next ask on that site", async () => {
   const h = harness();
   try {
-    const asks = await h.navigate("https://example.com", "allow_task");
+    await h.navigate("https://example.com");
+    const asks = await h.submit("first submission", "allow_task");
     assert.equal(asks, 1);
-    assert.equal(await h.navigate("https://example.com/deep/link", "allow_task"), 0);
+    assert.equal(await h.navigate("https://www.example.com/deep/link"), 0);
+    assert.equal(await h.submit("another submission", "allow_task"), 0);
     assert.equal(h.requested.length, 1, "the remembered grant answered the rest");
   } finally { await h.close(); }
 });
@@ -180,6 +191,7 @@ test("the approval card is told when it expires and whether it can be remembered
   const h = harness();
   try {
     await h.navigate("https://example.com");
+    await h.submit("first submission");
     const body = h.requested[0]!;
     const bind = body.bind as { expires: string; origin: string };
     assert.equal(body.expires_at, bind.expires, "the deadline rides on the payload, not just the bind");
@@ -188,8 +200,7 @@ test("the approval card is told when it expires and whether it can be remembered
     // 120 s is the zero-config default (schema `policy.approval_ttl_sec`).
     const created = Date.parse(String(body.created_at));
     assert.equal(Date.parse(bind.expires) - created, 120_000);
-    // A blank page has no origin; it must never be recorded as one.
-    assert.equal(bind.origin, "about:blank");
+    assert.equal(bind.origin, "https://example.com", "the approval is bound to the form's page");
   } finally { await h.close(); }
 });
 

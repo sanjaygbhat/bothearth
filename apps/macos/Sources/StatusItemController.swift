@@ -11,7 +11,7 @@ enum ShellStatus: String {
   case stopped = "Stopped"
 }
 
-/// Menu-bar presence: status, Open ModelBot, New task, Quit.
+/// Menu-bar presence: status, Open BotHearth, New task, Quit.
 final class StatusItemController {
   private let item: NSStatusItem
   private let statusLine = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
@@ -30,14 +30,14 @@ final class StatusItemController {
   init() {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item.button?.image = Self.idleIcon
-    item.button?.toolTip = "ModelBot"
+    item.button?.toolTip = "BotHearth"
 
     let menu = NSMenu()
     statusLine.isEnabled = false
     menu.addItem(statusLine)
     menu.addItem(.separator())
 
-    let open = NSMenuItem(title: "Open ModelBot", action: #selector(handleOpen), keyEquivalent: "")
+    let open = NSMenuItem(title: "Open BotHearth", action: #selector(handleOpen), keyEquivalent: "")
     open.target = self
     menu.addItem(open)
 
@@ -46,7 +46,7 @@ final class StatusItemController {
     menu.addItem(newTask)
 
     menu.addItem(.separator())
-    let quit = NSMenuItem(title: "Quit ModelBot", action: #selector(handleQuit), keyEquivalent: "")
+    let quit = NSMenuItem(title: "Quit BotHearth", action: #selector(handleQuit), keyEquivalent: "")
     quit.target = self
     menu.addItem(quit)
 
@@ -58,14 +58,14 @@ final class StatusItemController {
     statusLine.title = status.rawValue
     let waiting = status == .needsYou
     item.button?.image = waiting ? Self.attentionIcon : Self.idleIcon
-    item.button?.toolTip = waiting ? "ModelBot — waiting for you" : "ModelBot"
+    item.button?.toolTip = waiting ? "BotHearth — waiting for you" : "BotHearth"
   }
 
   @objc private func handleOpen() { onOpen?() }
   @objc private func handleNewTask() { onNewTask?() }
   @objc private func handleQuit() { onQuit?() }
 
-  /// The Threshold, as a template image. Prefers the shipped brand mark
+  /// The cairn, as a template image. Prefers the shipped brand mark
   /// (`assets/brand/mark-mono.svg`, copied into `Contents/Resources/mark.svg`
   /// by build.sh); falls back to the same geometry drawn in code so the app
   /// still builds in a checkout with no brand assets. A replacement SVG must be
@@ -80,8 +80,7 @@ final class StatusItemController {
     return drawnMarkImage(side: side)
   }
 
-  /// The waiting variant: the mark with a filled stone in the mouth of the
-  /// enclosure — visibly different from idle at 18 px, still a template image.
+  /// The waiting variant adds a dot — distinct at 18 px, still a template image.
   /// Drawn over whatever `markImage` produced, so it tracks a swapped-in mark.
   static func attentionImage(side: CGFloat) -> NSImage {
     let base = markImage(side: side)
@@ -104,7 +103,6 @@ final class StatusItemController {
   private static func drawnMarkImage(side: CGFloat) -> NSImage {
     let view = MarkView(frame: NSRect(x: 0, y: 0, width: side, height: side))
     view.strokeColor = .black
-    view.showsChevron = false  // below 32 px the chevron is dropped
     let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
       view.frame = rect
       view.draw(rect)

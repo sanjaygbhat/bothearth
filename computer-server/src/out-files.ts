@@ -1,5 +1,5 @@
 /**
- * `write_file` — the one way a task saves a deliverable for the human.
+ * `write_file` — saves a task deliverable for the human.
  *
  * Deliberately NOT part of `shell/tools.ts`: the `files_*` family is gated on the
  * `shell` capability and routed to the shell container, so a browser-only computer
@@ -17,6 +17,8 @@ import {
   closeSync,
   constants,
   existsSync,
+  chmodSync,
+  fchmodSync,
   fstatSync,
   mkdirSync,
   openSync,
@@ -145,11 +147,12 @@ export function writeFile(p: WriteFileParams): ToolResult {
   }
 
   try {
-    mkdirSync(out, { recursive: true, mode: 0o770 });
+    const madeOut = mkdirSync(out, { recursive: true, mode: 0o2770 });
     const outReal = realpathSync(out);
     if (!under(outReal, realpathSync(root))) {
       return toolError("E_POLICY", "symlink escape", { path: p.path });
     }
+    if (madeOut) chmodSync(outReal, 0o2770);
 
     // A symlinked intermediate directory would otherwise redirect mkdir/open
     // outside out/; check before creating anything.
@@ -174,13 +177,21 @@ export function writeFile(p: WriteFileParams): ToolResult {
       }
     }
 
-    mkdirSync(dirname(target), { recursive: true, mode: 0o770 });
+    const madeParent = mkdirSync(dirname(target), { recursive: true, mode: 0o2770 });
+    if (madeParent) {
+      // mkdir's mode is narrowed by the process umask. Only directories this
+      // call just created receive the shared permissions, after confinement.
+      for (let directory = dirname(target); ; directory = dirname(directory)) {
+        chmodSync(directory, 0o2770);
+        if (directory === madeParent) break;
+      }
+    }
     const flags =
       constants.O_WRONLY |
       constants.O_CREAT |
       constants.O_NOFOLLOW |
       (mode === "append" ? constants.O_APPEND : constants.O_TRUNC);
-    const fd = openSync(target, flags, 0o640);
+    const fd = openSync(target, flags, 0o660);
     let size: number;
     try {
       const before = fstatSync(fd);
@@ -193,6 +204,9 @@ export function writeFile(p: WriteFileParams): ToolResult {
           max_bytes: cap,
         });
       }
+      // Existing group-writable files owned by the other guest user need no
+      // chmod (and that user alone owns their mode). New files belong to us.
+      if (before.uid === process.getuid?.()) fchmodSync(fd, 0o660);
       writeSync(fd, body);
       size = fstatSync(fd).size;
     } finally {

@@ -454,6 +454,8 @@ export function browserCreateArgs(opts: FlagBuildOpts): string[] {
     "--mount",
     `type=volume,source=${r.volumeProfile},target=/home/browser/profile`,
     "--mount",
+    `type=volume,source=${r.volumeAgentHome},target=/home/agent`,
+    "--mount",
     `type=bind,source=${opts.workspaceHost},target=/workspace`,
     "--env",
     "MODELBOT_WORKSPACE=/workspace",
@@ -546,4 +548,3 @@ export function execStdioArgs(
 export function inspectArgs(container: string): string[] {
   return ["inspect", container];
 }
-

@@ -66,7 +66,7 @@ enum NavigationPolicy {
     switch status {
     case 401, 403:
       return (
-        "ModelBot couldn't open that.",
+        "BotHearth couldn't open that.",
         "This copy of the app isn't allowed to read it any more. Go back and open the task again."
       )
     case 404, 410:
@@ -76,7 +76,7 @@ enum NavigationPolicy {
       )
     default:
       return (
-        "ModelBot couldn't open that.",
+        "BotHearth couldn't open that.",
         "Its computer answered, but not with anything readable. Go back and try again from the task."
       )
     }

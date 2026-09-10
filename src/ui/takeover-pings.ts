@@ -338,7 +338,7 @@ export function promptForAlerts(): boolean {
 
   const body = document.createElement("p");
   body.textContent =
-    "ModelBot can send one desktop alert when a task is waiting on you. It never says what the task is.";
+    "Get a desktop alert when a task needs you. Task details stay out of alerts.";
 
   const row = document.createElement("div");
   row.className = "mb-ask-row";
@@ -360,7 +360,7 @@ export function promptForAlerts(): boolean {
       else if (permission === "denied") {
         toast(
           "info",
-          "Alerts are blocked for this site. ModelBot still shows every request here in the window.",
+          "Alerts are blocked for this site. BotHearth still shows every request here in the window.",
         );
       }
     });

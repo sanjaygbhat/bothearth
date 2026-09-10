@@ -5,6 +5,30 @@ import { Scheduler } from "../../../src/scheduler/loop.ts";
 import { RoutinesStore } from "../../../src/scheduler/store.ts";
 
 describe("scheduler loop", () => {
+  it("preserves work results on delivery failure and recovers interrupted history", async () => {
+    const store = new RoutinesStore(":memory:");
+    try {
+      const routine = store.create({ name: "review", cron: "0 9 * * *", computer_name: "office",
+        task: { goal: "review", capabilities: ["browser"] }, notify: ["webhook:https://example.test"], notify_on: ["done", "fail"] });
+      const interrupted = store.insertHistory({ routine_id: routine.id, status: "running" });
+      store.recoverInterrupted();
+      assert.equal(store.hasRunning(routine.id), false);
+      assert.match(store.getHistory(interrupted.id)!.error!, /completion was recorded/);
+      let ok = true;
+      const scheduler = new Scheduler({ store, runner: { async run() { return { ok, task_id: "saved", error: ok ? undefined : "task failure" }; } },
+        notifyFn: async () => { throw new Error("private notification URL must not enter history"); } });
+      const done = await scheduler.runNow(routine.id);
+      assert.equal(done.status, "done");
+      assert.equal(done.task_id, "saved");
+      assert.equal(done.error, null);
+      assert.match(done.notification_error!, /could not be confirmed/);
+      ok = false;
+      const failed = await scheduler.runNow(routine.id);
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.error, "task failure");
+      assert.match(failed.notification_error!, /could not be confirmed/);
+    } finally { store.close(); }
+  });
   it("fires, single-flight, history, missed-run, failure notify", async () => {
     const store = new RoutinesStore(":memory:");
     let now = new Date("2026-03-15T10:00:00.000Z");

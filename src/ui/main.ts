@@ -14,6 +14,7 @@ import "./settings.ts"; //      #/settings/:section? as an overlay, plus ⌘,
 import "./palette.ts"; //       ⌘K, the keyboard map, native bridge, alert loop
 import "./needs-you.ts"; //     the in-app "your bot needs you" strip + title mark
 import { modelbotNative } from "./native.ts";
+import { publishLicenceBadge } from "./licence.ts";
 import {
   currentSession,
   PAIR_AGAIN,
@@ -29,6 +30,7 @@ import { initShell, toast } from "./shell.ts";
  * is what shows in the meantime.
  */
 function publishSessionPill(session: SessionInfo | null): void {
+  publishLicenceBadge(session?.licence);
   const provider =
     session?.execution_mode === "codex" ? ("codex" as const) : ("claude" as const);
   publishStatusPill({
@@ -53,7 +55,7 @@ async function useSession(returnHash = ""): Promise<void> {
     toast(
       "error",
       modelbotNative.isNative
-        ? "That sign-in link could not be used. Open ModelBot from your Applications folder again to get a fresh one."
+        ? "That sign-in link could not be used. Open BotHearth from your Applications folder again to get a fresh one."
         : `That sign-in link could not be used. ${PAIR_AGAIN}`,
     );
   }

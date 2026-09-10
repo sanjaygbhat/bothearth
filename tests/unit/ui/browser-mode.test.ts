@@ -122,7 +122,7 @@ describe("blocker cards a browser can act on", () => {
     assert.equal(blockerCard(signedIn)!.key, "ai_signed_out");
   });
 
-  it("says what the one-time build really costs", () => {
+  it("describes setup without promising a fixed duration or a single lifetime build", () => {
     const building = runtime({ task_start_available: false });
     building.images.prepare = {
       state: "running",
@@ -133,7 +133,7 @@ describe("blocker cards a browser can act on", () => {
     };
     const card = blockerCard(building)!;
     assert.doesNotMatch(card.body, /two minutes/);
-    assert.match(card.body, /once/);
+    assert.doesNotMatch(card.body, /only once|happens once/);
     assert.match(card.body, /several minutes/);
     assert.equal(card.progress?.step, "Building the browser workspace (1 of 3)");
   });

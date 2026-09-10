@@ -86,11 +86,19 @@ If the card stays: read the sentence on it, which carries the browser's own reas
 
 A message saying the profile is still in use after `SingletonLock`, `SingletonSocket` and `SingletonCookie` were removed means the self-healing already ran and did not work. Worth reporting with the daemon log.
 
-### AI not connected
+### Model not connected or models not showing
 
-Open **Settings → AI connection** and sign in with Claude Code or Codex. Install the CLI on the host first — BotHearth uses the one you already have, it does not ship its own. If sign-in opens a browser, finish it there and come back; BotHearth connects on its own. A connection that is already configured is rechecked without another sign-in.
+Open **Settings → Model connection** and choose Codex or Claude Code. The computer image includes the official CLIs, and the built-in setup signs in inside that computer. A login on your laptop or host does not automatically connect a new computer. Historical tasks retain their original host login when resumed.
 
-If it says **Found on this Mac · not signed in**, the CLI is installed but has no login. Sign in with that CLI directly, then use the sign-in button here.
+For Codex, use **Sign in with ChatGPT**, then **Copy code and open ChatGPT**. Complete the official device step and return to BotHearth; copy the code manually if your browser blocks clipboard access. If the code expires, start sign-in again. Claude Code shows its own private instructions and reply field in Settings. Enter account replies there, not in task chat.
+
+Home refreshes the chosen connection after Settings and keeps your draft. If the model catalog could not load, use **Retry model choices**. The selected model remains visible even while sign-in is required; a listed model alone does not establish account access. If the provider reports a limit or unavailable model, follow that message or choose another model you can use. When **Use subagents** is checked, its selected provider must also be connected; uncheck it for direct execution.
+
+The app recovers once from a stale session token rejected before a request is accepted. If an old tab still cannot sign in, reload it. Use `bothearth pair` only if the operator session has actually expired. Do not reset the vault, remove a computer, or repeatedly launch new browser windows to refresh model readiness.
+
+### A task page will not open
+
+Use the page’s retry action after a temporary connection failure. A failed load keeps the current view and draft available; later replies from another task cannot replace the task you opened. A sign-in error needs a valid operator session, while a missing task needs the correct task link. Reloading a task page does not start another copy of the task.
 
 ## No notification when your bot needs you
 
@@ -102,11 +110,11 @@ In a plain browser the fallback is Web Notifications, which need no signature.
 
 ## "This browser or app may not be secure" when you sign in to Google
 
-Should not happen any more. Your bot's browser is a real Chrome build launched without the automation switches Google looks for, so signing in to Google by hand under **Take control** works.
+Google or another site may reject a browser session even when you are driving it. BotHearth uses Chromium in a separate desktop, and does not guarantee that a site's login or anti-automation checks will accept it.
 
-If you do see it, do not work around it with a different browser or an app password — report it, saying which account type and which step it appeared on, and paste the URL from the address line above the frame. Nothing on your side is misconfigured.
+Take control and follow the site's supported sign-in or recovery steps. If it still fails, retain the visible error and the site's public hostname for a report; do not share passwords, codes, cookies or a full login URL containing tokens. Repeatedly creating browsers or deleting the profile is not a verified fix.
 
-Two things that will not work regardless: passkeys and hardware security keys, which need a real device attached to your own machine, not to the container. Use a code-based second factor for anything your bot signs into.
+Passkeys and physical security keys generally are not available to the container desktop. Use another account-approved factor if the site offers one. Model-provider device sign-in in Settings is separate from signing into a website in the bot's browser.
 
 ## While a task is running
 
@@ -114,30 +122,33 @@ Two things that will not work regardless: passkeys and hardware security keys, w
 |---|---|
 | **Getting its computer ready** for a long time | Check the container runtime is running and the images built. Your draft is kept, so you can retry. |
 | Browser connection closed, or `computer-server stream closed` | Check the runtime, then open the computer again. Review what already happened before restarting — a closed connection does not prove earlier actions had no effect. |
-| Another task is using the browser | Open that task to continue or stop it, or pick a different computer for a one-off task under **Advanced**. |
+| Take control shows a blank computer | Current builds initialize the desktop before acknowledging control and keep screen subscriptions across early start/stop transitions. Keep the task and profile, reopen its view, and check image readiness. If it persists, retain the task ID and visible error; do not erase the computer to hide the failure. |
+| Another task is using the browser | Open that task to continue or stop it. Check **Settings → Computers** for the computer's status before starting another task. |
 | A site blocks it, or loops a CAPTCHA | Press **Take control** and do that step yourself. BotHearth does not bypass site defenses. |
-| It asks you to take control and there is nothing to do | It guessed a field was a password or a one-time code and was wrong. Press **Not needed, continue** on the card and it carries on without you. |
+| It asks you to take control and there is nothing to do | Read the stated reason. If no private step is needed, press **Not needed, continue**. Opening a public page in normal mode does not require destination approval. |
 | A link opens nothing | Initial popups are blocked before contact. Ask it to navigate directly, or take control. |
 | Control will not go back | A page still showing a password field keeps human control until it is safe. Finish or leave that step, then press **Give control back** again. |
 | **Couldn't finish**, or a stopped task with a partial result | Keep the result and check which actions already happened before starting another. A `fail` or `cancelled` outcome is not success. |
-| It cannot write a file | Known gap in this pre-release: no file-write tool is available yet, so tasks that must produce a file will report that no tool can write one. |
+| It cannot write a file | Current computers can save files in `/workspace/out` using `write_file`. Check the reported path and error. If the computer says it predates file saving, keep the partial result and update that computer before retrying. Open the saved file to verify it. |
 
-Two known reporting bugs in this build: a finished task can show **Done in 0 seconds** regardless of how long it actually took, and the **What it did** counts (steps, sites visited) can change when you navigate away and back. The activity feed is the reliable record.
+Completed task timing and activity are reconstructed from saved task records and durable steps. Older tasks may lack some metadata; use their activity and saved files to check the outcome rather than assuming missing figures mean no work happened.
 
 Browsers paused for inactivity wake on the next tool call or when you open the live view, including after a restart. Listing computers does not wake them.
 
 ### The task says it is paused
 
-A pause is not a failure and nothing is lost: the task keeps its computer and its transcript, and **Resume** on the task carries on from the step it stopped at. The card names the reason. The common ones:
+A paused task retains its computer, transcript and saved files. Read the reason, review the current page, then choose **Resume** when appropriate. External pages and unfinished actions may have changed; resumption does not guarantee an exact replay of a website step.
 
 | Why it paused | What to do |
 |---|---|
 | You did not answer an approval | Answer it if it is still on screen, then **Resume**. Approvals time out after 15 minutes; change that with `policy.approval_ttl_sec` in `modelbot.yaml` |
-| Human control lapsed | Takeover ends after 10 minutes with no input from you, and every click or keystroke you send resets that clock. Take control again, or **Resume** to give it back to the bot |
-| It stopped making progress | 5 minutes with no progress pauses it (`agent.stall_sec`). Read the feed for what it was stuck on before resuming |
+| Human control lapsed | Ten minutes without input leaves control paused, with model capture blocked. Renew control to finish the private step, then explicitly give it back; an ordinary Resume does not approve exposing an unfinished private step. |
+| It stopped making progress | Standalone adapters use `agent.stall_sec`. Native Codex/Claude tasks retain their CLI's own execution loop; do not assume quiet model output means a stalled task. Read its actual status before intervening. |
 | It ran out of steps | The step ceiling is 400 (`agent.max_steps`). The task offers **Resume with more steps**; a task that keeps hitting this usually needs to be asked for something narrower |
-| It repeated the same step | Three identical steps in a row pauses it (`agent.loop_identical`). Take control, get past the step, and hand back |
-| It ran out of budget | A task gets $20 unless you change it. Press **Resume with a higher budget** and it carries on from where it stopped, with more to spend. To change it for future tasks, set the figure in **Settings → Usage** (or `agent.spend_cap_usd` in `modelbot.yaml`); one task can be given at most $100 (`agent.spend_cap_max_usd`), and asking for more is refused |
+| It repeated the same step | Standalone adapters apply `agent.loop_identical`; native sessions use their own tool loop. Review the repeated action and message the bot or take control if the site needs you. |
+| It ran out of budget | The default internal estimate limit is $20. **Resume with a higher budget** permits more work; `agent.spend_cap_usd` and `agent.spend_cap_max_usd` configure the limits. **Settings → Usage** shows estimates, without a spending-maximum control. These estimates do not cap the model provider's bill. |
+
+A successful native turn can leave a conversation open for your answer. Reply in task chat when the model asks a question. During human control, guest model processes and their tool children stay frozen, so queued messages reach the model only after you return control. A startup interrupted by takeover can recover automatically only before a native thread or any native output exists; established work is not blindly restarted.
 
 ## Command line
 
@@ -165,4 +176,4 @@ This reads the configured audit path and vault key. A mismatch can mean corrupti
 
 [Configuration](CONFIG.md) · [CLI reference](CLI.md) · [Privacy and retention](../PRIVACY.md) · [Security model](../SECURITY.md) · [Remote deployment](REMOTE-DEPLOY.md)
 
-Task results over 16,000 characters show a marked preview. **Copy saved result** and **Download saved result** fetch the same saved summary, including partial ones from failed or stopped tasks; exports stop at 256,000 characters and say so when they are shortened.
+Task results over 16,000 characters show a marked preview. **Read full result** fetches the saved summary, including partial results from failed or stopped tasks; **Copy result** then copies the loaded text. The display stops at 256,000 characters and says when it remains shortened. **Copy preview** copies only the preview; open the saved output files for the rest.

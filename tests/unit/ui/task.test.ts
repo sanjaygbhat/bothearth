@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   taskCost,
+  taskModelLabel,
   clockTime,
   collapseFeed,
   elapsedPrecise,
@@ -297,6 +298,23 @@ describe("markdown — asterisks never reach the DOM", () => {
     return host;
   }
 
+  it("renders research tables without losing escaped pipes, code, links or unsafe text", () => {
+    const dom = installDom();
+    try {
+      const host = render("| Question | Answer |\n| :--- | ---: |\n| A \\| B | `x|y` |\n| [Source](https://example.org) | <img src=x onerror=alert(1)> |\n| Empty | |\n| malformed | extra | cell |\nAfter.");
+      assert.equal(host.querySelectorAll("table").length, 1);
+      assert.deepEqual(host.querySelectorAll("th").map(cell => cell.textContent), ["Question", "Answer"]);
+      assert.equal(host.querySelector("th")!.getAttribute("scope"), "col");
+      assert.deepEqual(host.querySelectorAll("td").map(cell => cell.textContent), ["A | B", "x|y", "Source", "<img src=x onerror=alert(1)>", "Empty", ""]);
+      assert.equal(host.querySelector("a")!.href, "https://example.org/");
+      assert.equal(host.querySelector("img"), null);
+      assert.match(host.textContent, /malformed/);
+      assert.match(host.textContent, /After\./);
+      assert.equal(host.querySelector(".result-table")!.tabIndex, 0);
+      assert.equal(render("````\n| A | B |\n| --- | --- |\n````").querySelector("table"), null);
+    } finally { dom.restore(); }
+  });
+
   it("renders bold, code, bullets and numbers as real elements", () => {
     const dom = installDom();
     try {
@@ -472,6 +490,114 @@ function feedText(root: FakeElement): string[] {
 }
 
 describe("task view, driven by synthetic events", () => {
+  it("shows this task's saved model and executor, and names missing historical models honestly", async () => {
+    assert.equal(taskModelLabel({ adapter: "codex" }), "Codex · Model not recorded");
+    const t = await mountWith({ "/api/v1/tasks/t_1": {
+      ...RUNNING["/api/v1/tasks/t_1"], task: { ...RUNNING["/api/v1/tasks/t_1"].task,
+        adapter: "codex", model: "gpt-6-astra", execution_mode: "orchestrator",
+        executor: { adapter: "claude", model: "claude-fable-5-1" },
+      },
+    } });
+    try {
+      assert.equal(t.root.querySelector(".task-model")!.textContent,
+        "Codex · gpt-6-astra · Subagents: Claude · claude-fable-5-1");
+    } finally { t.restore(); }
+  });
+
+  it("can hide model narration while retaining user messages, tools and the final summary", async () => {
+    const t = await mountRunning();
+    try {
+      const toggle = t.root.querySelector(".task-output-toggle input")!;
+      assert.equal((toggle as unknown as HTMLInputElement).checked, true);
+      t.view.onEvent(event("user", { content: "Keep the source links" }, ts(3)));
+      t.view.onEvent(event("tool.call", { name: "browser_snapshot" }, ts(4)));
+      (toggle as unknown as HTMLInputElement).checked = false;
+      toggle.fire("change");
+      assert.deepEqual(feedText(t.root), ["Opened its computer", "You: Keep the source links", "Read the page"]);
+      t.view.onEvent(event("assistant", { content: "More narration" }, ts(5)));
+      t.view.onEvent(event("native_tool", { type: "command_execution", name: "command_execution", status: "started",
+        arguments: "private command arguments" }, ts(5, 1)));
+      t.view.onEvent(event("native_tool", { type: "file_change", name: "file_change", status: "completed" }, ts(5, 2)));
+      t.view.onEvent(event("task.completed", { summary: "The final answer" }, ts(6)));
+      assert.equal(feedText(t.root).includes("More narration"), false);
+      assert.ok(feedText(t.root).includes("Running a command"));
+      assert.ok(feedText(t.root).includes("File edit finished"));
+      assert.doesNotMatch(t.root.textContent, /private command arguments/);
+      assert.equal(feedText(t.root).includes("The final answer"), true);
+      assert.equal(localStorage.getItem("modelbot.show-model-messages"), "false");
+      (toggle as unknown as HTMLInputElement).checked = true;
+      toggle.fire("change");
+      assert.ok(feedText(t.root).includes("More narration"));
+      assert.ok(feedText(t.root).includes("I’ll search nonstop fares."));
+    } finally { t.restore(); }
+  });
+
+  it("keeps the active question visible when model narration is hidden", async () => {
+    const current = RUNNING["/api/v1/tasks/t_1"];
+    const t = await mountWith({ "/api/v1/tasks/t_1": {
+      ...current, task: { ...current.task, awaiting_message: true },
+      steps: [...current.steps, { kind: "assistant", body: { content: "Which date should I use?" }, created_at: ts(3) }],
+    } });
+    try {
+      const toggle = t.root.querySelector(".task-output-toggle input")!;
+      (toggle as unknown as HTMLInputElement).checked = false;
+      toggle.fire("change");
+      assert.ok(feedText(t.root).includes("Which date should I use?"));
+      assert.ok(!feedText(t.root).includes("I’ll search nonstop fares."));
+      assert.equal(t.root.querySelector(".task-composer")!.hidden, false);
+    } finally { t.restore(); }
+  });
+
+  it("recovers from a failed load and preserves the draft across a failed refresh", async () => {
+    const missing = new Set(["/api/v1/tasks/t_1"]);
+    const t = await mountWith({}, missing);
+    try {
+      assert.match(t.root.textContent, /Task not found on this BotHearth/);
+      missing.clear();
+      t.root.querySelectorAll("button").find(b => b.textContent === "Try again")!.click();
+      await new Promise(setImmediate);
+      assert.ok(t.root.querySelector("h1.task-goal"));
+      assert.doesNotMatch(t.root.textContent, /Task not found on this BotHearth/);
+      assert.equal(t.root.querySelector(".task-grid")!.hidden, false);
+      assert.equal(feedText(t.root).length, 2);
+      const draft = t.root.querySelector("textarea")!;
+      draft.value = "Keep my unfinished message";
+      missing.add("/api/v1/tasks/t_1");
+      t.view.onEvent(event("task.step", { message: true }, ts(4)));
+      await new Promise(setImmediate);
+      assert.equal(t.root.querySelector("textarea"), draft);
+      assert.equal(draft.value, "Keep my unfinished message");
+      assert.equal(t.root.querySelector(".task-grid")!.hidden, false);
+      missing.clear();
+      t.view.onEvent(event("task.step", { message: true }, ts(5)));
+      await new Promise(setImmediate);
+      assert.doesNotMatch(t.root.textContent, /Task not found on this BotHearth/);
+      assert.equal(draft.value, "Keep my unfinished message");
+    } finally { t.restore(); }
+  });
+
+  it("does not let a late failed request replace the next task", async () => {
+    const t = await mountRunning();
+    const original = globalThis.fetch;
+    let finish!: (response: Response) => void;
+    globalThis.fetch = (async (path, init) => {
+      if (String(path) === "/api/v1/tasks/t_1") return new Promise<Response>(resolve => { finish = resolve; });
+      if (String(path) === "/api/v1/tasks/t_2") return Response.json({
+        task: { ...RUNNING["/api/v1/tasks/t_1"].task, id: "t_2", goal: "Second task" }, steps: [],
+      });
+      return original(path, init);
+    }) as typeof fetch;
+    try {
+      t.view.onEvent(event("task.step", { message: true }, ts(4)));
+      t.view.update("t_2");
+      await new Promise(setImmediate);
+      finish(Response.json({}, { status: 503 }));
+      await new Promise(setImmediate);
+      assert.equal(t.root.querySelector("h1.task-goal")!.textContent, "Second task");
+      assert.doesNotMatch(t.root.textContent, /couldn’t open|Couldn’t refresh/);
+    } finally { globalThis.fetch = original; t.restore(); }
+  });
+
   it("replays the durable feed, then folds live steps into the same timeline", async () => {
     const t = await mountRunning();
     try {
@@ -630,6 +756,24 @@ async function mountWith(
 }
 
 describe("task view — waiting for you", () => {
+  it("restores the review instruction on reload and updates it without removing chat", async () => {
+    const instruction = "Review the prepared FAQ answer before it is published.";
+    const t = await mountWith({
+      "/api/v1/tasks/t_1": { ...RUNNING["/api/v1/tasks/t_1"], steps: [
+        { kind: "takeover.requested", body: { takeover_id: "tk_review", reason: instruction }, created_at: ts(3) },
+      ] },
+      "/api/v1/takeovers": { takeovers: [{ id: "tk_review", computer_id: "cmp_1", task_id: "t_1", state: "takeover_requested" }] },
+    });
+    try {
+      assert.match(t.root.querySelector(".takeover-ask")!.textContent, /Review the prepared FAQ answer/);
+      assert.equal(t.root.querySelector(".task-composer")!.hidden, false);
+      t.view.onEvent(event("takeover.requested", { takeover_id: "tk_review", reason: "Check the revised wording and sources." }, ts(4)));
+      await new Promise(setImmediate);
+      assert.match(t.root.querySelector(".takeover-ask")!.textContent, /Check the revised wording/);
+      assert.equal(t.root.querySelector(".task-composer")!.hidden, false);
+    } finally { t.restore(); }
+  });
+
   it("pins the approval in the feed column with its actions outside every scroller", async () => {
     const t = await mountWith({
       "/api/v1/approvals": {
@@ -956,6 +1100,74 @@ function completed(summary: Json | null, steps: Json[]): Record<string, Json> {
     },
   };
 }
+
+describe("full research results", () => {
+  it("keeps the preview on failure, then loads and copies the complete report", async () => {
+    const preview = "Source-backed findings. ".repeat(800).slice(0, 16000);
+    const full = preview + "\n\nFINAL RECOMMENDATION: publish the reviewed FAQ.";
+    const resultUrl = "/api/v1/tasks/t_1/results/42";
+    const missing = new Set([resultUrl]);
+    const t = await mountWith({
+      ...completed(null, [{ kind: "task.completed", body: { summary: preview, summary_truncated: true }, result_id: 42, created_at: ts(4) }]),
+      [resultUrl]: { text: full, truncated: false },
+    }, missing);
+    try {
+      let copied = "";
+      navigator.clipboard.writeText = async text => { copied = text; };
+      const read = t.root.querySelectorAll(".result-tools button").find(button => button.textContent === "Read full result")!;
+      assert.ok(read);
+      assert.match(t.root.querySelector(".result-note")!.textContent, /shortened/);
+      read.click();
+      await new Promise(setImmediate);
+      assert.match(t.root.querySelector(".result-note")!.textContent, /Couldn’t load/);
+      assert.equal(t.root.querySelector(".result")!.textContent, preview.trim());
+      missing.delete(resultUrl);
+      read.click();
+      await new Promise(setImmediate);
+      assert.match(t.root.querySelector(".result")!.textContent, /FINAL RECOMMENDATION/);
+      assert.equal(read.hidden, true);
+      const copy = t.root.querySelectorAll(".result-tools button").find(button => button.textContent === "Copy result")!;
+      copy.click();
+      await new Promise(setImmediate);
+      assert.equal(copied, full);
+      assert.match(t.root.querySelector(".result-note")!.textContent, /Result copied/);
+      navigator.clipboard.writeText = async () => { throw new Error("clipboard denied"); };
+      copy.click();
+      await new Promise(setImmediate);
+      assert.match(t.root.querySelector(".result-note")!.textContent, /Couldn’t copy/);
+    } finally { t.restore(); }
+  });
+
+  it("labels the full-result bound honestly and discards a response after task navigation", async () => {
+    const resultUrl = "/api/v1/tasks/t_1/results/42";
+    const routes = {
+      ...completed(null, [{ kind: "task.completed", body: { summary: "Preview", summary_truncated: true }, result_id: 42, created_at: ts(4) }]),
+      [resultUrl]: { text: "Available part", truncated: true },
+    };
+    const t = await mountWith(routes);
+    const fetchBefore = globalThis.fetch;
+    try {
+      t.root.querySelectorAll(".result-tools button")[0]!.click();
+      await new Promise(setImmediate);
+      assert.match(t.root.querySelector(".result-note")!.textContent, /exceeds the display limit/);
+      assert.equal(t.root.querySelectorAll(".result-tools button")[1]!.textContent, "Copy preview");
+      t.view.update("t_2");
+      await new Promise(setImmediate);
+      t.view.update("t_1");
+      await new Promise(setImmediate);
+      let resolve: (value: Response) => void = () => {};
+      globalThis.fetch = (async (url, init) => String(url) === resultUrl
+        ? await new Promise<Response>(done => { resolve = done; })
+        : fetchBefore(url, init)) as typeof fetch;
+      t.root.querySelectorAll(".result-tools button")[0]!.click();
+      t.view.update("t_2");
+      await new Promise(setImmediate);
+      resolve(Response.json({ text: "WRONG_TASK_RESULT", truncated: false }));
+      await new Promise(setImmediate);
+      assert.doesNotMatch(t.root.textContent, /WRONG_TASK_RESULT/);
+    } finally { globalThis.fetch = fetchBefore; t.restore(); }
+  });
+});
 
 describe("task view — a request is not an outcome", () => {
   it("shows no file and no Open button for a write the computer refused", async () => {
@@ -1466,11 +1678,11 @@ describe("a plan limit is not a fault on this Mac", () => {
       // The exception text is behind a disclosure, and is not a result.
       assert.equal(t.root.querySelector(".result"), null);
       const detail = t.root.querySelector(".done-detail")!;
-      assert.match(detail.textContent, /What the AI reported/);
+      assert.match(detail.textContent, /Error details/);
       assert.match(detail.textContent, /You've hit your usage limit/);
 
       const acts = t.root.querySelectorAll(".done-acts button").map((b) => b.textContent);
-      assert.deepEqual(acts, ["Switch AI connection", "Run again", "Start another task", "Copy diagnostics"]);
+      assert.deepEqual(acts, ["Switch model connection", "Run again", "Start another task", "Copy diagnostics"]);
       t.root.querySelectorAll(".done-acts button")[0]!.click();
       assert.equal(location.hash, "#/settings/ai");
     } finally {

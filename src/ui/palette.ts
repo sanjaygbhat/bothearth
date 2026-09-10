@@ -878,7 +878,7 @@ function render(): void {
       : `Nothing here matches “${input.value.trim()}”.`;
     const span = document.createElement("span");
     span.textContent = taskLoadFailed && scope === "tasks"
-      ? "ModelBot will pick them up again once it reconnects."
+      ? "BotHearth will pick them up again once it reconnects."
       : "Try fewer letters, or press esc and carry on.";
     empty.append(strong, span);
     listBox.append(empty);
@@ -1192,7 +1192,7 @@ export function openKeys(): void {
   title.id = "mb-keys-title";
   title.textContent = "Keyboard";
   const sub = document.createElement("p");
-  sub.textContent = "Everything ModelBot does, without reaching for the mouse.";
+  sub.textContent = "Keyboard shortcuts";
   head.append(title, sub);
 
   const body = document.createElement("div");

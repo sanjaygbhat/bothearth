@@ -38,6 +38,7 @@ import {
   type InternalDnsPlan,
 } from "./flags.ts";
 import { resourceNames, sanitizeComputerName } from "./names.ts";
+import { BUILD_STAMP_LABEL } from "../daemon/build-stamp.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 
@@ -143,6 +144,7 @@ export async function createComputer(
 
   if (caps.includes("browser")) {
     await runIgnore(cli, profileVolumeCreateArgs(n), ["already exists"]);
+    await cli.run(["volume", "create", "--label", `${r.label}=${n}`, r.volumeAgentHome]);
   }
 
   await runIgnore(cli, ["rm", "-f", r.containerProxy], ["no such"]);
@@ -174,11 +176,12 @@ export async function startComputer(
   const { cli } = await resolveCli(life);
   const r = resourceNames(n);
   for (const c of [r.containerProxy, r.containerBrowser, r.containerShell]) {
-    await runIgnore(cli, startArgs(c), [
-      "no such",
-      "already started",
-      "is already running",
-    ]);
+    try {
+      await runIgnore(cli, startArgs(c), ["no such", "already started", "is already running"]);
+    } catch (error) {
+      if (!/cannot start a paused container/i.test(String(error))) throw error;
+      await cli.run(unpauseArgs(c));
+    }
   }
   try {
     const inspected = JSON.parse(await cli.run(inspectArgs(r.containerBrowser))) as Array<{
@@ -206,8 +209,9 @@ export async function startComputer(
  * kept running a computer that had never heard of `write_file` while the daemon
  * offered the model that tool.
  *
- * Returns true when at least one of this computer's containers is running an
- * image its own tag no longer points at.
+ * Compare our build stamps first: Docker's OCI index, platform manifest and
+ * config IDs can differ for the same image. Without stamps, Docker must resolve
+ * both identities before a mismatch is evidence for recreating a computer.
  */
 export async function computerImageDrifted(
   name: string,
@@ -216,30 +220,58 @@ export async function computerImageDrifted(
   const n = sanitizeComputerName(name);
   const { cli } = await resolveCli(life);
   const r = resourceNames(n);
-  const tagIds = new Map<string, string | null>();
-  for (const container of [r.containerBrowser, r.containerShell, r.containerProxy]) {
+  const tagImages = new Map<string, { id: string; stamp: string } | null>();
+  const stampFormat = `{{index .Config.Labels ${JSON.stringify(BUILD_STAMP_LABEL)}}}`;
+  for (const [container, desiredTag] of [[r.containerBrowser, life.browserImage], [r.containerShell, life.shellImage], [r.containerProxy, life.proxyImage]] as const) {
     let running = "";
     let tag = "";
+    let stamp = "";
     try {
-      const out = await cli.run(["inspect", "-f", "{{.Image}}|{{.Config.Image}}", container]);
-      [running = "", tag = ""] = out.trim().split("|");
+      const out = await cli.run(["inspect", "-f", `{{.Image}}|{{.Config.Image}}|${stampFormat}`, container]);
+      [running = "", tag = "", stamp = ""] = out.trim().split("|");
     } catch {
       continue; // No such container: nothing to be out of date.
     }
     if (!running || !tag) continue;
-    if (!tagIds.has(tag)) {
-      tagIds.set(
+    tag = desiredTag ?? tag;
+    if (!tagImages.has(tag)) {
+      tagImages.set(
         tag,
         await cli
-          .run(["image", "inspect", "-f", "{{.Id}}", tag])
-          .then((out) => out.trim() || null)
+          .run(["image", "inspect", "-f", `{{.Id}}|${stampFormat}`, tag])
+          .then((out) => {
+            const [id = "", stamp = ""] = out.trim().split("|");
+            return id ? { id, stamp } : null;
+          })
           // A tag that no longer resolves cannot prove drift; prepare will
           // rebuild it, and claiming drift here would recreate on every boot.
           .catch(() => null),
       );
     }
-    const current = tagIds.get(tag);
-    if (current && current !== running) return true;
+    const current = tagImages.get(tag);
+    if (!current) continue;
+    if (/^[a-f0-9]{16}$/.test(stamp) && /^[a-f0-9]{16}$/.test(current.stamp)) {
+      if (stamp !== current.stamp) return true;
+      continue;
+    }
+    if (current.id === running) continue;
+    // Recent Docker exposes the exact platform manifest the container pins.
+    // Resolve the tag for that platform rather than comparing it to an index.
+    const manifest = await cli.run(["inspect", "-f", "{{json .ImageManifestDescriptor}}", container])
+      .then(out => JSON.parse(out) as { digest?: string; platform?: { os?: string; architecture?: string; variant?: string } } | null)
+      .catch(() => null);
+    if (manifest?.digest && manifest.platform?.os && manifest.platform.architecture) {
+      const platform = [manifest.platform.os, manifest.platform.architecture, manifest.platform.variant].filter(Boolean).join("/");
+      const platformId = await cli.run(["image", "inspect", "--platform", platform, "-f", "{{.Id}}", tag])
+        .then(out => out.trim()).catch(() => "");
+      if (platformId) {
+        if (platformId !== manifest.digest) return true;
+        continue;
+      }
+    }
+    const canonical = await cli.run(["image", "inspect", "-f", "{{.Id}}", running])
+      .then(out => out.trim()).catch(() => "");
+    if (canonical && canonical !== current.id) return true;
   }
   return false;
 }

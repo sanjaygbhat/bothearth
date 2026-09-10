@@ -49,6 +49,7 @@ describe("sandbox flag builder golden", () => {
     assert.ok(s.includes("/quarantine:rw,noexec,nosuid,nodev"));
     assert.ok(s.includes("MODELBOT_QUARANTINE=/quarantine"));
     assert.ok(s.includes("source=modelbot-demo-profile") && s.includes("target=/home/browser/profile"));
+    assert.ok(s.includes("source=modelbot-demo-agent-home") && s.includes("target=/home/agent"));
     assert.ok(s.includes(`source=${WS}`) && s.includes("target=/workspace"));
     assert.ok(s.includes("HTTP_PROXY=http://proxy:3128"));
     assert.equal(args.includes("-p"), false);

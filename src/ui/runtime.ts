@@ -6,7 +6,7 @@
  *
  *   1. Types for the payload, so a view never reads an untyped bag.
  *   2. `primaryBlocker` — ux-spec §2.2 shows ONE card at a time and orders it
- *      "AI connection -> container runtime", which is not the order the daemon
+ *      "Model connection -> container runtime", which is not the order the daemon
  *      emits (it leads with the longest download). The precedence lives here so
  *      home and any later surface agree on which card is showing.
  *   3. `createRuntimeWatcher` — a poller that only runs when something is
@@ -18,6 +18,8 @@
  */
 
 import { apiGet, apiPost, ApiError } from "./api.ts";
+import type { ConnectionStatus } from "./connection.ts";
+import type { LicenceInfo } from "./session.ts";
 
 export type ImageName = "computer" | "shell" | "proxy";
 export type PrepareStateName = "idle" | "running" | "done" | "failed";
@@ -91,6 +93,7 @@ export interface RuntimeStatus {
   };
   task_start_available: boolean;
   blockers: RuntimeBlocker[];
+  licence?: LicenceInfo;
 }
 
 /* -------------------------------------------------------------------------
@@ -98,7 +101,7 @@ export interface RuntimeStatus {
  * ---------------------------------------------------------------------- */
 
 /**
- * ux-spec §2.2: "One card, at most one at a time. Precedence: AI connection ->
+ * ux-spec §2.2: "One card, at most one at a time. Precedence: Model connection ->
  * container runtime -> nothing." An unusable Node runtime comes first because
  * nothing else can be fixed until it is, and it is the one blocker whose fix
  * lives outside the app entirely. Ids the daemon may add later fall to the end
@@ -106,6 +109,7 @@ export interface RuntimeStatus {
  */
 const BLOCKER_PRECEDENCE: readonly string[] = [
   "node_version",
+  "licence_required",
   "ai_not_connected",
   "docker_missing",
   "docker_not_running",
@@ -241,13 +245,14 @@ export function aiIdentity(input: {
   status: AiReadiness | null;
   model?: string | null;
   executionMode?: "standalone" | "codex" | "claude" | null;
+  connectionStatus?: ConnectionStatus;
 }): AiIdentity {
   const ready = input.status?.task_start_available ?? false;
-  if (!ready) {
+  if (!ready && !input.model?.trim()) {
     return {
-      text: "No AI connected",
+      text: "No model connected",
       tone: "warn",
-      label: "No AI connected. Open the AI connection settings.",
+      label: "No model connected. Open the Model connection settings.",
     };
   }
 
@@ -282,7 +287,19 @@ export function aiIdentity(input: {
       text,
       sub: `· ${said}`,
       tone: "warn",
-      label: `AI connection: ${text} — ${said}. Open the AI connection settings.`,
+      label: `Model connection: ${text} — ${said}. Open the Model connection settings.`,
+    };
+  }
+
+  if (!ready) {
+    const state = input.connectionStatus === "signed_out" ? "sign-in required"
+      : input.connectionStatus === "signing_in" ? "finish sign-in"
+      : input.connectionStatus === "missing" ? "setup needed"
+      : input.connectionStatus === "error" ? "connection check failed"
+      : input.status ? "check connection" : "checking connection";
+    return {
+      text, sub: `· ${state}`, tone: "warn",
+      label: `Selected model: ${input.model!.trim()}${provider ? ` (${provider})` : ""}. ${state}. Open the Model connection settings.`,
     };
   }
 
@@ -296,7 +313,7 @@ export function aiIdentity(input: {
     text,
     ...(sub ? { sub } : {}),
     tone: "ok",
-    label: `AI connection: ${full || text}${onPlan ? ", billed on your own plan" : ""}`,
+    label: `Model connection: ${full || text}${onPlan ? ", billed on your own plan" : ""}`,
   };
 }
 

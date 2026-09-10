@@ -1,8 +1,18 @@
 # Remote deployment
 
-The daemon runs on the Linux host; browser, optional shell, and proxy run in containers. UI and MCP stay on `127.0.0.1:7777`. Reach them through SSH or private HTTPS. A VPS runs the daemon and browsers independently of the laptop; phones require their own private-network connection. See the [remote client contract](REMOTE-CLIENT.md).
+The daemon runs on the Linux host; the browser, stock Codex/Claude Code CLI, shell and proxy run in containers. UI and MCP stay on `127.0.0.1:7777`. Reach them through SSH or private HTTPS. A VPS runs new native tasks independently of the laptop once its computer’s model connection is configured; phones require their own private-network connection. See the [remote client contract](REMOTE-CLIENT.md).
 
-A model harness running on your laptop still needs that laptop and its connection during execution. To run tasks independently, configure model access on the remote host. Fresh headless-host preparation requires system administration; plan for platform-specific setup.
+A manually connected harness running on your laptop still needs that laptop and its connection. Historical host sessions retain their original execution location and login. Fresh headless-host preparation requires system administration; plan for platform-specific setup.
+
+Check `systemctl --version` on the host before choosing its setup path:
+
+| Host setup | Supported path |
+|---|---|
+| Linux desktop with an unlocked Secret Service keyring | `deploy ssh` below. |
+| Headless Linux with systemd 258 or newer and a running user manager | Prepare the encrypted user credential below, then use `deploy ssh --systemd-credential PATH`. |
+| Headless Linux with older systemd | Use the administrator-managed [system-service setup](#system-service-alternative-tested-on-debian-13). `deploy ssh` does not install a system service. |
+
+The distinction comes from systemd: encrypted credentials for **user** services were added in [version 258](https://github.com/systemd/systemd/blob/v258/NEWS); older versions support the **system** service path. Installing `secret-tool` alone does not create an unlocked desktop keyring. The SSH preflight now reports the missing prerequisite before copying or changing an installation; it never falls back to a plaintext key.
 
 ## Prepare the host
 
@@ -29,12 +39,15 @@ Review the printed steps, then remove `--dry-run` to execute them. Use the tarba
 
 The deployment checks prerequisites, copies the package into a private cache, installs it under `~/.local/share/modelbot`, initializes a full private config/vault/token set if absent, and starts a systemd **user** service. Existing configuration and vaults are preserved. The service uses the same account and keychain as initialization and must pass `/healthz` before deployment succeeds.
 
+Running the same deployment again installs the new package and restarts the service. Finish current tasks before updating an older installation: older releases cancel active tasks on shutdown. Current native Codex and Claude tasks pause with their conversation saved; review the page and choose **Resume** after restarting. An interrupted browser action may already have reached the website, so check before repeating it. Reusing a deployment name for a different SSH target is refused.
+
 Inspect logs on the remote host with `journalctl --user -u modelbot.service`. Bootstrap URLs are operator credentials; protect access to those logs. BotHearth configuration is under `~/.modelbot`, data normally under `~/ModelBot`, and the unit under `~/.config/systemd/user/modelbot.service`.
 
 ## Connect privately
 
 ```bash
-ssh -N -L 7777:127.0.0.1:7777 modelbot@vm.example.com
+ssh -N -o ExitOnForwardFailure=yes -i /absolute/path/to/id_ed25519 \
+  -L 7777:127.0.0.1:7777 modelbot@vm.example.com
 ```
 
 Open the remote daemon's bootstrap URL through the local tunnel. If local port 7777 is occupied, stop the local daemon first or configure an allowed host/port pair deliberately. Never expose the live-view port publicly.
@@ -126,18 +139,27 @@ WantedBy=multi-user.target
 
 Run `sudo systemctl daemon-reload` and `sudo systemctl enable --now modelbot.service`, then check loopback `/healthz` and the private SSH connection. Protect `journalctl -u modelbot.service`: bootstrap links grant operator access. Root manages the decrypted credential's ACL; do not change it to world-readable or copy its plaintext into an environment file. Docker-group access grants substantial host authority despite the daemon's non-root UID. A successful start is not a substitute for an actual reboot and harmless browser task on your chosen host.
 
+Run diagnostics with that same service identity and encrypted credential. A plain SSH shell does not inherit the service's vault access:
+
+```sh
+sudo systemd-run --wait --pipe --collect --uid=modelbot \
+  --setenv=HOME=/home/modelbot --setenv=PATH=/usr/local/bin:/usr/bin:/bin \
+  -p LoadCredentialEncrypted=modelbot-vault:/etc/credstore.encrypted/modelbot.vault \
+  /usr/local/bin/node /home/modelbot/.local/share/modelbot/node_modules/modelbot/dist/cli/index.js doctor
+```
+
+If vault access fails after a service change, restore its original credential and permissions. Do not reset the vault merely because the diagnostic shell lacks the key. BotHearth reports unavailable headless key sources without offering a destructive key reset.
+
 ## Provider login on the VPS
 
-Use the provider CLI's official login on the VPS under the service account; never copy a laptop's authentication files or pool users' credentials. For Codex without a browser callback, the [official authentication guide](https://learn.chatgpt.com/docs/auth) recommends `codex login --device-auth` (beta). Device-code login must be enabled in the user's ChatGPT security settings or workspace permissions. Complete only the official verification page and one-time code, then run `codex login status`. If that flow is unavailable, the documented SSH forwarding of the localhost callback is an alternative; do not invent a token exchange.
+Open **Settings → Model connection** on the remote instance. BotHearth prepares its computer and runs the provider’s official login inside it; it does not copy a laptop or host login. Codex uses its [official device flow](https://learn.chatgpt.com/docs/auth) after **Sign in with ChatGPT**. Device login must be allowed by the account/workspace. Claude Code uses `claude auth login`; Settings shows its private output and reply field. Follow the [official authentication instructions](https://code.claude.com/docs/en/authentication) and enter replies only in that sign-in panel, not task chat.
 
-On an instance with `remote.public_origin`, Settings starts the installed Codex CLI's official device flow after an explicit **Sign in with ChatGPT** click. Only the initiating operator session can see the bounded one-time code and fixed official verification link; cancellation, sign-out, revocation, session expiry or daemon shutdown ends the owned login process. The code expires within ten minutes and is never saved in BotHearth's database or audit. The CLI retains its own native authentication state and logs. Unrecognized CLI output fails closed; use the native server terminal if the CLI changes its prompt or device login is unavailable.
+Only the initiating operator session receives sign-in output. Cancellation, sign-out, revocation, expiry or daemon shutdown ends the owned login process. Codes/replies are not saved in task history or audit. The CLI retains its own authentication and history in the computer’s persistent model-home volume. Historical host tasks continue using their original host CLI and login rather than migrating credentials. Model availability and subscription limits remain provider-controlled; a successful login alone does not prove a working task.
 
-For a signed-out remote Claude Code instance, Settings offers **Check again** and instructs you to run `claude auth login` in the server's own terminal first. Follow [Claude Code's official SSH/container authentication instructions](https://code.claude.com/docs/en/authentication); BotHearth does not relay Claude browser codes or collect tokens. Already configured native subscription, Console, or supported cloud authentication remains owned by Claude Code. Local desktop installations retain the normal native browser login action.
-
-Credentials remain owned by the native provider CLI. Select the same existing login in BotHearth Settings; model availability and subscription limits remain provider-controlled. Installing a binary or receiving exit code zero is not sufficient proof of a working browser task.
+Use the same Home controls as a local installation: select the provider/model, leave **Use subagents** unchecked for direct execution, and start a small task with a verifiable saved file. **Take control** operates the remote computer’s full desktop, including Terminal and Files. Connecting to the VM does not give the model access to your laptop’s desktop or transfer your laptop’s provider login.
 
 ## Acceptance before relying on a remote instance
 
-Local tests cover real HTTPS/WSS session exchange and revocation, immutable origin/device authority, daemon restart, inherited idle pause, cancellation, and encrypted-vault reopen with the protected credential file. The deployment planner is syntax checked and validates the prepared-host prerequisites. The linked trial adds a real Debian VM reboot and system-service credential check. These checks do **not** establish systemd credential decryption on every distribution, uninterrupted browser/model sessions, off-LAN cellular reachability, or iOS/Android background delivery.
+Local tests cover real HTTPS/WSS session exchange and revocation, immutable origin/device authority, daemon restart, inherited idle pause, cancellation, and encrypted-vault reopen with the protected credential file. The deployment planner is syntax checked and validates the prepared-host prerequisites. An earlier Debian VM trial covered reboot and system-service credentials using a laptop-side model harness. Subsequent local verification covered authenticated Codex execution inside a computer and full desktop handback. That does not establish the combined workflow on a fresh remote VM, systemd credential decryption on every distribution, uninterrupted browser/model sessions, off-LAN cellular reachability, or iOS/Android background delivery.
 
 On the chosen VPS, verify the installed images match the application revision, complete a harmless task, turn off the laptop and use the phone over cellular, acquire/return HUMAN control, revoke a second device, restart the service and finally reboot the host. Confirm the same browser profile survives, stale input is rejected, HUMAN remains private, and all public ports remain closed. Do not replay a failed task with external side effects merely to test connectivity.

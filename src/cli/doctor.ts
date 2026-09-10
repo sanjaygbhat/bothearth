@@ -7,6 +7,9 @@ import { existsSync } from "node:fs";
 import { loadConfigDoc } from "../config/load.ts";
 import { verifyAuditFile } from "../audit/verify.ts";
 import { isDeniedAddress } from "../proxy/policy.ts";
+import { detectRuntime } from "../sandbox/detect.ts";
+import { createDockerCli, type DockerCli } from "../sandbox/docker.ts";
+import { LABEL_COMPUTER } from "../sandbox/flags.ts";
 import {
   configPath,
   expandHome,
@@ -14,6 +17,7 @@ import {
   tokensPath,
 } from "./paths.ts";
 import { readTokensFile } from "./tokens.ts";
+import { resolveAuditVerifyKey } from "./audit-key.ts";
 import {
   classifyStartupError,
   type RecoveryAction,
@@ -68,6 +72,8 @@ export interface SecurityAuditInput {
   vaultUnlock?: VaultUnlockResult;
   images: string[];
   containers: ContainerInspectLike[];
+  /** Omitted for injected fixtures; a failed live inspection must not imply safety. */
+  containerInspection?: { ok: boolean; detail: string };
   proxyDenylistActive: boolean;
   auditChain: { ok: boolean; detail: string };
   allowPublicBind?: boolean;
@@ -124,8 +130,10 @@ function hardeningProblems(c: ContainerInspectLike): string[] {
   if ((hc.NetworkMode ?? "").toLowerCase() === "host") problems.push("network_host");
   if ((hc.PidMode ?? "").toLowerCase() === "host") problems.push("pid_host");
   if ((hc.Devices ?? []).length > 0) problems.push("host_devices");
+  // The lifecycle names browser containers with this suffix. Shell/proxy use the
+  // runtime's normal 64 MiB; only Chromium needs the larger shared-memory mount.
   const shm = hc.ShmSize ?? 0;
-  if (shm > 0 && shm < 512 * 1024 * 1024) {
+  if (c.Name?.endsWith("-browser") && shm < 512 * 1024 * 1024) {
     problems.push(`shm_too_small=${shm}`);
   }
   return problems;
@@ -157,6 +165,14 @@ export function runSecurityAudit(input: SecurityAuditInput): AuditCheck[] {
 
   let sockHit = false;
   const hardenFails: string[] = [];
+  const inspectionFailed = input.containerInspection?.ok === false;
+  if (input.containerInspection) {
+    out.push({
+      id: "container_runtime",
+      severity: inspectionFailed ? "FAIL" : "PASS",
+      detail: input.containerInspection.detail,
+    });
+  }
   for (const c of input.containers) {
     const name = c.Name ?? "unknown";
     if (mountsDockerSock(c)) {
@@ -173,22 +189,30 @@ export function runSecurityAudit(input: SecurityAuditInput): AuditCheck[] {
   if (!sockHit) {
     out.push({
       id: "docker.sock",
-      severity: "PASS",
-      detail: `none in ${input.containers.length} container(s)`,
+      severity: inspectionFailed ? "WARN" : input.containers.length ? "PASS" : "INFO",
+      detail: inspectionFailed
+        ? "not checked (container inspection unavailable)"
+        : `none in ${input.containers.length} container(s)`,
     });
   }
   out.push({
     id: "hardening",
-    severity: hardenFails.length ? "FAIL" : "PASS",
+    severity: hardenFails.length ? "FAIL" : inspectionFailed ? "WARN" : input.containers.length ? "PASS" : "INFO",
     detail:
-      hardenFails.length === 0
+      inspectionFailed && hardenFails.length === 0
+        ? "not checked (container inspection unavailable)"
+        : hardenFails.length === 0
         ? input.containers.length
           ? "ok"
           : "n/a (no containers)"
         : hardenFails.join("; "),
   });
 
-  const tagOnly = input.images.filter(isTagOnlyImage);
+  const images = [...new Set([
+    ...input.images,
+    ...input.containers.map((c) => c.Config?.Image).filter((image): image is string => Boolean(image)),
+  ])];
+  const tagOnly = images.filter(isTagOnlyImage);
   const releaseTagOnly = tagOnly.filter((img) => !isMvpDevTag(img));
   const mvpDevTags = tagOnly.filter(isMvpDevTag);
   if (releaseTagOnly.length) {
@@ -207,7 +231,7 @@ export function runSecurityAudit(input: SecurityAuditInput): AuditCheck[] {
     out.push({
       id: "image_digest",
       severity: "PASS",
-      detail: input.images.length ? "digest-pinned" : "n/a",
+      detail: images.length ? "digest-pinned" : "n/a",
     });
   }
 
@@ -277,22 +301,53 @@ interface DoctorLoadOpts {
   home?: string;
   configFile?: string;
   containers?: ContainerInspectLike[];
+  cli?: Pick<DockerCli, "run">;
   images?: string[];
   auditKey?: Buffer | string;
   allowPublicBind?: boolean;
 }
 
-function buildDoctorInputFromDisk(
+// Project only fields used by this audit. Never retrieve Config.Env or other
+// container configuration that can contain credentials.
+const CONTAINER_INSPECT_FORMAT = '{"Name":{{json .Name}},"Config":{"Image":{{json .Config.Image}}},"HostConfig":{'
+  + ["Privileged", "ReadonlyRootfs", "CapDrop", "SecurityOpt", "IpcMode", "NetworkMode", "PidMode", "Devices", "ShmSize"]
+    .map((field) => `"${field}":{{json .HostConfig.${field}}}`).join(",")
+  + '},"Mounts":[{{range $i, $mount := .Mounts}}{{if $i}},{{end}}{"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}}}{{end}}]}';
+
+async function buildDoctorInputFromDisk(
   opts: DoctorLoadOpts = {},
-): SecurityAuditInput {
+): Promise<SecurityAuditInput> {
   const home = modelbotHome(opts.home);
-  const cfgFile = opts.configFile ?? configPath(home);
+  const cfgFile = opts.configFile ?? process.env.MODELBOT_CONFIG ?? configPath(home);
   let bind = "127.0.0.1";
   let port = 7777;
   let vaultMode: SecurityAuditInput["vaultMode"] = "missing";
   let vaultPath: string | undefined;
   let images: string[] = opts.images ?? [];
   let auditFile: string | undefined;
+  let containers = opts.containers ?? [];
+  let containerInspection: SecurityAuditInput["containerInspection"];
+
+  if (opts.containers === undefined) {
+    try {
+      const cli = opts.cli ?? createDockerCli(await detectRuntime());
+      const ids = (await cli.run(["ps", "--all", "--quiet", "--filter", `label=${LABEL_COMPUTER}`]))
+        .trim().split(/\s+/).filter(Boolean);
+      if (ids.some((id) => !/^[0-9a-f]{12,64}$/i.test(id))) throw new Error("invalid container IDs");
+      if (ids.length) {
+        const output = await cli.run(["inspect", "--format", CONTAINER_INSPECT_FORMAT, ...ids]);
+        const inspected = output.trim().split(/\r?\n/).filter(Boolean)
+          .map((line) => JSON.parse(line) as ContainerInspectLike);
+        if (inspected.length !== ids.length || inspected.some((c) => !c?.Name || !c.Config?.Image || !c.HostConfig)) {
+          throw new Error("incomplete container inspection");
+        }
+        containers = inspected;
+      }
+      containerInspection = { ok: true, detail: `inspected ${containers.length} managed container(s), including stopped` };
+    } catch {
+      containerInspection = { ok: false, detail: "could not inspect managed containers; check that the container runtime is running and reachable" };
+    }
+  }
 
   if (existsSync(cfgFile)) {
     const doc = loadConfigDoc(cfgFile);
@@ -331,13 +386,8 @@ function buildDoctorInputFromDisk(
 
   let auditChain = { ok: true, detail: "n/a (no file)" };
   if (auditFile && existsSync(auditFile)) {
-    const key =
-      opts.auditKey ??
-      process.env.MODELBOT_AUDIT_KEY_HEX ??
-      process.env.MODELBOT_AUDIT_KEY;
-    if (!key) {
-      auditChain = { ok: false, detail: "missing audit key" };
-    } else {
+    try {
+      const key = opts.auditKey ?? await resolveAuditVerifyKey({ config: cfgFile });
       const result = verifyAuditFile(key, auditFile);
       auditChain = result.ok
         ? { ok: true, detail: `OK ${result.records} records` }
@@ -345,6 +395,8 @@ function buildDoctorInputFromDisk(
             ok: false,
             detail: `FAIL seq=${result.seq ?? "?"} ${result.reason}`,
           };
+    } catch {
+      auditChain = { ok: false, detail: "could not unlock the configured audit key; check vault access" };
     }
   }
 
@@ -356,7 +408,8 @@ function buildDoctorInputFromDisk(
     vaultMode,
     vaultPath,
     images,
-    containers: opts.containers ?? [],
+    containers,
+    containerInspection,
     proxyDenylistActive: proxyDenylistSelfCheck(),
     auditChain,
     allowPublicBind: opts.allowPublicBind,
@@ -391,6 +444,8 @@ function parseDoctorFlags(argv: string[]): DoctorLoadOpts & { json?: boolean } {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--home" && argv[i + 1]) {
       out.home = argv[++i];
+    } else if (argv[i] === "--config" && argv[i + 1]) {
+      out.configFile = argv[++i];
     } else if (argv[i] === "--json") {
       out.json = true;
     }
@@ -416,14 +471,22 @@ export async function runDoctorCli(
 ): Promise<number> {
   const { json, ...flags } = parseDoctorFlags(argv);
   const load = { ...opts, ...flags };
-  const input = buildDoctorInputFromDisk(load);
-  // Only "auto" (OS keychain / env key) can be unlocked unattended. A passphrase host
-  // keeps the old existence-only PASS: doctor has no passphrase to try, and prompting
-  // for one would turn a diagnostic into an interactive command.
-  if (input.vaultPath && input.vaultMode === "auto") {
-    input.vaultUnlock = await checkVaultUnlock(input.vaultPath, "auto", load.home);
+  // Runtime/tool resolution emits diagnostics through console.log. Keep the CLI's
+  // machine-readable stdout to one report, even on hosts with missing tools.
+  const log = console.log;
+  if (json) console.log = console.error;
+  try {
+    const input = await buildDoctorInputFromDisk(load);
+    // Only "auto" (OS keychain / env key) can be unlocked unattended. A passphrase host
+    // keeps the old existence-only PASS: doctor has no passphrase to try, and prompting
+    // for one would turn a diagnostic into an interactive command.
+    if (input.vaultPath && input.vaultMode === "auto") {
+      input.vaultUnlock = await checkVaultUnlock(input.vaultPath, "auto", load.home);
+    }
+    const checks = runSecurityAudit(input);
+    process.stdout.write(json ? formatDoctorJson(checks) : formatDoctorReport(checks));
+    return auditExitCode(checks);
+  } finally {
+    if (json) console.log = log;
   }
-  const checks = runSecurityAudit(input);
-  process.stdout.write(json ? formatDoctorJson(checks) : formatDoctorReport(checks));
-  return auditExitCode(checks);
 }

@@ -361,6 +361,7 @@ describe("vault never in sandbox docker argv", () => {
       assert.ok(
         m.includes("target=/workspace") ||
           m.includes("target=/home/browser/profile") ||
+          m === "type=volume,source=modelbot-demo-agent-home,target=/home/agent" ||
           m.includes("target=/opt/computer-server-root/"),
         `unexpected mount: ${m}`,
       );

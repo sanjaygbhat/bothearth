@@ -11,7 +11,7 @@ final class ErrorStateView: ThemedView {
   private let showLog = NSButton(title: "Show log", target: nil, action: nil)
   /// A failure reached by clicking something inside the app needs a way back
   /// into the app, not just a way to retry the app's startup.
-  private let back = NSButton(title: "Back to ModelBot", target: nil, action: nil)
+  private let back = NSButton(title: "Back to BotHearth", target: nil, action: nil)
   /// The daemon's own wording, kept but never on screen by default. A person
   /// who wants it opens it; nobody else is shown a command.
   private let detailsToggle = NSButton(title: "Details", target: nil, action: nil)
@@ -94,11 +94,7 @@ final class ErrorStateView: ThemedView {
     technical.maximumNumberOfLines = 6
     technical.isHidden = true
 
-    // The Threshold, drawn large and quiet above the headline — the enclosure
-    // alone. At 56 px over "couldn't start", the mark's exit stroke reads as a
-    // sign-out icon, which is the wrong thing to say on a failure.
-    mark.showsChevron = false
-    mark.showsExit = false
+    // Use the same cairn mark as the rest of the app.
     mark.translatesAutoresizingMaskIntoConstraints = false
     mark.strokeColor = Theme.border
 
@@ -213,15 +209,9 @@ final class ErrorStateView: ThemedView {
   @objc private func handleRecover() { onRecover?() }
 }
 
-/// The Threshold mark on a 24×24 grid: a container with its fourth wall
-/// missing, and a line walking out through the gap.
+/// The cairn mark, matching assets/brand/mark.svg on a 24 × 24 grid.
 final class MarkView: NSView {
   var strokeColor: NSColor = .labelColor { didSet { needsDisplay = true } }
-  /// Below 32 px the chevron is dropped; the mark reduces to two strokes.
-  var showsChevron: Bool = true
-  /// The stroke that walks out through the opening. Off on the error state,
-  /// where an arrow leaving a box reads as "sign out" rather than "failed".
-  var showsExit: Bool = true
 
   override func draw(_ dirtyRect: NSRect) {
     let side = min(bounds.width, bounds.height)
@@ -229,47 +219,15 @@ final class MarkView: NSView {
     let dx = (bounds.width - side) / 2
     let dy = (bounds.height - side) / 2
 
-    func p(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-      // 24-unit grid is y-down; NSView here is y-up.
-      NSPoint(x: dx + x * scale, y: dy + (24 - y) * scale)
+    strokeColor.setFill()
+    let stones: [(CGFloat, CGFloat, CGFloat)] = [
+      (3.5, 16, 17), (7, 10.75, 11.5), (8.25, 5.5, 6.75),
+    ]
+    for (x, y, width) in stones {
+      let rect = NSRect(
+        x: dx + x * scale, y: dy + (24 - y - 4.25) * scale,
+        width: width * scale, height: 4.25 * scale)
+      NSBezierPath(roundedRect: rect, xRadius: 1.75 * scale, yRadius: 1.75 * scale).fill()
     }
-
-    let path = NSBezierPath()
-    path.lineWidth = max(1.0, 2.25 * scale)
-    path.lineCapStyle = .round
-    path.lineJoinStyle = .round
-
-    // Enclosure, open on the right.
-    let r: CGFloat = 3.5 * scale
-    path.move(to: p(16.75, 3.75))
-    path.line(to: p(7.25 + 3.5, 3.75))
-    path.appendArc(
-      withCenter: p(7.25, 7.25), radius: r,
-      startAngle: 90, endAngle: 180)
-    path.move(to: p(3.75, 7.25))
-    path.line(to: p(3.75, 16.75))
-    path.appendArc(
-      withCenter: p(7.25, 16.75), radius: r,
-      startAngle: 180, endAngle: 270)
-    path.move(to: p(7.25, 20.25))
-    path.line(to: p(16.75, 20.25))
-
-    strokeColor.setStroke()
-    path.stroke()
-
-    // The way out: crosses the opening and exits past the enclosure.
-    guard showsExit else { return }
-    let out = NSBezierPath()
-    out.lineWidth = path.lineWidth
-    out.lineCapStyle = .round
-    out.lineJoinStyle = .round
-    out.move(to: p(11.5, 12))
-    out.line(to: p(21, 12))
-    if showsChevron && side >= 32 {
-      out.move(to: p(18.25, 9.25))
-      out.line(to: p(21, 12))
-      out.line(to: p(18.25, 14.75))
-    }
-    out.stroke()
   }
 }

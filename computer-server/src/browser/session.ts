@@ -50,25 +50,21 @@ import { MAX_TABS, chooseLivePage } from "./live-page.ts";
 export { MAX_TABS, chooseLivePage } from "./live-page.ts";
 
 const VIEWPORT = { width: 1280, height: 720 };
-/**
- * Static Chromium switches. `--disable-blink-features=AutomationControlled` is
- * load-bearing: without it `navigator.webdriver` is true and Google refuses the
- * sign-in with "This browser or app may not be secure".
- */
+/** Normal Chromium, with only container privacy and transport settings. */
 export const LAUNCH_ARGS = [
   "--disable-background-networking",
   "--disable-component-update",
   "--disable-sync",
-  "--disable-blink-features=AutomationControlled",
+  "--no-first-run",
+  "--no-default-browser-check",
   // No OS keyring in the container, and nothing may be written to one anyway.
   "--password-store=basic",
 ];
 
 /**
  * Chrome's password manager and form autofill, off in the profile itself.
- * `--enable-automation` used to turn them off as a side effect; dropping it (an
- * automation tell Google sees) brought them back, and a credential the browser
- * fills on its own is one no gated tool call ever asked for. Prefs, not flags:
+ * A credential the browser fills on its own is one no gated tool call asked
+ * for. Use preferences rather than relying on automation switches:
  * the profile is persistent, so this has to survive every restart, and it is a
  * pref that Chromium's own settings screen reads.
  */
@@ -220,26 +216,6 @@ export async function actWithSignal<T>(
   return fn();
 }
 
-/**
- * Chromium's own user agent with the headless marker removed. Google's sign-in
- * refuses any UA containing "HeadlessChrome", and a version that does not match
- * the binary is a tell of its own, so read the real string off the browser
- * instead of pinning one. Costs one short throwaway launch per session start.
- */
-let cachedUserAgent: string | undefined;
-
-async function humanUserAgent(launch: LaunchOptions): Promise<string> {
-  if (cachedUserAgent) return cachedUserAgent;
-  const browser = await chromium.launch(launch);
-  try {
-    const { userAgent } = await (await browser.newBrowserCDPSession()).send("Browser.getVersion");
-    cachedUserAgent = userAgent.replace("HeadlessChrome", "Chrome");
-    return cachedUserAgent;
-  } finally {
-    await browser.close();
-  }
-}
-
 /** Chromium's profile lock. Only it may create these; only it cleans them up. */
 const SINGLETON_FILES = ["SingletonLock", "SingletonSocket", "SingletonCookie"] as const;
 /** Both wordings Chromium uses when the lock stops a launch. */
@@ -323,7 +299,7 @@ export async function launchWithLockRecovery<T>(
 
 export class BrowserSession {
   private readonly navigation = new NavigationGuard(() => this.liveMode === "human");
-  setNavigationPolicy(origins: string[]): void { this.navigation.setPolicy(origins); }
+  setNavigationPolicy(origins: string[], allowPublicNavigation = false): void { this.navigation.setPolicy(origins, allowPublicNavigation); }
   consumeNavigationDenied() { return this.navigation.consumeDenied(); }
   context: BrowserContext | null = null;
   /** Action target. Changes only via explicit `browser_tabs` (or start/close). */
@@ -369,7 +345,11 @@ export class BrowserSession {
       await this.desktop.start();
     }
     const args = [...LAUNCH_ARGS];
+    // A private pipe exposes no debugging TCP port. Keep Chromium's real UA
+    // and browser features instead of Playwright's test-oriented defaults.
+    args.push("--remote-debugging-pipe", `--user-data-dir=${profileDir()}`);
     if (this.desktop) args.push("--window-position=0,0", "--window-size=1280,820");
+    else args.push("--headless=new");
     const proxy = process.env.MODELBOT_PROXY_SERVER || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
     if (!proxy) throw new Error("browser: MODELBOT_PROXY_SERVER is required");
     const u = new URL(proxy);
@@ -381,19 +361,16 @@ export class BrowserSession {
     args.push(`--proxy-bypass-list=${bypass.replace(/,/g, ";")}`);
 
     const launch: LaunchOptions = {
-      // `channel: "chromium"` picks full Chrome for Testing under the new headless
-      // mode rather than chromium-headless-shell, which cannot pass Google's check.
-      // Full Chromium uses its own user namespace inside the hardened container.
-      // The seccomp profile permits chroot inside that namespace without outer capabilities.
+      // The computer image installs the distribution's normal Chromium.
+      // Host-only tests may use Playwright's full Chromium installation.
       channel: "chromium",
+      executablePath: process.env.MODELBOT_CHROMIUM_EXECUTABLE,
       headless: !this.desktop,
       chromiumSandbox: true,
       // Chrome for Testing writes Crashpad settings outside user-data-dir.
       // Keep those files private and ephemeral under the writable container tmpfs.
       env: { ...process.env, ...this.desktop?.env, XDG_CONFIG_HOME: this.configHome },
-      // ARCH forbids --disable-dev-shm-usage; Playwright adds it by default.
-      // --enable-automation is Playwright's other default and an automation tell.
-      ignoreDefaultArgs: ["--disable-dev-shm-usage", "--enable-automation"],
+      ignoreDefaultArgs: true,
       // Playwright's own signal handlers kill Chromium and exit the process
       // before it can unlink its profile lock. The rpc loop closes the context
       // on those signals instead (computer-server/src/rpc-loop.ts).
@@ -409,18 +386,15 @@ export class BrowserSession {
         { cause: error },
       );
     };
-    const userAgent = await humanUserAgent(launch).catch(launchFailed);
     this.context = await launchWithLockRecovery(profileDir(), () =>
       chromium.launchPersistentContext(profileDir(), {
         ...launch,
         serviceWorkers: "block",
-        viewport: VIEWPORT,
+        viewport: this.desktop ? null : VIEWPORT,
         acceptDownloads: true,
         // Land downloads directly on the workspace bind mount.
         downloadsPath: downloadsDir(),
-        args,
-        userAgent,
-        locale: "en-US",
+        args: [...args, "about:blank"],
         timezoneId: hostTimeZone(),
       }),
     ).catch(launchFailed);

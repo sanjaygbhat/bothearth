@@ -46,7 +46,9 @@ export class Desktop {
     });
   }
   private launch(command: string, args: string[]) {
-    const child = spawn(command, args, { env: this.env, stdio: "ignore" });
+    // The operator's terminal and file manager inherit group-writable files.
+    // Pass argv directly; paths never become shell source.
+    const child = spawn("sh", ["-c", 'umask 007; exec "$@"', "bothearth-desktop", command, ...args], { env: this.env, stdio: "ignore" });
     child.on("error", () => {});
     this.processes.push(child);
     return child;

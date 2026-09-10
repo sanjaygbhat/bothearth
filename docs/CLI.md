@@ -16,17 +16,17 @@ Alias: bothearth <command> [flags] (same command; existing modelbot paths are re
 Commands:
   init [--home DIR] [--data-dir DIR] [--bind ADDR] [--port N]
        [--force] [--skip-detect] [--skip-images] [--quiet]
-       [--keychain auto|passphrase] [--reset-vault-key]
+       [--keychain auto] [--reset-vault-key]
   start [--port N] [--host ADDR] [--home DIR] [--daemon] [--no-open]
         [--allow-public-bind] [--ready-json]
   stop [--home DIR]
   pair [--home DIR] [--list | --revoke DEVICE_ID]
        Print a fresh sign-in link when the last one expired
-  doctor [--home DIR] [--json]
+  doctor [--home DIR] [--config PATH] [--json]
   security audit
   image pull|build
   mcp-stdio
-  audit verify [--path FILE] [--key-file FILE] [--home DIR]
+  audit verify [--path FILE] [--key-file FILE] [--home DIR] [--config PATH]
        HMAC key: vault `audit/hmac` (default); --key-file or MODELBOT_AUDIT_KEY_HEX / MODELBOT_AUDIT_KEY override when set
   vault set|get|rm|ls|rotate [--path P] [--value-file F]
   connect <codex|claude|gemini|cursor|opencode|copilot>

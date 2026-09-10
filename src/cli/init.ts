@@ -1,6 +1,6 @@
 /**
  * `modelbot init` — non-interactive first-run.
- * Flags/env preferred; prompts only when stdin is a TTY and required value missing.
+ * Uses the OS keychain or an encrypted systemd credential without a prompt.
  */
 
 import {
@@ -17,7 +17,6 @@ import { stringify as stringifyYaml } from "yaml";
 import { createVault } from "../vault/index.ts";
 import {
   deleteStoredOsKey,
-  passphraseKeyProvider,
   vaultKeyAccount,
 } from "../vault/providers.ts";
 import { VAULT_KEYCHAIN_SERVICE } from "../vault/types.ts";
@@ -40,7 +39,6 @@ interface InitOptions {
   force?: boolean;
   skipDetect?: boolean;
   skipImages?: boolean;
-  passphrase?: string;
   keychain?: "auto" | "passphrase";
   dataDir?: string;
   bind?: string;
@@ -84,20 +82,6 @@ function writeMode0600(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, { encoding: "utf8", mode: 0o600 });
   chmodSync(path, 0o600);
-}
-
-async function maybePromptPassphrase(): Promise<string | undefined> {
-  if (!process.stdin.isTTY) return undefined;
-  process.stdout.write(
-    "vault passphrase (empty = try OS keychain / MODELBOT_VAULT_KEY_HEX): ",
-  );
-  const chunks: Buffer[] = [];
-  for await (const c of process.stdin) {
-    chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
-    if (chunks[chunks.length - 1]!.includes(0x0a)) break;
-  }
-  const line = Buffer.concat(chunks).toString("utf8").trim();
-  return line || undefined;
 }
 
 /**
@@ -152,6 +136,9 @@ async function resetVaultKeyOnly(
 
 export async function runInit(argv: string[] = []): Promise<void> {
   const opts = parseInitFlags(argv);
+  if (opts.keychain && opts.keychain !== "auto") {
+    throw new Error("vault: CLI passphrase unlock is unavailable. Use the OS keychain with --keychain auto, or an encrypted systemd credential on a headless server (docs/REMOTE-DEPLOY.md).");
+  }
   const home = modelbotHome(opts.home);
   const cfgFile = configPath(home);
   const tokFile = tokensPath(home);
@@ -206,7 +193,6 @@ export async function runInit(argv: string[] = []): Promise<void> {
   // policy.approval_ttl_sec, takeover.ttl_sec) are deliberately absent: writing
   // today's default pins it forever, and an install from an older ModelBot then
   // keeps a limit the daemon has since raised.
-  const keychain = opts.keychain ?? "auto";
   const doc: Record<string, unknown> = {
     version: 1,
     data_dir: dataDir,
@@ -221,35 +207,14 @@ export async function runInit(argv: string[] = []): Promise<void> {
   };
   if (opts.bind) doc.bind = opts.bind;
   if (opts.port) doc.port = opts.port;
-  if (keychain !== "auto") doc.vault = { keychain };
 
   assertValid(loadModelbotSchema(), withDefaults(doc));
 
-  let passphrase = opts.passphrase;
-  if (!passphrase && keychain === "passphrase") {
-    passphrase = await maybePromptPassphrase();
-    if (!passphrase) {
-      throw new Error("vault: --passphrase required when --keychain passphrase");
-    }
-  }
-  if (!passphrase && process.stdin.isTTY && keychain === "auto") {
-    passphrase = await maybePromptPassphrase();
-  }
-
   const vaultPath = join(dataDir, "vault.enc");
-  if (opts.resetVaultKey && !passphrase) {
+  if (opts.resetVaultKey) {
     resetVaultKeyMaterial(vaultPath, opts.quiet);
   }
-  if (passphrase) {
-    await createVault({
-      path: vaultPath,
-      keychain: "passphrase",
-      passphrase,
-      provider: passphraseKeyProvider(passphrase),
-    });
-  } else {
-    await createVault({ path: vaultPath, keychain: "auto" });
-  }
+  await createVault({ path: vaultPath, keychain: "auto" });
 
   // A failed vault setup must not leave an apparently initialized installation.
   const yamlText = stringifyYaml(doc, { lineWidth: 0 });

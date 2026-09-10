@@ -594,7 +594,7 @@ export function renderDevices(pane: HTMLElement): () => void {
           await refresh();
           if (!live()) return;
           status.dataset.tone = "ok";
-          status.textContent = "That device can no longer reach ModelBot. Your tasks are untouched.";
+          status.textContent = "That device can no longer reach BotHearth. Your tasks are untouched.";
         })().catch((error) => {
           fail(error);
           if (live()) revoke.disabled = false;

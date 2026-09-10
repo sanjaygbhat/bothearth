@@ -384,6 +384,9 @@ export function linuxSecretToolProvider(
     kind: "secret-service-linux",
     async resolve(createIfMissing: boolean): Promise<KeyMaterial> {
       const found = lookupLinuxSecret(service, account, exec);
+      if (found.status !== 0 && (found.status === null || /D-Bus|DBus|ServiceUnknown|Cannot autolaunch|Cannot open display/i.test(found.stderr))) {
+        throw new Error("vault: Secret Service is unavailable. Unlock this user's Linux keyring, or configure an encrypted systemd credential for a headless host (docs/REMOTE-DEPLOY.md). The existing vault is unchanged.");
+      }
       if (found.status === 0) {
         return {
           kind: "secret-service-linux",

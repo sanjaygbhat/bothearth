@@ -1,0 +1,108 @@
+<header class="page-header"><p class="eyebrow"><a href="{{BASE}}guides/">Practical guides</a></p><h1>Run a browser agent locally or on a VM: which fits your work?</h1><p class="qualification">By BotHearth · Updated 10 September 2026 · Technical alpha</p></header>
+<article class="prose guide-body"><p>Run locally when you work in supervised sessions and want direct control of the machine, browser profile and files. Choose a private VM when the agent must remain reachable while your laptop is off. Neither option keeps remote model processing offline. A VM only earns its cost when you also configure persistent storage, secure access, restarts and working model authentication.</p>
+<p>BotHearth is a source-installed technical alpha. There is no published prebuilt installer or container image. Start with a supervised trial and check your chosen setup before relying on unattended work.</p>
+<p>Here, a VM means an instance you operate for your own work, not a subscription to a BotHearth-hosted service.</p>
+<h2>Choose around your working hours</h2>
+<p>“Local” means the agent runs on your own Mac or Linux machine. A VM is a rented virtual machine running elsewhere. These are deployment choices, not different levels of intelligence.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Your situation</th>
+<th>Better starting point</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>You review invoices in an admin portal while supervising</td>
+<td>Local</td>
+<td>No remote host to administer for that session</td>
+</tr>
+<tr>
+<td>A website audit must continue after you shut your laptop</td>
+<td>Private VM</td>
+<td>The execution host can remain running independently</td>
+</tr>
+<tr>
+<td>You do not want browser profiles stored with a hosting provider</td>
+<td>Local</td>
+<td>The saved profile stays on hardware you control</td>
+</tr>
+<tr>
+<td>You need the same separate browser next week</td>
+<td>Either</td>
+<td>Persistence depends on retaining its storage, not renting a VM</td>
+</tr>
+<tr>
+<td>You cannot maintain Linux services, credentials and backups</td>
+<td>Local trial</td>
+<td>Remote setup adds administration, not just a monthly bill</td>
+</tr>
+</tbody></table></div>
+<p>First establish <a href="{{BASE}}when-agent-needs-browser-computer/">when a separate browser and computer are worth using</a>. These hosting choices are practical starting points, not performance comparisons.</p>
+<p>An always-on spare Mac or Linux computer is a middle option worth considering. It avoids renting a VM, but leaves power, connectivity and maintenance with you.</p>
+<h2>What runs where—and what leaves it</h2>
+<p>The minimal architecture is the same in both locations.</p>
+<pre><code class="language-text">Operator access
+  On-host browser: loopback
+  Remote browser: SSH tunnel or private HTTPS
+  Phone: its own private HTTPS connection
+         |
+         v
+Chosen host: your Mac/Linux machine OR your VM
+  BotHearth service
+    +-- Computer: Chromium + native model CLI --&gt; Websites / model provider
+    +-- Saved profiles, workspace and task records
+    +-- Optional standalone API connection --&gt; Model provider
+</code></pre>
+<p>Local hosting controls the storage location; it does not make the model local. Model-visible task content can leave either host. Websites, configured connectors and notifications have their own data flows. A VM also introduces the hosting provider: BotHearth’s <a href="https://github.com/sanjaygbhat/bothearth/blob/main/PRIVACY.md">privacy notice</a> warns that it can access unencrypted disks and snapshots.</p>
+<h2>Sleep, disconnection and restart are different</h2>
+<p>Closing the dashboard is not the same as stopping the service. The documented bothearth start --daemon runs in the background; a foreground session needs its terminal left running. Neither is a promise of automatic startup after reboot.</p>
+<p>For local work, keep the host awake and connected. Display sleep and system sleep are different; Apple provides a setting to prevent automatic system sleep on power while the display is off. Do not treat closing a laptop as harmless to an active local task. <a href="https://support.apple.com/en-in/guide/mac-help/mchle41a6ccd/mac">Apple Support</a></p>
+<p>A VM removes that laptop dependency only when the BotHearth service, containers and model runner all execute there. A model CLI still running on your laptop remains a dependency. Remote startup also needs a working service configuration and a vault that can unlock after reboot—not just a successful SSH login.</p>
+<p>Restarting a service is not proof that a half-finished website action resumes safely. Docker restart policies apply to containers, not complete task recovery. <a href="https://docs.docker.com/engine/containers/start-containers-automatically/">Docker: container restart policies</a></p>
+<p>Likewise, VM availability is not scheduling. BotHearth’s recurring tasks currently need a standalone provider adapter; its native Codex and Claude Code task connections are not the recurring scheduler. Unattended work additionally needs tested authentication, approvals, alerts and failure handling. See <a href="{{BASE}}monitor-server-health-logs-agent-computer/">what a recurring review requires</a>.</p>
+<h2>Keep remote control private</h2>
+<p>BotHearth’s documented control endpoint is 127.0.0.1:7777. Keep it off the public internet. For a prepared VM, after verifying its SSH host key, this explicitly loopback-bound tunnel runs on your laptop. <a href="https://man.openbsd.org/ssh.1">OpenSSH manual</a></p>
+<pre><code class="language-bash">ssh -N -L 127.0.0.1:7777:127.0.0.1:7777 user@vm.example.com
+</code></pre>
+<p>Replace the account and hostname; local port 7777 must be unused. Open the remote instance’s fresh pairing link through that tunnel. Treat the link as an operator credential.</p>
+<p>For phone access with the laptop off, the phone needs its own route. The documented alternative uses Tailscale on both VM and phone, private HTTPS through Serve, restricted device access, and BotHearth pairing. Funnel is public exposure, not the same arrangement. Test actual cellular access rather than assuming laptop access proves it. <a href="https://tailscale.com/docs/features/tailscale-serve">Tailscale Serve</a></p>
+<h2>Retain the right data, not just the machine</h2>
+<p>Browser profiles live in Docker volumes; saved workspace files and task records live on the host. A retained volume can outlive its container, but browser downloads still in quarantine use temporary storage. Promote required downloads into the workspace before discarding the environment. <a href="https://docs.docker.com/engine/storage/volumes/">Docker: volumes</a></p>
+<p>Stop the daemon before backup, and encrypt the backup. Preserve configuration, task data, workspace files, browser volumes, audit log and chain-head file, plus access to the vault’s original key provider. Copying an encrypted vault alone is insufficient; provider CLI authentication and histories also need separate consideration.</p>
+<p>BotHearth does not encrypt browser profiles or provide a general automatic transcript/screenshot retention scheduler. Persistent does not mean automatically backed up, automatically erased, or permanently signed in.</p>
+<h2>Budget beyond the server price</h2>
+<p>Compare compute + disks + backups + network/IP charges + model access + applicable software/networking fees + tax, then account for maintenance time. Local operation still uses electricity and model access. Docker Desktop has commercial eligibility conditions; check the terms of any networking service separately. <a href="https://docs.docker.com/subscription-billing/desktop-license/">Docker Desktop licence</a></p>
+<p>Check the provider’s stopping rules. DigitalOcean continues billing powered-down Droplets until destruction. Deleting a VM is also separate from preserving its data. <a href="https://docs.digitalocean.com/support/i-dont-recognize-a-charge-on-my-invoice/">DigitalOcean: billing questions</a></p>
+<p>No measured minimum VM size or monthly BotHearth workload cost is established here. Test your actual browser workload before committing to a larger machine. Its usage meter is an estimate, not a provider-enforced spending cap.</p>
+<h2>First-run checklist: prove the basics before leaving it alone</h2>
+<h3>1. Prepare the host</h3>
+<p>Have Git, Node.js 22.18+, npm, model access and a running supported container runtime. Use Docker Engine on Linux; Docker Desktop, OrbStack or Colima on macOS. Allow disk space for the browser-image build. Headless Linux also needs a functioning secure vault-key arrangement. The <a href="https://github.com/sanjaygbhat/bothearth/blob/main/docs/REMOTE-DEPLOY.md">documented encrypted user-service route</a> requires systemd 258 or newer and a successful decrypt/start check; older hosts require a separately configured service arrangement.</p>
+<h3>2. Build from source</h3>
+<p>Follow the repository quickstart, not an assumed one-click installer. For a fresh local installation, its sequence is below. A fresh VM needs the additional remote-host preparation.</p>
+<pre><code class="language-bash">git clone https://github.com/sanjaygbhat/bothearth.git
+cd bothearth
+npm ci &amp;&amp; npm run build
+npm link
+bothearth init
+bothearth image build
+bothearth start
+</code></pre>
+<h3>3. Connect the model on that host</h3>
+<p>The computer image includes the official Codex and Claude Code CLIs. Select a computer and sign in through Settings → Model connection; native tasks and their model authentication live inside that computer. Remote login can require the provider’s headless flow; do not paste credentials into a task. <a href="https://developers.openai.com/codex/auth">OpenAI: Codex authentication</a></p>
+<h3>4. Check health and one harmless task</h3>
+<p>Run bothearth doctor. Ask it to visit your public homepage and contact page, save their titles and URLs, and stop without submitting anything. Open the saved file yourself. A healthy service alone is not a browser-task test.</p>
+<h3>5. Test the access you will use</h3>
+<p><a href="{{BASE}}browser-agent-sign-in-human-takeover/">Take control and hand back</a> on a harmless page. Reconnect the dashboard; for a VM, test with the laptop off. Verify that an unpaired device cannot operate it.</p>
+<h3>6. Test recovery before real writes</h3>
+<p>After the test task finishes, restart the service and reboot the host. Check access, model authentication, saved files and the intended browser profile. Test backup restoration separately; do not replay payments or submissions to test recovery.</p>
+<h2>Questions before choosing a host</h2>
+<h3>Do I need a GPU?</h3>
+<p>Not for inference performed by the remote model provider in this architecture. Size the host for the browser and any local computation instead; this is not a benchmarked hardware recommendation.</p>
+<h3>Will it inherit my everyday browser logins?</h3>
+<p>No. BotHearth uses its own browser profile rather than your everyday profile by default. Plan to sign into needed sites there and complete any later reauthentication yourself.</p>
+<h3>Can I run it directly on Windows?</h3>
+<p>The documented host platforms are macOS and Linux. WSL2 is experimental, not equivalent to a validated native Windows setup.</p>
+<h2>Start with the smallest useful test</h2>
+<p>Use the <a href="https://bothearth.com/quickstart/">source quickstart</a> for one supervised browser task. Move to the <a href="https://github.com/sanjaygbhat/bothearth/blob/main/docs/REMOTE-DEPLOY.md">remote setup guide</a> when laptop availability becomes a real constraint. Keep the deployment only after access, saved state and recovery work on your chosen host.</p>
+<p class="doc-meta"><a href="{{BASE}}guides/">All guides</a> · <a href="{{BASE}}quickstart/">Get started</a> · <a href="{{BASE}}security/">Privacy and control boundaries</a></p></article>

@@ -288,6 +288,8 @@ export interface RuntimeDeps {
   configuredProvider(): "claude" | "codex" | null;
   /** Existing connection probe: "connected" | "signed_in" | "signed_out" | "missing" | "error". */
   providerStatus(provider: "claude" | "codex"): Promise<string>;
+  /** Native CLIs are bundled in the virtual computer, so no host installation is required. */
+  nativeInComputer?(): boolean;
   /** A refusal this provider gave a task, while it lasts. */
   providerLimit?(provider: "claude" | "codex"): ProviderLimit | null;
   /** True when a model AND its credential are configured for direct API use. */
@@ -390,7 +392,7 @@ export function buildRuntimeStatus(input: {
       id: "node_version",
       title: "Update Node",
       detail:
-        `ModelBot needs Node ${MIN_NODE_VERSION} or newer to run. This machine has ${input.nodeVersion}. ` +
+        `BotHearth needs Node ${MIN_NODE_VERSION} or newer to run. This machine has ${input.nodeVersion}. ` +
         `Install the current version, then run \`modelbot start\` again.`,
       action: { kind: "open_url", url: NODE_URL },
     });
@@ -399,10 +401,10 @@ export function buildRuntimeStatus(input: {
   if (!input.docker.installed) {
     blockers.push({
       id: "docker_missing",
-      title: "Give ModelBot its own computer",
+      title: "Give BotHearth its own computer",
       detail:
-        "ModelBot does your tasks inside a private, throwaway computer on this machine, so it never touches your own files. " +
-        "Install OrbStack (free, and the fastest option) to set that up. It needs about 4 GB of memory free.",
+        "BotHearth uses a separate computer with a workspace folder on this machine. " +
+        "Install a supported container runtime to set it up. Browser tasks need several GB of memory and disk space.",
       action: { kind: "open_url", url: ORBSTACK_URL },
     });
   } else if (!input.docker.running) {
@@ -411,7 +413,7 @@ export function buildRuntimeStatus(input: {
       title: `Start ${ENGINE_LABEL[input.docker.engine]}`,
       detail:
         `${ENGINE_LABEL[input.docker.engine]} is installed but not running yet. Open it and leave it running — ` +
-        `ModelBot will carry on by itself as soon as it is up.`,
+        `BotHearth will carry on by itself as soon as it is up.`,
       action: { kind: "retry" },
     });
   } else {
@@ -426,7 +428,7 @@ export function buildRuntimeStatus(input: {
         id: "images_missing",
         title: "Finish one-time setup",
         detail:
-          "ModelBot still needs to build the private computer it works in. This happens once, takes a few minutes, " +
+          "BotHearth still needs to build the private computer it works in. This happens once, takes a few minutes, " +
           "and runs entirely on this machine.",
         action: { kind: "prepare_images" },
       });
@@ -438,7 +440,7 @@ export function buildRuntimeStatus(input: {
         id: "images_stale",
         title: "Its computer needs an update",
         detail:
-          "This version of ModelBot can do things the private computer on this machine was not built with yet. " +
+          "This version of BotHearth can do things the private computer on this machine was not built with yet. " +
           "Updating it takes a few minutes and runs entirely on this machine. Until then some tasks will be turned down.",
         action: { kind: "prepare_images" },
       });
@@ -453,7 +455,7 @@ export function buildRuntimeStatus(input: {
       title: "Its browser will not start",
       detail:
         "The private computer on this machine is running, but the browser inside it will not open, so there is " +
-        `nothing for a task to work in. ModelBot keeps trying. ${input.browserUnavailable}`,
+        `nothing for a task to work in. BotHearth keeps trying. ${input.browserUnavailable}`,
       action: { kind: "retry" },
     });
   }
@@ -477,7 +479,7 @@ export function buildRuntimeStatus(input: {
 
 /**
  * Three distinct asks, not two. A CLI that is signed in and still blocking is
- * one ModelBot has not been pointed at yet; telling that owner to sign in
+ * one BotHearth has not been pointed at yet; telling that owner to sign in
  * again reads as a bug, so it gets its own copy. The id stays
  * `ai_not_connected` for all three — it names the blocker, and the UI routes
  * the AI card on it.
@@ -488,8 +490,8 @@ function aiBlocker(ai: RuntimeStatus["ai"]): RuntimeBlocker {
       id: "ai_not_connected",
       title: "Connect Claude or Codex",
       detail:
-        "ModelBot thinks with the Claude Code or Codex subscription you already pay for. Neither app was found on " +
-        "this machine. Install Claude Code, then come back — ModelBot will pick it up on its own.",
+        "No supported model CLI was found on " +
+        "this host. Install a supported CLI, then connect it in Settings.",
       action: { kind: "open_url", url: CLAUDE_CODE_URL },
     };
   }
@@ -499,8 +501,7 @@ function aiBlocker(ai: RuntimeStatus["ai"]): RuntimeBlocker {
       id: "ai_not_connected",
       title: `Connect ${app}`,
       detail:
-        `${app} is signed in on this machine, but ModelBot is not using it yet. Connect it in Settings and ` +
-        `ModelBot starts thinking with it — your sign-in stays with ${app}; ModelBot never sees it.`,
+        `${app} is signed in. Connect it in Settings to use it for tasks.`,
       action: { kind: "open_settings" },
     };
   }
@@ -508,8 +509,7 @@ function aiBlocker(ai: RuntimeStatus["ai"]): RuntimeBlocker {
     id: "ai_not_connected",
     title: `Sign in to ${app}`,
     detail:
-      `${app} is installed on this machine but not signed in yet. Sign in from Settings and ModelBot will connect ` +
-      `automatically — your sign-in stays with ${app}; ModelBot never sees it.`,
+      `Sign in to ${app} from Model connection in Settings.`,
     action: { kind: "open_settings" },
   };
 }
@@ -627,6 +627,14 @@ export function createRuntimeProbe(deps: RuntimeDeps): RuntimeProbe {
 
   async function probeAi(): Promise<RuntimeStatus["ai"]> {
     const configured = deps.configuredProvider();
+    if (deps.nativeInComputer?.()) {
+      const provider = configured ?? "codex";
+      const status = await deps.providerStatus(provider);
+      const logged_in = status === "connected" || status === "signed_in";
+      return { provider, cli_found: status !== "missing", cli_path_kind: null, logged_in,
+        detail: logged_in ? "Signed in on your virtual computer." : "Connect your model account on your virtual computer.",
+        limit: logged_in ? deps.providerLimit?.(provider) ?? null : null };
+    }
     const claude = resolve("claude");
     const codex = resolve("codex");
     const provider = configured ?? (claude ? "claude" : codex ? "codex" : null);

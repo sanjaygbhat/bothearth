@@ -120,6 +120,52 @@ function fakeCdp() {
 }
 
 describe("takeover grant waits for in-flight click", () => {
+  it("starts the computer before an early grant, then streams and drives the human desktop", async (t) => {
+    const state = createState("browser");
+    const log: string[] = [];
+    t.mock.method(BrowserSession.prototype, "start", async function(this: BrowserSession) {
+      log.push("start");
+      this.page = fakePage("ready", instantLocator(log, "page")) as never;
+      this.livePage = this.page;
+      Reflect.set(this, "desktop", {
+        stopStream() {},
+        stream(onFrame: (jpeg: Uint8Array) => void) { onFrame(new Uint8Array([0xff, 0xd8, 0xff, 0xd9])); },
+        async key() { log.push("desktop:key"); },
+      });
+    });
+    const frames: Array<{ mode: string; target?: string; epoch: number }> = [];
+    state.onLiveFrame = header => frames.push(header);
+    const rpc = (method: string, params = {}) => dispatch(state, { jsonrpc: "2.0", id: 1, method, params });
+    await rpc("takeover.sync", { takeover_id: "early", expires_at: new Date().toISOString() });
+    assert.equal((await rpc("takeover.grant", { takeover_id: "early" })).ok, true);
+    assert.deepEqual(log, ["start"], "a successful grant must wait for the computer to exist");
+    assert.equal(state.browser?.liveMode, "human");
+    assert.equal((await rpc("screencast.subscribe")).ok, true);
+    assert.deepEqual(frames.map(({ mode, target, epoch }) => ({ mode, target, epoch })),
+      [{ mode: "human", target: "desktop", epoch: state.takeover.epoch }]);
+    assert.equal((await rpc("live.key", { key: "t", mods: 6, epoch: state.takeover.epoch })).ok, true);
+    assert.deepEqual(log, ["start", "desktop:key"]);
+    const blocked = await rpc("browser_screenshot");
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.error.code, "E_TAKEOVER_BUSY");
+  });
+
+  it("does not grant an unavailable browser or start one for an invalid grant", async (t) => {
+    const state = createState("browser");
+    let starts = 0;
+    t.mock.method(BrowserSession.prototype, "start", async () => { starts++; throw new Error("test startup failed"); });
+    const rpc = (method: string, params = {}) => dispatch(state, { jsonrpc: "2.0", id: 1, method, params });
+    await rpc("takeover.sync", { takeover_id: "early", expires_at: new Date().toISOString() });
+    assert.equal((await rpc("takeover.grant", { takeover_id: "wrong" })).ok, false);
+    assert.equal(starts, 0);
+    const grant = await rpc("takeover.grant", { takeover_id: "early" });
+    assert.equal(grant.ok, false);
+    if (!grant.ok) assert.equal(grant.error.code, "E_SANDBOX_DEAD");
+    assert.equal(state.takeover.state, "takeover_requested");
+    assert.equal(state.browser, null);
+    assert.equal(starts, 1);
+  });
+
   it("grant ack resolves after 200ms click settles; second click after abort is refused", async () => {
     const log: string[] = [];
     const loc = delayedClickLocator(200, log, "a");

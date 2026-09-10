@@ -57,6 +57,7 @@ describe("product compose file", () => {
       ),
     );
     assert.equal(doc.networks.internal!.internal, true);
+    assert.ok((doc.services.browser!.volumes as string[]).includes("agent-home:/home/agent"));
     assert.ok(
       !(doc.services.shell!.volumes as string[]).some((v) =>
         v.includes("profile"),

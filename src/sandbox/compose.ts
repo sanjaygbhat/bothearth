@@ -84,6 +84,7 @@ function namesFor(opts: ComposeRenderOpts) {
       networkInternal: `modelbot-${n}-internal`,
       networkEgress: `modelbot-${n}-egress`,
       volumeProfile: `modelbot-${n}-profile`,
+      volumeAgentHome: `modelbot-${n}-agent-home`,
       containerBrowser: `modelbot-${n}-browser`,
       containerShell: `modelbot-${n}-shell`,
       containerProxy: `modelbot-${n}-proxy`,
@@ -170,6 +171,7 @@ function buildComposeSpec(opts: ComposeRenderOpts): Record<string, unknown> {
         environment: browserEnv,
         volumes: [
           "profile:/home/browser/profile",
+          "agent-home:/home/agent",
           `${workspace}:/workspace:rw`,
         ],
         labels: { [LABEL_COMPUTER]: label },
@@ -210,6 +212,7 @@ function buildComposeSpec(opts: ComposeRenderOpts): Record<string, unknown> {
       profile: {
         name: r.volumeProfile,
       },
+      "agent-home": { name: r.volumeAgentHome },
     },
   };
 }

@@ -36,6 +36,7 @@ assert.equal(statSync(configHome).mode & 0o777, 0o700);
 const browser = await chromium.launch({
   headless: true,
   channel: "chromium",
+  executablePath: process.env.MODELBOT_CHROMIUM_EXECUTABLE,
   chromiumSandbox: true,
   env: { ...process.env, XDG_CONFIG_HOME: configHome },
   ignoreDefaultArgs: ["--disable-dev-shm-usage"],

@@ -112,3 +112,14 @@ test("failed vault setup leaves init retryable without force", async () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("init refuses an unsupported passphrase setup before creating an unusable installation", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mb-init-passphrase-"));
+  try {
+    await assert.rejects(runInit(["--home", home, "--data-dir", join(home, "data"), "--keychain", "passphrase"]),
+      /CLI passphrase unlock is unavailable/);
+    assert.equal(existsSync(join(home, "modelbot.yaml")), false);
+    assert.equal(existsSync(join(home, "tokens.json")), false);
+    assert.equal(existsSync(join(home, "data", "vault.enc")), false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

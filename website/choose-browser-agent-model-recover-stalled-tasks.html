@@ -1,0 +1,94 @@
+<header class="page-header"><p class="eyebrow"><a href="{{BASE}}guides/">Practical guides</a></p><h1>Choose a model for browser work and recover when a task stalls</h1><p class="qualification">By BotHearth · Updated 10 September 2026 · Technical alpha</p></header>
+<article class="prose guide-body"><p>Choose a browser-work model by whether it can use the required tools, handle the task accurately, fit your budget and respond quickly enough. Check account eligibility before connecting it. When work stalls, inspect the reason, preserve partial results and verify completed actions. Resume only after addressing the blocker; change models between tasks using a handoff rather than assuming seamless recovery. <a href="https://developers.openai.com/api/docs/guides/model-selection">OpenAI: model selection</a></p>
+<p>BotHearth remains a source-installed technical alpha. Test the selected connection on a bounded task before depending on longer work.</p>
+<h2>Start with a connection your account can use</h2>
+<p>BotHearth’s <a href="https://github.com/sanjaygbhat/bothearth/blob/main/README.md">native choices</a> under Settings → Model connection are the official Codex and Claude Code command-line apps (CLIs), included and authenticated inside the selected BotHearth computer. A connection is how BotHearth reaches a model—not a promise that every model from that provider works.</p>
+<p>For Codex, OpenAI distinguishes ChatGPT subscription sign-in from API-key access billed through the API account. Check your account’s eligibility, workspace restrictions and billing route; a subscription is not a general-purpose API allowance. <a href="https://developers.openai.com/codex/auth">OpenAI: Codex authentication</a></p>
+<p>For Claude Code, use the unmodified official CLI and its native authentication. Check Anthropic’s current eligibility and integration terms; keep authentication in the official CLI under the user’s own agreement. Do not collect or share another user’s Claude credentials. <a href="https://code.claude.com/docs/en/legal-and-compliance">Anthropic: Claude Code terms and compliance</a></p>
+<p>Advanced routes include configured OpenAI-compatible and Anthropic API adapters, separately installed local endpoints, and external Model Context Protocol (MCP) clients. MCP connects another client to tools; it is not another universally supported native model connection. The current Chat Completions adapter explicitly excludes GPT-5.6 and newer; BotHearth documents the official harness route instead.</p>
+<h2>Choose for the task, then run a small trial</h2>
+<p>Set an accuracy requirement first, then compare cost and latency. OpenAI’s model-selection guidance uses those trade-offs. A cheaper or faster configuration still has to meet the task’s accuracy requirement. <a href="https://developers.openai.com/api/docs/guides/model-selection">OpenAI: model selection</a></p>
+<p>Use these starting hypotheses, not a model ranking:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Browser work</th>
+<th>What to try</th>
+<th>What to check</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Read specified fields from a few public pages</td>
+<td>A lower-cost compatible model</td>
+<td>Correct fields, source URLs and no invented values</td>
+</tr>
+<tr>
+<td>Resolve exceptions across several pages</td>
+<td>A stronger reasoning model or supported higher-effort setting</td>
+<td>Correct distinctions and explicit uncertainty</td>
+</tr>
+<tr>
+<td>Navigate an unfamiliar interface</td>
+<td>A model/connection that handles the required snapshots and screenshots</td>
+<td>Correct controls, verified outcomes and few repeated attempts</td>
+</tr>
+</tbody></table></div>
+<p>For example, ask two eligible configurations to read the same three public pages and return five specified fields. Keep the prompt, starting state and stopping rule comparable. Record the model identifier, connection, settings, elapsed time, provider-reported usage and human corrections. Repeat before generalising. This is a proposed evaluation, not a BotHearth benchmark.</p>
+<p>Use a separate clock and judge the verified completed result, including corrections, rather than just the time to the first answer. For a useful trial, <a href="{{BASE}}evidence-backed-competitor-report/">compare the same facts on live competitor pages</a>.</p>
+<h2>Separate task limits from the provider’s bill</h2>
+<p>With a native connection, BotHearth’s meter estimates one cent per computer-tool call. It is not token accounting or a provider-enforced spending cap. API estimates depend on configured prices and can overshoot during an in-flight request. Check the provider’s usage records and available spending controls separately.</p>
+<p>Long conversations can also increase usage: Anthropic documents how accumulated context affects costs. Prefer bounded tasks and focused handoffs over carrying unrelated history into every request. <a href="https://code.claude.com/docs/en/costs">Anthropic: Claude Code costs</a></p>
+<p>BotHearth documents limits for steps, repeated actions, stalled progress, estimated spend and optional runtime. Extending a local task limit does not replenish provider credits or subscription allowances. Model access and optional VM hosting remain separate from the software licence.</p>
+<h2>Save a checkpoint before changing models</h2>
+<p>Ask for a partial result covering completed work, source URLs, confirmed website actions, unresolved items and the next safe step. Use Copy result or open the saved file when available, including for failed or stopped tasks. Check for truncation notices.</p>
+<p>Open any claimed workspace file before relying on it. If saving a file is unavailable, copy the saved result where offered and check it for completeness. Browser downloads left in quarantine are temporary; they need operator-controlled promotion before becoming durable workspace outputs.</p>
+<p>Then finish or stop the old task, confirm it is no longer running, select the next connection under Settings → Model connection, and start a new task with the checkpoint. Choose the model on Home. Use subagents starts unchecked: leave it unchecked for executor mode. Codex also offers a per-task Reasoning effort selection; medium is the default.</p>
+<p>The documented workflow is manual selection—not an automatic best-model router. Reusing a computer can preserve its browser profile and workspace, but does not establish automatic conversation transfer. Give the next task the relevant context explicitly. A different remote provider receives the context supplied to it, so remove unrelated sensitive material. <a href="https://github.com/sanjaygbhat/bothearth/blob/main/PRIVACY.md">BotHearth privacy notice</a></p>
+<h2>Diagnose the stall before pressing Resume</h2>
+<p>Read the task’s activity feed and pause reason first. A paused task is different from a failed or cancelled one; a failed task may still have changed the website.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>What stopped progress</th>
+<th>Next action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Approval or human input is needed</td>
+<td><a href="{{BASE}}browser-agent-sign-in-human-takeover/">Review the human-control request</a> and complete only the necessary step. A larger model does not replace permission.</td>
+</tr>
+<tr>
+<td>The same action repeats</td>
+<td>Inspect the current page, clarify the goal or correct the page state before another attempt.</td>
+</tr>
+<tr>
+<td>A step, time or estimated-budget limit was reached</td>
+<td>Check the partial result. Extend only the relevant limit when progress justifies it, or narrow the task.</td>
+</tr>
+<tr>
+<td>Provider access or usage is blocked</td>
+<td>Read the exact error. Correct native authentication or model eligibility; distinguish temporary throttling from exhausted credits or account limits.</td>
+</tr>
+<tr>
+<td>The browser connection closed</td>
+<td>Check the container runtime, reconnect and inspect what already happened before restarting work.</td>
+</tr>
+</tbody></table></div>
+<p>Recovery depends on the installed build and the recorded task state. For API rate limits, OpenAI distinguishes temporary throttling from spending or usage limits. Follow a reported retry delay rather than repeatedly resubmitting; additional local budget cannot fix an account limit. <a href="https://developers.openai.com/api/docs/guides/error-codes">OpenAI: API error codes</a></p>
+<p>For local diagnosis, run <code>bothearth doctor</code>. The <a href="https://github.com/sanjaygbhat/bothearth/blob/main/docs/CLI.md">CLI reference</a> describes these operator commands. If the daemon is stopped, use bothearth start with the original configuration/home. An expired operator link calls for bothearth pair, not vault reinitialisation. After an actual restart, inspect the task state and use Resume only where offered; otherwise start a checkpoint-based continuation. Do not assume restarting replays or reverses website actions.</p>
+<p>Avoid Use a fresh one as the first recovery step: it discards that computer’s browser profile and saved logins.</p>
+<h2>Give the next run a precise handoff</h2>
+<p>Use this template after filling in the checkpoint yourself or reviewing the agent’s version:</p>
+<blockquote>
+<p>Continue this browser task: [goal]. Completed and verified: [items and source URLs]. Last confirmed website action: [action and visible outcome]. Available result: [copied summary or verified file path]. Outstanding: [items]. Previous blocker: [exact message]. First inspect the current page and evidence. Do not repeat completed changes. Ask before uncertain or irreversible actions. If blocked again, return a partial result and the next safe step.</p>
+</blockquote>
+<h2>Practical questions</h2>
+<h3>Can I use a local model?</h3>
+<p>A separately configured local endpoint is a documented route, not a tested compatibility list. Verify tool calls, required image support, hardware needs and the model’s own terms before depending on it.</p>
+<h3>Can I schedule the same native connection?</h3>
+<p>Not through BotHearth’s recurring scheduler: scheduled tasks currently require a standalone adapter, rather than the native Codex or Claude Code task connection.</p>
+<h3>Does a new task or restart delete the old records?</h3>
+<p>No. Stopping a task or daemon does not delete its records, and BotHearth has no general transcript/screenshot retention scheduler. Plan removal and backups separately.</p>
+<h2>Start with one bounded task</h2>
+<p>Use a read-only browser task. Connect an eligible account, require a reviewable result, export it and practise a checkpoint-based continuation before relying on longer work. Use the <a href="https://bothearth.com/quickstart/">BotHearth quickstart</a> for installation. The <a href="{{BASE}}organise-gmail-browser-agent-supervised-test/">recorded inbox test</a> shows why two task runs and their reported outcomes should be recorded separately.</p>
+<p class="doc-meta"><a href="{{BASE}}guides/">All guides</a> · <a href="{{BASE}}quickstart/">Get started</a> · <a href="{{BASE}}security/">Privacy and control boundaries</a></p></article>

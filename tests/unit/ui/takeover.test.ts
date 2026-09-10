@@ -113,6 +113,19 @@ describe("takeover wire (contracts unchanged)", () => {
 });
 
 describe("takeover copy", () => {
+  it("shows a bounded review instruction as plain text", () => {
+    const dom = installDom();
+    try {
+      const reason = "Review the FAQ draft <img src=x onerror=alert(1)> before publishing.";
+      const surface = renderNeedsYou({ reason, onTake() {} });
+      assert.match(surface.root.textContent!, /Review the FAQ draft/);
+      assert.equal(surface.root.querySelector("img"), null);
+      assert.equal(takeoverReason("Review " + "x".repeat(3000)).length, 2000);
+      assert.equal(takeoverReason("new_detector_code"), takeoverReason(undefined));
+      assert.equal(takeoverReason("__proto__"), takeoverReason(undefined));
+    } finally { dom.restore(); }
+  });
+
   it("says why in plain words, never the detector’s name", () => {
     // The detectors GUESS, and an `otp_field` guess on a signed-in Gmail
     // results page cost 3 m 26 s of a person's attention. The sentence says
@@ -128,7 +141,7 @@ describe("takeover copy", () => {
     );
     assert.match(takeoverReason("sign_in"), /It thinks this is a sign-in page/);
     assert.match(takeoverReason("captcha_iframe"), /prove you’re human/);
-    assert.match(takeoverReason(undefined), /can’t do safely on its own/);
+    assert.match(takeoverReason(undefined), /needs your help/);
     for (const reason of ["password_field", "otp_field", "sign_in", "webauthn_prompt", "captcha_iframe", "nonsense"]) {
       assert.doesNotMatch(takeoverReason(reason), /_field|iframe|epoch|takeover|lease/i);
     }
@@ -217,7 +230,8 @@ describe("who is driving", () => {
       leaseText(581_000),
       "Control pauses in 9:41 unless you keep using it.",
     );
-    assert.match(leaseText(0), /goes back to the bot/);
+    assert.match(leaseText(0), /Take control again/);
+    assert.doesNotMatch(leaseText(0), /goes back to the bot/);
     assert.doesNotMatch(`${leaseText(581_000)} ${leaseText(0)}`, /lease|epoch|ttl/i);
   });
 });
@@ -295,7 +309,7 @@ describe("the window that is only watching", () => {
     try {
       const card = renderObserving();
       assert.match(card.root.textContent, /Someone else has control/);
-      assert.match(card.root.textContent, /nothing you type here is sent/);
+      assert.match(card.root.textContent, /can’t operate it, but you can still message/);
       assert.equal(card.root.getAttribute("role"), "status", "not an alert: nothing to do");
       assert.deepEqual(actionable(card.root), []);
       assert.doesNotMatch(card.root.textContent, /epoch|takeover_|device id/i);

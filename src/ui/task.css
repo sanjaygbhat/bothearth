@@ -34,9 +34,29 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-xs);
+  flex-wrap: wrap;
   min-height: 36px;
   padding: 0 var(--gutter-right) 0 var(--gutter-left);
 }
+
+.task-model {
+  min-width: 0;
+  margin-right: auto;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.task-output-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--tap-target);
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.task-output-toggle input { accent-color: var(--color-accent); }
 
 .task-bar .spend {
   font-size: var(--text-caption);
@@ -245,6 +265,37 @@
   font-family: var(--font-mono);
   font-size: var(--text-caption);
   line-height: var(--leading-caption);
+}
+
+.result-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.result-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-ui);
+}
+
+.result-table th,
+.result-table td {
+  padding: var(--space-2xs) var(--space-xs);
+  border-bottom: var(--hairline) solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+  min-width: 8rem;
+}
+
+.result-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.result-note {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
 }
 
 /* ---------------------------------------------------------------------------
@@ -736,7 +787,7 @@
 
 
 /* ---------------------------------------------------------------------------
-   7. TAKEOVER — the one state that must never be occluded.
+   7. TAKEOVER — stays above task content, below app dialogs.
    Quiet copy on the wash is a tint of the wash's own hue, never grey.
    ------------------------------------------------------------------------ */
 

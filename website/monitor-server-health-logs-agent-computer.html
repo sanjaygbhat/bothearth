@@ -1,0 +1,83 @@
+<header class="page-header"><p class="eyebrow"><a href="{{BASE}}guides/">Practical guides</a></p><h1>Monitor server health and logs from a separate agent computer</h1><p class="qualification">By BotHearth · Updated 10 September 2026 · Technical alpha</p></header>
+<article class="prose guide-body"><p>Use a separate agent computer to inspect approved dashboards, run small read-only checks, and explain relevant logs without using your everyday browser session. Keep ordinary uptime and log tools responsible for continuous detection. In BotHearth, live investigations and scheduled routines are different: routines require a standalone model adapter, an awake host, tested notifications, limited access, and an explicit recovery plan. <a href="https://prometheus.io/docs/alerting/latest/overview/">Prometheus: alerting overview</a></p>
+<h2>Let monitoring tools detect; let the agent investigate</h2>
+<p>Keep your uptime probes, metrics, log collection and paging in place. Prometheus, for example, evaluates alert rules; Alertmanager handles grouping and notification routing. Use BotHearth for the investigation alongside that system—not as its replacement. <a href="https://prometheus.io/docs/alerting/latest/overview/">Prometheus: alerting overview</a></p>
+<p>For example, ask the agent to open a service dashboard in its browser, compare the error timeline with deployment markers, inspect a narrow log window and save an evidence-based incident note. Ask for observed facts, possible explanations and missing evidence separately. First consider <a href="{{BASE}}when-agent-needs-browser-computer/">whether the work needs a separate computer</a>.</p>
+<h2>Choose live observation or a recurring review</h2>
+<p>For live observation, give the agent a bounded job: inspect one service for the next 20 minutes while you supervise. BotHearth’s native Codex or Claude Code connection can run interactive tasks; it is not the current recurring-schedule setup.</p>
+<p>For recurring review, the current path is the daemon’s routine scheduler plus a configured standalone API adapter. Each firing creates a task on an existing bot computer. The daemon, container runtime, network and model credentials must remain usable. A recurring browser review samples conditions; it is not continuous log ingestion. Choose a <a href="{{BASE}}browser-agent-local-vs-vm/">local host or VM</a> that can stay available for the review.</p>
+<h2>Give it visibility, not production control</h2>
+<p>Use a dedicated monitoring account limited to the relevant dashboard and redacted logs. Enforce read-only permissions in the service itself. Do not supply deployment privileges, unrestricted SSH, database administration or cloud billing access. A prompt saying “read only” is an instruction, not an access-control boundary.</p>
+<p>Redact before content reaches the agent’s browser or model. Remove tokens, cookies, passwords, connection strings and unnecessary personal data. Prefer approved fields such as timestamp, service, severity, error code and an opaque correlation ID over unrestricted request bodies. Treat log text as untrusted evidence, never as instructions to execute. OWASP recommends restrictive log access and excluding sensitive values. <a href="https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html">OWASP: logging guidance</a></p>
+<p>Self-hosting does not keep every log excerpt offline: remote providers receive model-visible content, and notification services receive configured messages. <a href="https://github.com/sanjaygbhat/bothearth/blob/main/PRIVACY.md">BotHearth privacy notice</a></p>
+<h2>Keep healthchecks small and thresholds explicit</h2>
+<p>Have a maintainer test a lightweight, approved endpoint from a machine with network access and curl installed. Replace this illustrative address with your own:</p>
+<pre><code class="language-bash">curl --silent --show-error --fail \
+  --connect-timeout 3 --max-time 10 \
+  --output /dev/null \
+  --write-out &#39;http=%{http_code} total_s=%{time_total}\n&#39; \
+  https://status.example.net/healthz
+</code></pre>
+<p>This limits connection and total request time and discards the response body. Preserve the exit code and validate the expected HTTP status separately: --fail does not reject every unexpected status, including redirects. An authentication failure means the check could not assess health, not that the service is down. <a href="https://curl.se/docs/manpage.html">curl manual</a></p>
+<p>Define thresholds in the ordinary monitoring system. These are illustrative starting points, not BotHearth defaults:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Example rule</th>
+<th>Destination</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Availability</td>
+<td>Two consecutive failed one-minute probes</td>
+<td>Existing on-call channel</td>
+</tr>
+<tr>
+<td>Disk capacity</td>
+<td>Less than 15% free for ten minutes</td>
+<td>Operations warning queue</td>
+</tr>
+<tr>
+<td>Data freshness</td>
+<td>No sample for two expected intervals</td>
+<td>Monitoring-failure alert</td>
+</tr>
+</tbody></table></div>
+<p>Tune rules to the service’s normal behavior. Use sustained conditions and a deliberate recovery rule to avoid repeated alerts during brief fluctuations; Prometheus documents for and keep_firing_for for this purpose. <a href="https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/">Prometheus: alerting rules</a></p>
+<h2>Set up the actual BotHearth routine path</h2>
+<p>First complete a supervised dashboard review. Then configure a supported standalone adapter—such as the registered anthropic or openai_compat route—with a compatible model and its own credentials. A working native CLI login is not evidence that the standalone route works; model compatibility must be checked. Set and test task limits before scheduling; usage estimates are not provider-enforced spending caps.</p>
+<p>The <a href="https://github.com/sanjaygbhat/bothearth/blob/main/docs/CLI.md">CLI reference</a> documents the routine commands. On the daemon host, use the same configuration and data directory as the running installation. Replace the computer name and both example destinations. The webhook receiver must accept BotHearth’s JSON payload; an arbitrary chat-service webhook is not automatically compatible.</p>
+<pre><code class="language-bash">bothearth routine add \
+  --name service-review \
+  --cron &#39;*/15 * * * *&#39; \
+  --computer ops-review \
+  --origin https://status.example.net \
+  --goal &#39;Open https://status.example.net/overview and https://status.example.net/logs. Inspect the last 15 minutes of health data and redacted logs. Save a timestamped incident note in the workspace, separating observations, hypotheses and missing data. Do not change the service or send messages from its pages.&#39; \
+  --notify &#39;webhook:https://alerts.example.net/bothearth&#39;
+
+bothearth routine run service-review
+bothearth routine ls
+</code></pre>
+<p>This creates an enabled browser-only routine; --shell is intentionally absent. The cron expression uses the daemon process’s local timezone. routine run queues an enabled routine for the daemon’s next tick—it does not execute a check inside the CLI. Inspect the resulting task and saved file.</p>
+<p>--origin is not a read-only permission. The task path uses supplied origins for both readable and writable destination sets; the monitoring account must supply the real restriction.</p>
+<p>Remove an unwanted routine explicitly with <code>bothearth routine rm service-review</code>; confirm that no active task remains. Do not rely on an untested configuration change to stop scheduled work.</p>
+<h2>Separate server alerts from routine notifications</h2>
+<p>The CLI configures notifications for routine failure, not server-health thresholds. An agent can successfully finish a report describing an outage. Conversely, its review can fail while the server remains healthy. Never equate “task completed” with “service healthy.”</p>
+<p>Use a notification destination whose delivery you have tested on your installed build. Keep independent alerting in place for delivery failures and missing reviews.</p>
+<p>Test the chosen destination with harmless data. Keep webhook URLs and tokens out of prompts and reports. Keep notification text minimal; URL stripping is not secret redaction. Keep server threshold alerts in your existing monitoring system, and connect an independent missing-completion watchdog separately. Healthchecks.io documents this heartbeat pattern; it is not a built-in BotHearth integration. <a href="https://healthchecks.io/docs/monitoring_cron_jobs/">Healthchecks.io: monitoring cron jobs</a></p>
+<h2>Set expiry, retention and recovery before leaving</h2>
+<p>Give the pilot an owner and an end time; routines have no automatic end-date field. At that time, remove the schedule with bothearth routine rm service-review, stop any active task separately, and revoke temporary monitoring credentials. Removing the routine is not a purge of its history, task records or saved files.</p>
+<p>BotHearth has no general transcript/screenshot retention scheduler or per-task purge command. Set an operator-managed retention policy covering task data, workspaces, audit files, browser profiles and backups. Provider and notification copies have separate retention. Stopping the daemon does not erase records.</p>
+<p>The scheduler prevents overlapping runs of the same routine. It can fire once when less than an hour late, skips older missed runs, and disables a routine after ten consecutive failures. Do not expect every missed check to replay.</p>
+<p>After a restart, inspect routine state and history, repair expired authentication, confirm a fresh sample, and retest delivery. Do not assume that a schedule marked “running” is still producing fresh results; investigate a missing completion before relying on the next review. BotHearth’s /healthz only reports that the daemon responds—not that reviews succeed.</p>
+<h2>Practical questions</h2>
+<h3>Does this require SSH into production?</h3>
+<p>No. This browser-first workflow can use an authorized dashboard and redacted log viewer. Any additional server connection must be configured and tested separately.</p>
+<h3>Does HTTP 200 prove the whole application works?</h3>
+<p>Only the endpoint’s implemented checks. Define dependency or synthetic-transaction checks separately rather than treating one response as universal health.</p>
+<h3>Should the agent restart a failing service?</h3>
+<p>Not in this workflow. Keep diagnosis read-only; require separate authorization and an approved runbook for remediation.</p>
+<h2>Start with one supervised review</h2>
+<p>Use one service. For a suspected repair, <a href="{{BASE}}temporary-environments-browser-agent-troubleshooting/">test it in a temporary environment</a> with separate approval. Before relying on recurrence, demonstrate a harmless failure, a recovery, a missing check and delivery to the intended recipient. Use the routine example as a pilot, and verify each part before leaving it unattended.</p>
+<p class="doc-meta"><a href="{{BASE}}guides/">All guides</a> · <a href="{{BASE}}quickstart/">Get started</a> · <a href="{{BASE}}security/">Privacy and control boundaries</a></p></article>

@@ -61,7 +61,7 @@ describe("/api/v1/runtime", () => {
     });
     assert.equal(res.status, 200);
     const body = await res.json() as Record<string, any>;
-    assert.deepEqual(Object.keys(body).sort(), ["ai", "blockers", "docker", "images", "node", "task_start_available"]);
+    assert.deepEqual(Object.keys(body).sort(), ["ai", "blockers", "docker", "images", "licence", "node", "task_start_available"]);
     assert.equal(typeof body.node.ok, "boolean");
     assert.equal(typeof body.docker.installed, "boolean");
     for (const name of ["computer", "shell", "proxy"]) {
@@ -136,17 +136,20 @@ describe("first-run CLI adoption over HTTP", () => {
   let origin: string;
   let session: { cookie: string; csrf: string };
   let cliDir: string;
+  const previousToolPath = process.env.MODELBOT_TOOL_PATH;
 
   /** A fake CLI that records every invocation and reports "not signed in". */
   function fakeLoginCli(dir: string, name: string): string {
     const path = join(dir, name);
-    writeFileSync(path, `#!/bin/sh\necho "$@" >> "${join(dir, `${name}.calls`)}"\nexit 1\n`);
+    writeFileSync(path, [`#!/bin/sh`, `echo "$@" >> "${join(dir, `${name}.calls`)}"`, `exit 1`, ``].join("\n"));
     chmodSync(path, 0o755);
     return path;
   }
 
   before(async () => {
     cliDir = mkdtempSync(join(tmpdir(), "mb-adoption-cli-"));
+    fakeLoginCli(cliDir, "docker");
+    process.env.MODELBOT_TOOL_PATH = cliDir;
     daemon = await startDaemon({
       host: "127.0.0.1",
       port: 0,
@@ -162,7 +165,11 @@ describe("first-run CLI adoption over HTTP", () => {
     origin = `http://127.0.0.1:${daemon.port}`;
     session = await bootstrapSession(daemon, BOOT);
   });
-  after(async () => { await daemon.close(); });
+  after(async () => {
+    await daemon.close();
+    if (previousToolPath === undefined) delete process.env.MODELBOT_TOOL_PATH;
+    else process.env.MODELBOT_TOOL_PATH = previousToolPath;
+  });
 
   const headers = (extra: Record<string, string> = {}) => ({
     Origin: origin, Host: `127.0.0.1:${daemon.port}`, cookie: session.cookie, ...extra,

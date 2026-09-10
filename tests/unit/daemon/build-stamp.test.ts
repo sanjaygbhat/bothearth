@@ -93,6 +93,21 @@ test("the proxy stamp does not move when the browser computer changes", () => {
   }
 });
 
+test("UI and model-runner edits do not require rebuilding any computer image", () => {
+  const root = tree();
+  try {
+    const images = ["computer", "shell", "proxy"] as const;
+    clearBuildStampCache();
+    const before = images.map((image) => buildStamp(image, root));
+    for (const part of ["ui", "daemon"]) {
+      mkdirSync(join(root, "src", part));
+      writeFileSync(join(root, "src", part, "changed.ts"), "export const updated = true;\n");
+    }
+    clearBuildStampCache();
+    assert.deepEqual(images.map((image) => buildStamp(image, root)), before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("the stamped inputs match what the Dockerfiles copy in", () => {
   // A widened COPY line with no matching entry here is how the original bug
   // slipped through; this is the guard that would have caught it.

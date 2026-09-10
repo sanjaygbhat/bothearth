@@ -2,13 +2,11 @@
 
 Give BotHearth a task, watch its computer, and open the files it saves. This guide takes you from a source install on Mac or Linux to your first task. You’ll connect your own model account and use BotHearth in a browser; the optional Mac window and paired phone access come later.
 
-BotHearth is the public name of the project developed as ModelBot. The `bothearth` command and existing `modelbot` alias run the same CLI. Configuration files, environment variables, image names, local `ModelBot` directories, and `ModelBot.app` keep their existing names so installations continue to work.
-
 This is a pre-release checkout. You build it from source; `npx modelbot` is not a verified path.
 
 ## Run it
 
-You need macOS or Linux, Node.js 22.18 or newer, and either Claude Code or Codex installed and signed in on this machine.
+You need macOS or Linux, Node.js 22.18 or newer, and an eligible Claude Code or Codex account. The bot’s computer image includes both official CLIs.
 
 ### 1. Install Docker Desktop or OrbStack
 
@@ -37,7 +35,7 @@ You do not need `npm ci --prefix computer-server` to build or run BotHearth. The
 bothearth init
 ```
 
-Press Enter at the `vault passphrase` prompt to use the OS keychain (macOS Keychain, or Secret Service on Linux). This writes `~/.modelbot/modelbot.yaml`, private tokens, and a vault under `~/ModelBot`. Keep a vault and its key together; `--force` overwrites initialization state and cannot recover encrypted data.
+Initialization uses the OS keychain automatically (macOS Keychain, or an unlocked Secret Service on Linux). This writes `~/.modelbot/modelbot.yaml`, private tokens, and an encrypted vault under `~/ModelBot`. A headless Linux server can use an [encrypted systemd credential](REMOTE-DEPLOY.md#headless-vault-across-host-restart). Keep a vault and its key together; `--force` overwrites initialization state and cannot recover encrypted data. CLI passphrase unlock is unavailable, so initialization does not offer a passphrase setup it cannot reopen.
 
 ### 4. Start it and open the link
 
@@ -58,35 +56,39 @@ On macOS it opens that link in your default browser for you; `--no-open` stops i
 
 That browser stays signed in as long as you use it at least once every 7 days and for at most 30 days from when you paired it, and stopping and starting BotHearth does not sign you out; after that, run `bothearth pair` for a new link.
 
-Leave the terminal running, or use `bothearth start --daemon` and `bothearth stop`. `--daemon` prints the same link.
+Leave the terminal running, or use `bothearth start --daemon` and `bothearth stop`. `--daemon` prints the same link. Stopping BotHearth pauses native Codex and Claude tasks and saves their conversation. After restarting, review the current page and choose **Resume**; computer control requires a fresh handoff. Use a task's **Stop** button to cancel it deliberately.
 
-### 5. Connect your AI
+### 5. Connect your model
 
-The chip in the top right shows the connection. If it does not say **connected**, open **Settings** (the gear) and go to **AI connection**. Choose Claude Code or Codex and use its normal sign-in — **Sign in through Claude Code** or **Sign in with ChatGPT**. Install the CLI on the host first: [Codex](https://developers.openai.com/codex/cli/), or [Claude Code setup and terms](CLAUDE-CODE.md). BotHearth uses the CLI you already have; it does not ship its own.
+The chip in the top right identifies the selected model and its connection state. Open **Settings** (the gear) → **Model connection** and choose Claude Code or Codex. BotHearth prepares its computer and starts the official CLI there. **Sign in with ChatGPT** shows Codex’s device sign-in; **Copy code and open ChatGPT** opens the official page, with manual copying available if the clipboard is blocked. **Sign in through Claude Code** shows that CLI’s private sign-in instructions and reply field. The built-in setup does not copy host login files into the computer.
 
-BotHearth remembers the connection. Provider terms, plan eligibility, usage limits, and charges still apply. Read [provider requirements](PROVIDERS.md) before connecting; free BotHearth software does not include model access.
+BotHearth keeps the CLI’s login and conversation history in that computer’s separate model home. Historical host tasks still use their original host CLI/login when resumed. Home rechecks the selected connection when you return from Settings. Your draft stays in place; completing sign-in does not start it automatically. Provider terms, plan eligibility, usage limits and charges apply; free BotHearth software does not include model access.
 
 ### 6. Your first task
 
-Type what you want in plain language and press `⌘↩` (`Ctrl↩` on Linux), or click **Start task**. Pick something small you can check yourself the first time — one of the examples under **TRY** is a good start.
+Choose **Provider** and **Model** on Home. Model choices come from the installed CLI where available; cached or suggested choices are labelled, and the provider checks account access when the task starts. You can enter an exact **Custom model ID**. A saved model choice is kept; BotHearth does not silently switch a running task to another model.
 
-The task view puts the activity feed on the left and the live view of its computer on the right, under **ITS COMPUTER**. **Full screen** makes the live view bigger; `Esc` leaves it. Underneath, **Total cost**, **Steps so far** and **Files it has saved** update as it works. **Stop** ends the task.
+**Use subagents** is a plain checkbox, unchecked for every new task. Leave it unchecked for direct execution. Checking it reveals **Subagent model**, where you can choose the provider and model used for delegated work. Reloading or starting another task does not retain this opt-in.
+
+Type what you want in plain language and press `⌘↩` (`Ctrl↩` on Linux), or click **Start task**. Pick something small you can check yourself the first time — one of the examples under **TRY** is a good start. Replace its website placeholder with a real URL.
+
+The task view puts the activity feed on the left and the live view of its computer on the right, under **ITS COMPUTER**. The selected model stays visible. **Model messages** shows or hides narration while keeping your messages, tool steps, requests for input and the final result available. **Full screen** makes the live view bigger; `Esc` leaves it. Underneath, **Total cost**, **Steps so far** and **Files it has saved** update as it works. **Stop** ends the task.
 
 ### Building your bot's computer, once
 
-The first task needs container images that do not exist yet, and there are no prebuilt ones to pull. The home screen offers to build them and gets on with it; from the terminal, the same build is:
+The first sign-in or task needs container images, and there are no prebuilt ones to pull. BotHearth offers to build them; from the terminal, the same build is:
 
 ```bash
 bothearth image build
 ```
 
-It downloads Chromium and its Linux dependencies, so it takes several minutes and a few GB of disk. Build again when a source update makes the images stale. Build the images this way rather than by hand — BotHearth stamps them at build time and treats an unstamped image as out of date.
+It downloads Chromium, the native CLIs and their Linux dependencies, so it takes several minutes and a few GB of disk. Build again when a source update makes the images stale. Build the images this way rather than by hand — BotHearth stamps them at build time and treats an unstamped image as out of date.
 
 ## What the task cost means
 
 The task view shows **Total cost**, an estimate of work recorded for that task. **Settings → Usage** shows recorded estimates by task and day. The normal task and settings views do not ask you to choose a spending maximum. Internal task limits remain and can pause work.
 
-For Claude Code and Codex tasks, BotHearth counts each computer tool call as an estimated cent by default. This is a work estimate, not a reading of your provider bill. Standalone API estimates depend on reported usage and configured prices; an in-flight request can exceed an estimate. Provider spending controls must be configured with the provider.
+For Claude Code and Codex tasks, BotHearth counts each MCP computer tool call as an estimated cent by default. Native shell commands and model requests are not fully counted by this meter; it is not your provider bill. Standalone API estimates depend on reported usage and configured prices; an in-flight request can exceed an estimate. Configure spending controls with the provider.
 
 When a task reaches its budget it **pauses**. Recorded task history and saved files remain available. The task offers **Resume with a higher budget** to permit more work; resumption is not a guarantee that every external website action continues exactly where it stopped. A task that runs out of steps offers **Resume with more steps** the same way.
 
@@ -104,13 +106,13 @@ A long task runs into three other limits, all of them in `~/.modelbot/modelbot.y
 
 ## When it asks you something
 
-BotHearth asks for new destinations and detected sends, payments, uploads, and deletes. Expand the card to inspect the proposed action, then choose **Don't allow** or **Allow once**. Some site permissions can be remembered for the task. Ordinary interaction on approved sites and writing a result into the task workspace can proceed without another prompt. The policy does not identify every possible external effect; stay present for sensitive work. If you do not answer within 15 minutes, the task pauses — press **Resume** when you are ready.
+Public browsing in normal mode runs without a destination prompt. BotHearth’s browser tools ask about detected sends, payments, uploads and deletes; strict mode also restricts destinations. Expand the card, then choose **Don't allow** or **Allow once**. Some site permissions can be remembered for the task. Native CLI shell/network tools run inside the computer with their own capabilities and do not pass through these MCP action checks. If an approval goes unanswered for 15 minutes, the task pauses — press **Resume** when ready.
 
-Use **Message BotHearth** to ask questions or redirect a running task. Messages reach the runner at its next step; an in-progress action may finish first. You can still message while it waits for approval or while you hold computer control. Messages are sent to the chosen model, so enter passwords in the computer instead. Sending a message does not approve an action or return control.
+Use **Message BotHearth** to ask questions or redirect a running task. Messages reach the runner at its next opportunity; an in-progress action may finish first. You can leave messages during human control, but guest model processes remain frozen until you return it. Messages go to the chosen model, so enter passwords in the computer instead. Sending a message does not approve an action or return control.
 
 ## Taking control
 
-When a site needs a password, a code or a CAPTCHA, your bot will not do it. Press **Take control** — or **Take control instead** on the card — to operate the bot’s full desktop: browser chrome, windows, files and a terminal. The conversation stays visible; **Full screen** is optional. Click inside the computer before typing. `Ctrl+Alt+T` opens Terminal and `Ctrl+Alt+E` opens Files. While you drive, the model cannot observe or operate the computer. The site still receives it, exactly as it would normally. `⌘V` / `Ctrl+V` pastes into the page, so a password manager works.
+When a site needs a password, a code or a CAPTCHA, press **Take control** — or **Take control instead** on the card — to operate the bot’s full desktop: browser chrome, windows, files and a terminal. The conversation stays visible; **Full screen** is optional. Click inside the computer before typing. `Ctrl+Alt+T` opens Terminal and `Ctrl+Alt+E` opens Files. Before control is acknowledged, native model processes freeze and model capture is blocked; the operator desktop stays usable. The site receives your input normally. `⌘V` / `Ctrl+V` pastes into the page, so a password manager works.
 
 A line above the frame counts down the lease. Ten minutes without input pauses control; it does not return capture to the agent automatically. Every click or keystroke resets that clock. Press **Give control back** (`⌘↩`) when the step is done and BotHearth validates the page before resuming. `Esc` leaves full screen without giving control back. A remaining sensitive-field signal can prevent handback.
 
@@ -126,11 +128,11 @@ Sites you sign into stay signed in on your bot's computer, from one task to the 
 
 Files your bot saves stay on your machine. The command-line install keeps its data in `~/ModelBot`, with one workspace folder per computer under `~/ModelBot/computers`. The Mac app uses `~/Library/Application Support/ModelBot` instead, with workspaces under `.../ModelBot/data`. Both are configurable — see [`data_dir` and `sandbox.workspace_root`](CONFIG.md).
 
-Anything the bot downloads stays in quarantine until you promote it.
+Browser downloads stay in quarantine until you promote them. Native CLI commands can download directly into the shared workspace. Files saved under `/workspace/out` appear in task results.
 
 ## When it finishes
 
-The done screen gives you the result, then **What it did**: the time, the cost against your budget, the sites it visited, what it asked you, and where it worked. **Open result** shows the saved copy, **Run again** repeats the task, **Start another task** returns you to the task box. Read the result before you act on it.
+The done screen gives you the result, then **What it did**: the time, estimated total cost, sites visited, requests for input, and saved files. **Read full result** loads a shortened result from the saved record; **Copy result** copies the loaded text. Reports beyond the display limit remain marked as previews, so open their saved files for the rest. **Run again** repeats the task, and **Start another task** returns to Home with **Use subagents** unchecked. Read the result before acting on it or repeating work with external effects.
 
 ## Health and shutdown
 
@@ -156,7 +158,7 @@ This builds the daemon and then the app bundle at `apps/macos/build/ModelBot.app
 
 Ad-hoc signing is why the app cannot post notifications — macOS refuses permission to an unsigned build. The dock badge, the dock bounce, the menu-bar item and the in-window card all still work. A Developer ID certificate fixes it; [apps/macos/README.md](../apps/macos/README.md) explains how.
 
-Everything above — connecting your AI, starting a task, approvals, taking control — works the same in the app. If something is not ready yet, the home screen says so in a card above the task box and keeps checking; you can type your task the whole time.
+Everything above — connecting your model, starting a task, approvals, taking control — works the same in the app. If something is not ready yet, the home screen says so in a card above the task box and keeps checking; you can type your task the whole time.
 
 ## Your phone
 

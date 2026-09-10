@@ -64,7 +64,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false)
-    window.title = "ModelBot"
+    window.title = "BotHearth"
     window.titlebarAppearsTransparent = true
     window.titleVisibility = .hidden
     window.minSize = NSSize(width: 900, height: 600)
@@ -234,7 +234,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
       let copy = NavigationPolicy.errorCopy(status: code, urlString: url?.absoluteString ?? "")
       Log.shared.write("[shell] refused to render a \(code) at the top level")
       showError(
-        headline: copy.headline, detail: copy.detail, backLabel: "Back to ModelBot")
+        headline: copy.headline, detail: copy.detail, backLabel: "Back to BotHearth")
     }
   }
 
@@ -303,7 +303,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
   ) {
     Log.shared.write("[shell] provisional navigation failed: \(error.localizedDescription)")
     showError(
-      headline: "ModelBot couldn't open its window.",
+      headline: "BotHearth couldn't open its window.",
       detail: "The app started but the page wouldn't load. Try again, and if it keeps happening the log will say why.")
   }
 
@@ -351,7 +351,7 @@ final class TitlebarDragView: NSView {
 
 /// Quiet first paint. One line of type, the mark, nothing moving.
 final class LoadingView: ThemedView {
-  private let label = NSTextField(labelWithString: "Starting ModelBot")
+  private let label = NSTextField(labelWithString: "Starting BotHearth")
   private let mark = MarkView()
 
   init() {

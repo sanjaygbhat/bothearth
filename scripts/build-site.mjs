@@ -25,7 +25,7 @@ const repo = repository.href.replace(/\/$/, "");
 const escape = (value) => String(value).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const template = readFileSync(join(source, "layout.html"), "utf8");
-const nav = [["how-it-works", "How it works"], ["examples", "What it can do"], ["faq", "FAQ"], ["enterprise", "Enterprise"]];
+const nav = [["how-it-works", "How it works"], ["guides", "Guides"], ["faq", "FAQ"], ["enterprise", "Enterprise"]];
 const pages = config.pages;
 assert.equal(new Set(pages.map((page) => page.slug)).size, pages.length, "Duplicate page slug");
 const author = { "@type": "Organization", "@id": `${site.href}#project`, name: "BotHearth", url: site.href };
@@ -72,7 +72,7 @@ for (const page of pages) {
 for (const file of ["tokens.css", "style.css", "image-viewer.js", "favicon.svg", "social-preview.png", "70df6a3860a46a46f4485513292e8249.txt",
   "fonts/fraunces-latin-wght.woff2", "fonts/Fraunces-OFL.txt",
   "screenshots/task-running.png", "screenshots/needs-you.png",
-  "screenshots/email-inbox-redacted.png", "screenshots/email-organised-redacted.png"]) {
+  "screenshots/email-inbox-redacted.png", "screenshots/email-organised-redacted.png", "video/bothearth-demo.mp4", "video/bothearth-demo-poster.jpg"]) {
   mkdirSync(dirname(join(output, file)), { recursive: true });
   cpSync(join(source, file), join(output, file));
 }

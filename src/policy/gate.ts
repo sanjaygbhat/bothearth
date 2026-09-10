@@ -120,13 +120,6 @@ export function inferSignalsFromCall(
   if (tool === "browser_tabs") {
     const action = String(args.action ?? "");
     if (action === "close") out.delete = true;
-    if (action === "new" && typeof args.url === "string") {
-      try {
-        out.form_submit_origin = new URL(args.url).origin;
-      } catch {
-        out.form_submit_origin = null;
-      }
-    }
   }
 
   // Form submit / Enter — shared across equivalent primitives
@@ -238,6 +231,16 @@ export function evaluateGate(ctx: GateContext): GateDecision {
     return { decision: "allow" };
   }
 
+  // Opening a page is ordinary task work. It does not grant permission to
+  // submit a form, upload files or send data; those effects are checked below.
+  if (tool === "browser_navigate" || (tool === "browser_tabs" && ctx.call.args.action === "new")) {
+    const dest = normalizeOrigin(String(ctx.call.args.url ?? "about:blank"));
+    if (ctx.mode === "strict" && dest !== "about:blank" && !originInSet(dest, ctx.origin_sets.writable)) {
+      return { decision: "deny", reason: `strict_origin_denied:${dest}` };
+    }
+    return { decision: "allow" };
+  }
+
   // Delete patterns
   if (signals.delete || tool === "files_delete") {
     return approveOrDeny(ctx.mode, "delete", "delete_pattern");
@@ -266,31 +269,6 @@ export function evaluateGate(ctx: GateContext): GateDecision {
         ctx.mode,
         "new_domain",
         `form_submit_new_origin:${dest}`,
-        dest,
-      );
-    }
-  }
-
-  // Navigation / act on new origin
-  if (tool === "browser_navigate") {
-    const url = String(ctx.call.args.url ?? "");
-    let dest = origin;
-    try {
-      dest = new URL(url).origin;
-    } catch {
-      dest = url;
-    }
-    if (ctx.mode === "strict" && !originInSet(dest, ctx.origin_sets.writable)) {
-      return { decision: "deny", reason: `strict_origin_denied:${dest}` };
-    }
-    if (
-      !originInSet(dest, ctx.origin_sets.writable) &&
-      !originInSet(dest, ctx.origin_sets.readable)
-    ) {
-      return approveOrDeny(
-        ctx.mode,
-        "new_domain",
-        `navigate_new_origin:${dest}`,
         dest,
       );
     }

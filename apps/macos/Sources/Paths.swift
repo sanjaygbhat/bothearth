@@ -149,9 +149,9 @@ enum Paths {
     var errorDescription: String? {
       switch self {
       case .nodeNotFound:
-        return "ModelBot couldn't find Node on this Mac."
+        return "BotHearth couldn't find Node on this Mac."
       case .daemonNotFound:
-        return "ModelBot couldn't find its own program files."
+        return "BotHearth couldn't find its own program files."
       }
     }
 
@@ -159,9 +159,9 @@ enum Paths {
     var recoverySuggestion: String? {
       switch self {
       case .nodeNotFound:
-        return "ModelBot needs Node to run. Install it from nodejs.org, then try again."
+        return "BotHearth needs Node to run. Install it from nodejs.org, then try again."
       case .daemonNotFound:
-        return "Its program files aren't where they should be. Reinstalling ModelBot will put them back."
+        return "Its program files aren't where they should be. Reinstalling BotHearth will put them back."
       }
     }
 

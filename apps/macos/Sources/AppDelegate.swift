@@ -23,13 +23,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DaemonSupervisorDelega
 
   /// The reason we give macOS, and the person, for wanting to notify them.
   private static let notificationReason =
-    "ModelBot notifies you when a task finishes or when your bot needs you to sign in to something."
+    "BotHearth notifies you when a task finishes or when your bot needs you to sign in to something."
 
   // MARK: - Lifecycle
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     Log.shared.open()
-    Log.shared.write("[shell] ModelBot shell launched (debug=\(AppFlags.debugEnabled))")
+    Log.shared.write("[shell] BotHearth shell launched (debug=\(AppFlags.debugEnabled))")
 
     bridge.delegate = self
 
@@ -90,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DaemonSupervisorDelega
         // The calls the attention loop makes when a task starts — or, for
         // `resume`, stops — waiting on a person, made from the page's own world.
         let waiting = action == "resume" ? 0 : 1
-        let title = waiting > 0 ? "● Needs you — ModelBot" : "ModelBot"
+        let title = waiting > 0 ? "● Needs you — BotHearth" : "BotHearth"
         self.windowController.webView.evaluateJavaScript(
           """
           window.modelbotNative.setBadge(\(waiting));
@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DaemonSupervisorDelega
     }
     let alert = NSAlert()
     alert.alertStyle = .warning
-    alert.messageText = "Set up a new key for ModelBot?"
+    alert.messageText = "Set up a new key for BotHearth?"
     alert.informativeText = action.confirmBody
     alert.addButton(withTitle: action.label)
     alert.addButton(withTitle: "Cancel")
@@ -302,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DaemonSupervisorDelega
   }
 
   func bridgeSetTitle(_ text: String) {
-    windowController.window.title = text.isEmpty ? "ModelBot" : text
+    windowController.window.title = text.isEmpty ? "BotHearth" : text
   }
 
   func bridgeOpenExternal(_ url: URL) {
@@ -421,13 +421,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, DaemonSupervisorDelega
   /// screen can be reviewed without corrupting a real vault to get there.
   @objc func showErrorState() {
     let parsed = StartupError.parse(
-      "MODELBOT_STARTUP_ERROR: The saved key for this Mac no longer opens ModelBot's "
+      "MODELBOT_STARTUP_ERROR: The saved key for this Mac no longer opens BotHearth's "
       + "vault, so it can't read your settings.|reset_vault_key")
     windowController.onRecover = parsed?.recovery.map { action in
       { [weak self] in self?.startRecovery(action) }
     }
     windowController.showError(
-      headline: parsed?.headline ?? "ModelBot couldn't start.",
+      headline: parsed?.headline ?? "BotHearth couldn't start.",
       detail: parsed?.detail ?? "The log has the details.",
       recoveryLabel: parsed?.recovery?.label,
       technical: parsed?.technical)

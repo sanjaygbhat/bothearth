@@ -57,7 +57,7 @@ final class NativeBridge: NSObject, WKScriptMessageHandler {
       // banners.
       guard let dict = args as? [String: Any] else { return }
       guard allowNotify() else { return }
-      let title = Self.clamp((dict["title"] as? String) ?? "ModelBot", 120)
+      let title = Self.clamp((dict["title"] as? String) ?? "BotHearth", 120)
       let bodyText = Self.clamp((dict["body"] as? String) ?? "", 300)
       let taskId = (dict["taskId"] as? String).flatMap(Self.validTaskRoute)
       let id = (dict["id"] as? String).map { Self.clamp($0, 120) }

@@ -62,6 +62,7 @@ export function createNtfySender(
       const body = buildNotifyBody(payload);
       const res = await fetchImpl(endpoint, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           Title: body.title,
           "Content-Type": "text/plain; charset=utf-8",
@@ -86,6 +87,7 @@ export function createWebhookSender(
       const body = buildNotifyBody(payload);
       const res = await fetchImpl(url, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: body.kind,
@@ -119,6 +121,7 @@ export function createTelegramSender(
       const text = `*${body.title}*\n${body.text}`.slice(0, 4000);
       const res = await fetchImpl(endpoint, {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: opts.chatId,
@@ -180,7 +183,7 @@ export function parseNotifyTarget(
   }
   if (u.startsWith("telegram:")) {
     const rest = u.slice("telegram:".length).replace(/^\/\//, "");
-    const idx = rest.indexOf(":");
+    const idx = rest.lastIndexOf(":");
     if (idx <= 0) {
       throw new Error(
         `notify: telegram URI must be telegram:<botToken>:<chatId>`,

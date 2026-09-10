@@ -101,7 +101,7 @@ export function acquiredControl(): string | null {
 export function leaseText(msLeft: number): string {
   return msLeft > 0
     ? `Control pauses in ${countdownText(msLeft)} unless you keep using it.`
-    : "Control goes back to the bot as soon as it can take it.";
+    : "Control has paused. Take control again when you’re ready; the bot is waiting.";
 }
 
 /**
@@ -125,8 +125,12 @@ const REASONS: Record<string, string> = {
 };
 
 export function takeoverReason(reason: string | undefined | null): string {
-  if (!reason) return "It hit a step it can’t do safely on its own.";
-  return REASONS[reason] ?? "It hit a step it can’t do safely on its own.";
+  const text = reason?.trim() ?? "";
+  if (Object.hasOwn(REASONS, text)) return REASONS[text]!;
+  // Unknown detector identifiers stay hidden. Prose is already bounded and redacted by the daemon.
+  return text && !/^[a-zA-Z0-9_.:-]+$/.test(text)
+    ? text.slice(0, 2000)
+    : "The bot needs your help with this step.";
 }
 
 /** Release can come back still-human when the page is still sensitive. */
@@ -202,9 +206,9 @@ export function renderNeedsYou(handlers: NeedsYouHandlers): {
   appendTextChild(
     root,
     "p",
-    `${takeoverReason(handlers.reason)} Take control, do that one step yourself, then return control and it carries on from there.`
-      + (handlers.onDecline ? " If it has that wrong, tell it to carry on without you." : ""),
+    takeoverReason(handlers.reason),
   );
+  appendTextChild(root, "p", "Take control, complete this step, then give control back.");
 
   const acts = appendTextChild(root, "div", "", "acts");
   const take = document.createElement("button");
@@ -248,7 +252,7 @@ export function renderObserving(): { root: HTMLElement } {
   appendTextChild(
     root,
     "p",
-    "Another window or device is using its computer. Your bot is paused until control goes back to it, and nothing you type here is sent.",
+    "Another window or device is using the computer. This window can’t operate it, but you can still message the bot.",
   );
   return { root };
 }

@@ -3,13 +3,13 @@ import { createRequire } from "node:module";
 const { chromium } = createRequire(new URL("../computer-server/package.json", import.meta.url))("playwright");
 const base = process.argv[2];
 assert(base && /^https?:\/\//.test(base), "Pass the built site's preview URL");
-const browser = await chromium.launch({ channel: process.env.CHROME_CHANNEL || "chrome", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   for (const width of [1440, 390]) {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
-    for (const path of ["", "security/", "about/"]) {
+    for (const path of ["", "about/"]) {
       const url = new URL(path, base).href;
       await page.goto(url);
       const link = page.locator('a[href$=".png"]').filter({ has: page.locator("img") }).first();

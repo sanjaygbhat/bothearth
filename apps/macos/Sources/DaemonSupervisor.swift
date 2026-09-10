@@ -158,14 +158,14 @@ final class DaemonSupervisor {
            detail: err.recoverySuggestion ?? "The log has the details.")
       return
     } catch {
-      fail(reason: "ModelBot couldn't start.", detail: String(describing: error))
+      fail(reason: "BotHearth couldn't start.", detail: String(describing: error))
       return
     }
 
     do {
       try prepareHomeIfNeeded(node: node, script: script)
     } catch {
-      fail(reason: "ModelBot couldn't set up its folder.",
+      fail(reason: "BotHearth couldn't set up its folder.",
            detail: "\(Paths.dataHome.path) — see the log for what went wrong.")
       return
     }
@@ -232,7 +232,7 @@ final class DaemonSupervisor {
       try proc.run()
     } catch {
       Log.shared.write("[shell] spawn failed: \(error)")
-      fail(reason: "ModelBot couldn't start Node.",
+      fail(reason: "BotHearth couldn't start Node.",
            detail: "Tried \(node.path).")
       return
     }
@@ -382,7 +382,7 @@ final class DaemonSupervisor {
         fail(reason: named.headline, detail: named.detail, recovery: named.recovery,
              technical: named.technical)
       } else {
-        fail(reason: "ModelBot stopped and couldn't get going again.",
+        fail(reason: "BotHearth stopped and couldn't get going again.",
              detail: "It tried \(maxRestarts) times. The log has the details.")
       }
       return
@@ -421,7 +421,7 @@ final class DaemonSupervisor {
     queue.async { [weak self] in
       guard let self else { return }
       guard let node = try? Paths.resolveNode(), let script = try? Paths.resolveDaemonScript() else {
-        self.fail(reason: "ModelBot couldn't find Node.", detail: "The log has the details.")
+        self.fail(reason: "BotHearth couldn't find Node.", detail: "The log has the details.")
         return
       }
       Log.shared.write("[shell] recovery: \(action.arguments.joined(separator: " "))")
@@ -480,12 +480,12 @@ struct StartupError {
       arguments: ["init", "--reset-vault-key", "--skip-images", "--force"],
       destructive: true,
       confirmBody:
-        "ModelBot will start a new key and set itself up again. Every site and service "
+        "BotHearth will start a new key and set itself up again. Every site and service "
         + "you had signed in to will need signing in again. Your old settings file is "
         + "kept alongside the new one, so nothing is deleted — it just can't be opened "
         + "without the old key."),
     "init": RecoveryAction(
-      label: "Set ModelBot up again",
+      label: "Set BotHearth up again",
       arguments: ["init", "--skip-images"],
       destructive: false,
       confirmBody: ""),
@@ -519,7 +519,7 @@ struct StartupError {
       let action = actions[name]
       let plain = PlainCause.humanise(cause)
       found = StartupError(
-        headline: "ModelBot couldn't start.",
+        headline: "BotHearth couldn't start.",
         detail: plain.text,
         technical: plain.technical,
         recovery: action)
@@ -551,7 +551,7 @@ enum PlainCause {
   /// The generic last resort. Specific enough to act on, and true of every
   /// failure that gets this far: the button beside it is the actual fix.
   static let fallback =
-    "ModelBot couldn't open its own setup on this Mac. Nothing of yours has been changed."
+    "BotHearth couldn't open its own setup on this Mac. Nothing of yours has been changed."
 
   static func humanise(_ cause: String) -> (text: String, technical: String?) {
     let sentences = cause

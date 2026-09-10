@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -72,6 +73,24 @@ describe("write_file happy path", () => {
   it("creates nested directories under out/", () => {
     const data = ok(writeFile({ path: "report/q3/summary.md", content: "# hi\n" }));
     assert.equal(data.path, join("out", "report", "q3", "summary.md"));
+  });
+
+  it("lets the operator and agent edit results without sharing them with other users", () => {
+    const originalMask = process.umask(0o077);
+    try {
+      ok(writeFile({ path: "report/q3/shared.md", content: "model draft" }));
+      for (const part of ["out", "out/report", "out/report/q3"]) {
+        const directory = statSync(join(workspace, part));
+        assert.equal(directory.mode & 0o7777, 0o2770, part);
+        assert.equal(directory.gid, statSync(join(workspace, "out")).gid, part);
+      }
+      const file = join(workspace, "out/report/q3/shared.md");
+      assert.equal(statSync(file).mode & 0o777, 0o660);
+      writeFileSync(file, "operator edit");
+      ok(writeFile({ path: "report/q3/shared.md", content: " and model follow-up", mode: "append" }));
+      assert.equal(readFileSync(file, "utf8"), "operator edit and model follow-up");
+      assert.equal(process.umask(), 0o077, "saving a result changed the process's private-file defaults");
+    } finally { process.umask(originalMask); }
   });
 
   it("accepts an absolute path that is already inside out/", () => {

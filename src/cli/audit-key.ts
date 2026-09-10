@@ -22,7 +22,7 @@ export async function resolveAuditVerifyKey(
   const raw = env.MODELBOT_AUDIT_KEY;
   if (raw) return Buffer.from(raw, "utf8");
 
-  const cfgPath = flags.config ?? configPath(modelbotHome(flags.home));
+  const cfgPath = flags.config ?? env.MODELBOT_CONFIG ?? configPath(modelbotHome(flags.home));
   const config = loadConfigDoc(cfgPath) as {
     vault: { path: string; keychain: "auto" | "passphrase" };
   };

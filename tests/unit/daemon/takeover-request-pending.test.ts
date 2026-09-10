@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
+import type { UiEvent } from "../../../src/types/contracts.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
 
 const TTL_SEC = 0.5;
@@ -26,14 +27,21 @@ test("an unanswered takeover has no deadline, and acquiring it starts one", asyn
   try {
     const { headers } = await bootstrapSession(daemon, "pending-boot");
     daemon.store.insertComputer({ id: "pending", name: "pending", capabilities: ["browser"], persistent: false, status: "running" });
+    const events: UiEvent[] = [];
+    const unsubscribe = daemon.events.subscribe((event) => events.push(event));
 
     const res = await fetch(`${daemon.baseUrl}/api/v1/takeover/request`, { method: "POST", headers,
-      body: JSON.stringify({ computer_id: "pending" }) });
+      body: JSON.stringify({ computer_id: "pending", reason: "Review the draft. Bearer PRIVATE_CANARY" + " ".repeat(2100) }) });
+    unsubscribe();
     assert.equal(res.status, 200);
     const { takeover } = (await res.json()) as { takeover: { takeover_id: string; state: string; expires_at: string | null } };
     assert.equal(takeover.state, "requested");
     assert.equal(takeover.expires_at, null, "the question the bot asked came back with a deadline");
     const id = takeover.takeover_id;
+    const requestedEvent = events.find((event) => event.type === "takeover.requested");
+    assert.equal(requestedEvent?.body.reason, "Review the draft. [redacted]");
+    assert.equal(requestedEvent?.body.takeover_id, id);
+    assert.doesNotMatch(JSON.stringify(requestedEvent), /PRIVATE_CANARY/);
     assert.equal(daemon.store.getTakeover(id)?.expires_at, null, "the takeover row was born with a deadline");
 
     // Four TTLs of silence. Nothing may expire a question nobody was asked yet.

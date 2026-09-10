@@ -83,14 +83,16 @@ if(process.argv[3]==='status')process.exit(1);
 writeFileSync(process.env.CODEX_HOME+'/pid',String(process.pid));
 console.log(${JSON.stringify(prompt)});setInterval(()=>{},1000);
 `);
-  const daemon = await startDaemon({ port:0, workspaceRoot:home, mcpToken:"synthetic", bootstrapToken:"synthetic-bootstrap",
-    codexLogin:{ codexHome:home,binary,loginMode:"device",timeoutMs:5000 } });
+  const daemon = await startDaemon({ port:0, workspaceRoot:home, mcpToken:"synthetic", bootstrapToken:"synthetic-bootstrap", headless: true,
+    codexLogin:{ codexHome:home,binary,timeoutMs:5000 }, claudeLogin: { codexHome:home, binary } });
   const other = daemon.store.createSession(60000,daemon.baseUrl);
   const api = async (session: typeof other,path:string,body?:unknown,method=body===undefined?"GET":"POST") => {
     const response = await fetch(daemon.baseUrl+path,{method,headers:{origin:daemon.baseUrl,cookie:`modelbot_session=${session.id}`,"x-csrf-token":session.csrf,"content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})});
     return {status:response.status,cache:response.headers.get("cache-control"),body:await response.json() as any};
   };
   try {
+    assert.equal((await api(other,"/api/v1/connection")).body.login_mode,"device");
+    assert.equal((await api(other,"/api/v1/connection?provider=claude")).body.login_mode,"terminal");
     for (const expiry of [false,true]) {
       for(let i=0;i<100&&(await api(other,"/api/v1/connection")).body.status==="signing_in";i++) await new Promise(r=>setTimeout(r,10));
       const owner = daemon.store.createSession(60000,daemon.baseUrl);

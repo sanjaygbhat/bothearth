@@ -29,14 +29,18 @@ describe("finishTask closes takeovers", () => {
     store.close();
   });
 
-  it("terminates a granted-and-held takeover too, not only a pending ask", () => {
+  for (const state of ["human", "resume_validating", "paused", "takeover_requested"] as const) it(`preserves ${state} control and its owner after cancellation`, () => {
     const store = new Store();
     store.insertComputer({ id: "c2", name: "c2", capabilities: ["browser"], persistent: false, status: "running" });
     const task = store.insertTask({ computer_id: "c2", goal: "checkout", max_steps: 5 });
-    store.insertTakeover({ id: "t2", computer_id: "c2", task_id: task.id, state: "human",
+    store.insertTakeover({ id: "t2", computer_id: "c2", task_id: task.id, state: "takeover_requested",
       expires_at: new Date(Date.now() + 60_000).toISOString() });
+    store.grantTakeoverTo("t2", "operator-device");
+    store.updateTakeoverState("t2", state);
     assert.equal(store.finishTask(task.id, "cancelled"), true);
-    assert.equal(store.getTakeover("t2")?.state, "terminated");
+    assert.equal(store.getTakeover("t2")?.state, state);
+    assert.equal(store.activeTakeoverForComputer("c2", "a-new-task")?.granted_to, "operator-device");
+    assert.equal(store.closeStaleTakeovers().closed, 0, "boot must not erase human control either");
     store.close();
   });
 
@@ -58,7 +62,7 @@ describe("finishTask closes takeovers", () => {
       expires_at: new Date(Date.now() + 60_000).toISOString() });
     assert.equal(store.finishTask(task.id, "failed"), true);
     assert.equal(store.finishTask(task.id, "failed"), false);
-    assert.equal(store.getTakeover("t4")?.state, "terminated");
+    assert.equal(store.getTakeover("t4")?.state, "human");
     store.close();
   });
 });
@@ -66,27 +70,27 @@ describe("finishTask closes takeovers", () => {
 describe("isTakeoverPending", () => {
   it("a pending ask with no expiry is pending forever", () => {
     assert.equal(isTakeoverPending({ id: "a", computer_id: "c", task_id: null,
-      state: "takeover_requested", expires_at: null, created_at: "", epoch: 0 }), true);
+      state: "takeover_requested", expires_at: null, created_at: "", epoch: 0, declined: 0, granted_to: null }), true);
   });
 
   it("a granted, unexpired lease is pending", () => {
     assert.equal(isTakeoverPending({ id: "a", computer_id: "c", task_id: null,
-      state: "human", expires_at: new Date(Date.now() + 60_000).toISOString(), created_at: "", epoch: 0 }), true);
+      state: "human", expires_at: new Date(Date.now() + 60_000).toISOString(), created_at: "", epoch: 0, declined: 0, granted_to: "operator" }), true);
   });
 
   it("a lapsed lease (state paused) is not pending", () => {
     assert.equal(isTakeoverPending({ id: "a", computer_id: "c", task_id: null,
-      state: "paused", expires_at: new Date(Date.now() - 1000).toISOString(), created_at: "", epoch: 0 }), false);
+      state: "paused", expires_at: new Date(Date.now() - 1000).toISOString(), created_at: "", epoch: 0, declined: 0, granted_to: "operator" }), false);
   });
 
   it("a granted lease whose clock already ran out is not pending, even before the sweep flips its state", () => {
     assert.equal(isTakeoverPending({ id: "a", computer_id: "c", task_id: null,
-      state: "human", expires_at: new Date(Date.now() - 1000).toISOString(), created_at: "", epoch: 0 }), false);
+      state: "human", expires_at: new Date(Date.now() - 1000).toISOString(), created_at: "", epoch: 0, declined: 0, granted_to: "operator" }), false);
   });
 
   it("terminated, or no row at all, is not pending", () => {
     assert.equal(isTakeoverPending({ id: "a", computer_id: "c", task_id: null,
-      state: "terminated", expires_at: null, created_at: "", epoch: 0 }), false);
+      state: "terminated", expires_at: null, created_at: "", epoch: 0, declined: 0, granted_to: null }), false);
     assert.equal(isTakeoverPending(undefined), false);
   });
 });
@@ -126,11 +130,11 @@ describe("a takeover another task left open", () => {
     reopened.close();
   });
 
-  it("closes a row whose task row is gone entirely", () => {
+  it("closes an unanswered row whose task row is gone entirely", () => {
     const store = new Store();
     store.insertComputer({ id: "shared", name: "shared", capabilities: ["browser"], persistent: false, status: "running" });
     store.insertTakeover({ id: "orphan", computer_id: "shared", task_id: "task_deleted",
-      state: "human", expires_at: new Date(Date.now() + 60_000).toISOString() });
+      state: "takeover_requested", expires_at: null });
     assert.equal(store.closeStaleTakeovers().closed, 1);
     assert.equal(store.getTakeover("orphan")?.state, "terminated");
     store.close();

@@ -179,7 +179,7 @@ test("a quota refusal blocks the home screen until the provider answers again", 
     bootstrapToken: "bootstrap",
     workspaceRoot: join(home, "workspace"),
     dataDir: join(home, "data"),
-    codexRunner: { binary, codexHome: home, model: "gpt-5.6-sol", runsRoot: join(home, "runs") },
+    codexRunner: { execution_location: "host", binary, codexHome: home, model: "gpt-5.6-sol", runsRoot: join(home, "runs") },
   });
   const { headers } = await bootstrapSession(daemon, "bootstrap");
   const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {

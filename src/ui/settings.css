@@ -232,6 +232,10 @@
   margin-top: var(--space-sm);
 }
 
+.set-licence-form {
+  margin-top: var(--space-md);
+}
+
 .set-state {
   display: flex;
   align-items: center;
@@ -308,6 +312,26 @@
   font-family: var(--font-mono);
   font-size: var(--text-body);
   letter-spacing: 0.04em;
+}
+
+.set-terminal {
+  margin-top: var(--space-md);
+}
+
+.set-terminal pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  border: var(--hairline) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.set-terminal button {
+  margin-top: var(--space-sm);
 }
 
 /* Disclosure — the only place a path or an identifier is ever shown. */

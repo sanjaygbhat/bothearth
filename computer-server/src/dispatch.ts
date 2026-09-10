@@ -61,7 +61,7 @@ function browserUnavailable(detail: string): Error {
   );
 }
 
-async function browser(state: ServerState, origins?: string[]): Promise<BrowserSession> {
+async function browser(state: ServerState, origins?: string[], allowPublicNavigation = false): Promise<BrowserSession> {
   if (state.role !== "browser") {
     throw Object.assign(new Error("browser role required"), { code: "E_CAPABILITY" });
   }
@@ -70,7 +70,7 @@ async function browser(state: ServerState, origins?: string[]): Promise<BrowserS
     // would crash stdio bootstrap before takeover.sync / shell_exec can run.
     const { BrowserSession } = await import("./browser/session.ts");
     const session = new BrowserSession();
-    if (origins) session.setNavigationPolicy(origins);
+    if (origins) session.setNavigationPolicy(origins, allowPublicNavigation);
     try {
       await session.start();
     } catch (err) {
@@ -84,7 +84,7 @@ async function browser(state: ServerState, origins?: string[]): Promise<BrowserS
       if (state.screencastSubscribed) state.onLiveFrame?.(h, jpeg);
     };
   }
-  if (origins) state.browser.setNavigationPolicy(origins);
+  if (origins) state.browser.setNavigationPolicy(origins, allowPublicNavigation);
   return state.browser;
 }
 
@@ -182,11 +182,12 @@ export async function dispatch(
         if (!(TOOL_NAMES as readonly string[]).includes(target) ||
             !(target.startsWith("browser_") || target.startsWith("computer_")) ||
             !Array.isArray(p.navigation_origins) ||
-            !p.navigation_origins.every((origin) => typeof origin === "string")) {
+            !p.navigation_origins.every((origin) => typeof origin === "string") ||
+            (p.allow_public_navigation !== undefined && typeof p.allow_public_navigation !== "boolean")) {
           return toolError("E_POLICY", "invalid navigation policy envelope");
         }
         // Serialized by rpc-loop: no other task can replace the policy between set and act.
-        const b = await browser(state, p.navigation_origins as string[]);
+        const b = await browser(state, p.navigation_origins as string[], p.allow_public_navigation === true);
         const before = b.consumeNavigationDenied();
         if (before) return toolError("E_POLICY", before.reason, { navigation_url: redactUrl(before.url), ...(before.initial_popup ? { initial_popup: true } : {}) });
         const result = await dispatch(state, { ...req, method: target, params: p.params })
@@ -226,6 +227,9 @@ export async function dispatch(
         if (!applyTakeoverTransition(state.takeover.state, "grant")) {
           return toolError("E_POLICY", "invalid takeover grant");
         }
+        // An early grant must initialize the browser before switching its mode.
+        // Otherwise the later viewer starts an agent stream during HUMAN control.
+        if (state.role === "browser") await browser(state);
         // Stop the old stream BEFORE switching control. Playwright 1.59 cannot
         // cancel a locator action (`{signal}` is dropped), so refuse new acts
         // immediately and await in-flight click/type before the grant ack.

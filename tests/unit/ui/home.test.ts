@@ -10,6 +10,9 @@ import {
   relativeTime,
 } from "../../../src/ui/home.ts";
 import type { RuntimeStatus } from "../../../src/ui/runtime.ts";
+import type { Connection } from "../../../src/ui/connection.ts";
+import { attention } from "../../../src/ui/native.ts";
+import { resetSession } from "../../../src/ui/session.ts";
 import { installDom, settle, type Dom, type FakeElement } from "./fake-dom.ts";
 
 /* -------------------------------------------------------------------------
@@ -65,8 +68,16 @@ const NO_AI = runtime({
 interface Server {
   runtime: RuntimeStatus;
   tasks: Array<Record<string, unknown>>;
+  takeovers?: Array<Record<string, unknown>>;
+  failTakeovers?: boolean;
   posts: Array<{ url: string; body: unknown }>;
   fail?: "network" | number;
+  session?: Record<string, unknown>;
+  failModels?: number;
+  modelChecks?: number;
+  connections?: Partial<Record<"codex" | "claude", Connection>>;
+  models?: { providers: Array<{ id: string; label: string; default_model: string; start_available?: boolean; connected?: boolean;
+    connection_status?: Connection["status"]; limit?: Connection["limit"]; models: Array<{ id: string; label: string }> }> };
 }
 
 /** Stands in for the daemon: three endpoints, and a record of what was posted. */
@@ -76,7 +87,7 @@ function serve(server: Server) {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (url === "/api/v1/session") {
-      return Response.json({ ok: true, csrf: "t", model: "claude-opus-4-5", execution_mode: "claude" });
+      return Response.json({ ok: true, csrf: "t", model: "claude-opus-4-5", execution_mode: "claude", ...server.session });
     }
     if (url === "/api/v1/runtime") {
       if (server.fail === "network") throw new TypeError("Failed to fetch");
@@ -85,8 +96,21 @@ function serve(server: Server) {
       }
       return Response.json(server.runtime);
     }
+    if (url === "/api/v1/models") {
+      server.modelChecks = (server.modelChecks ?? 0) + 1;
+      if (server.failModels) return Response.json({ message: "Model check unavailable" }, { status: server.failModels });
+      if (server.models) return Response.json(server.models);
+    }
+    if (url.startsWith("/api/v1/connection?provider=")) {
+      const provider = url.split("=")[1] as "codex" | "claude";
+      if (server.connections?.[provider]) return Response.json(server.connections[provider]);
+    }
     if (url === "/api/v1/tasks" && method === "GET") {
       return Response.json({ tasks: server.tasks });
+    }
+    if (url === "/api/v1/takeovers") {
+      if (server.failTakeovers) return Response.json({ error: "unavailable" }, { status: 503 });
+      return Response.json({ takeovers: server.takeovers ?? [] });
     }
     if (url === "/api/v1/tasks" && method === "POST") {
       server.posts.push({ url, body: JSON.parse(String(init?.body ?? "null")) });
@@ -98,6 +122,348 @@ function serve(server: Server) {
     globalThis.fetch = saved;
   };
 }
+
+const MODEL_CATALOG = {
+  providers: [
+    { id: "codex", label: "Codex", default_model: "gpt-6-astra", connected: true, start_available: true,
+      models: [{ id: "gpt-6-astra", label: "GPT-6 Astra" }] },
+    { id: "claude", label: "Claude", default_model: "claude-fable-5-1", connected: true, start_available: true,
+      models: [{ id: "claude-fable-5-1", label: "Fable 5.1" }, { id: "claude-opus-5", label: "Opus 5" }] },
+  ],
+};
+
+describe("task model choices", () => {
+  it("routes a required licence to Settings and refreshes without starting a queued task", async () => {
+    const server: Server = { runtime: runtime({ task_start_available: false, blockers: [{
+      id: "licence_required", title: "Add your licence key", detail: "Get your key from your account.",
+      action: { kind: "open_settings", url: "#/settings/licence" },
+    }] }), tasks: [], posts: [], models: MODEL_CATALOG };
+    const t = await mount(server);
+    try {
+      textarea(t.dom).value = "Read the public documentation";
+      textarea(t.dom).fire("input");
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      assert.match(t.dom.root.textContent, /Add your licence key to start/);
+      const action = t.dom.root.querySelector(".blocker-actions")!.querySelector("button")!;
+      action.click();
+      assert.equal(t.dom.hash(), "#/settings/licence");
+      startButton(t.dom).click();
+      assert.deepEqual(server.posts, []);
+      server.runtime = runtime();
+      window.dispatchEvent(new Event("bothearth:licence-changed"));
+      await settle(8);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
+      assert.equal(textarea(t.dom).value, "Read the public documentation");
+      assert.deepEqual(server.posts, [], "activation never substitutes for Start task");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal(server.posts.length, 1);
+    } finally { t.teardown(); }
+  });
+
+  it("keeps existing configured-model installations on their current runner", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG,
+      session: { execution_mode: "standalone", model: "configured-provider/exact-model" },
+    };
+    const t = await mount(server);
+    try {
+      assert.equal(t.dom.root.querySelector("#home-provider")!.value, "standalone");
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "configured-provider/exact-model");
+      assert.equal(t.dom.root.querySelector("#home-model")!.disabled, true);
+      assert.equal(t.dom.root.querySelector("#home-orchestrator")!.disabled, true);
+      textarea(t.dom).value = "Read a public page";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.deepEqual(server.posts[0]!.body, { goal: "Read a public page", capabilities: ["browser"] });
+    } finally { t.teardown(); }
+  });
+
+  it("refreshes a changed configured default while preserving explicit native choices", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG,
+      session: { execution_mode: "standalone", model: "configured-old" },
+    };
+    const t = await mount(server);
+    try {
+      server.session = { execution_mode: "codex", model: "gpt-6-astra" };
+      window.dispatchEvent(new Event("focus"));
+      await settle(8);
+      const provider = t.dom.root.querySelector("#home-provider")!;
+      assert.equal(provider.value, "codex");
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "gpt-6-astra");
+      assert.equal(provider.children.some(option => option.value === "standalone"), false);
+      provider.value = "claude";
+      provider.fire("change");
+      window.dispatchEvent(new Event("focus"));
+      await settle(8);
+      assert.equal(provider.value, "claude");
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "claude-fable-5-1");
+      textarea(t.dom).value = "Read the public documentation";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal((server.posts[0]!.body as Record<string, unknown>).adapter, "claude");
+    } finally { t.teardown(); }
+  });
+
+  it("keeps exact choices and the draft across a failed model check, then retries before posting", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG };
+    const t = await mount(server);
+    try {
+      const model = t.dom.root.querySelector("#home-model")!;
+      model.value = "__custom__";
+      model.fire("change");
+      const custom = t.dom.root.querySelector("#home-custom-model")!;
+      const exactId = `provider/${"a".repeat(480)}@v1+long[context]`;
+      custom.value = exactId;
+      custom.fire("input");
+      textarea(t.dom).value = "Read the documentation";
+      textarea(t.dom).fire("input");
+      server.failModels = 503;
+      window.dispatchEvent(new Event("focus"));
+      await settle(8);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      startButton(t.dom).click();
+      await settle(2);
+      assert.equal(server.posts.length, 0);
+      assert.equal(custom.value, exactId);
+      assert.equal(textarea(t.dom).value, "Read the documentation");
+      assert.match(t.dom.root.textContent, /Retry before starting/);
+      server.failModels = undefined;
+      t.dom.root.querySelector(".home-model-retry")!.click();
+      await settle(6);
+      assert.equal(model.value, "__custom__");
+      assert.equal(custom.value, exactId);
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal((server.posts[0]!.body as Record<string, unknown>).model, exactId);
+    } finally { t.teardown(); }
+  });
+
+  it("explains an older app's connected-model fallback without sending ignored choices", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const t = await mount(server);
+    try {
+      assert.match(t.dom.root.querySelector(".home-model-hint")!.textContent, /connected model \(claude-opus-4-5\).*app update/);
+      assert.equal(t.dom.root.querySelector(".home-model-fields")!.disabled, true);
+      textarea(t.dom).value = "Read a public page";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.deepEqual(server.posts[0]!.body, { goal: "Read a public page", capabilities: ["browser"] });
+    } finally { t.teardown(); }
+  });
+
+  it("uses the catalog for a chosen provider and starts each new task with Use subagents unchecked", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG };
+    const t = await mount(server);
+    try {
+      const provider = t.dom.root.querySelector("#home-provider")!;
+      const model = t.dom.root.querySelector("#home-model")!;
+      const orchestrator = t.dom.root.querySelector("#home-orchestrator")!;
+      assert.equal((orchestrator as unknown as HTMLInputElement).checked, false);
+      assert.equal((orchestrator as unknown as HTMLInputElement).type, "checkbox");
+      assert.equal(orchestrator.getAttribute("role"), null);
+      assert.equal(t.dom.root.querySelector(".home-orchestrator")!.textContent, "Use subagents");
+      assert.equal(t.dom.root.querySelector("#home-executor-options")!.hidden, true);
+      provider.value = "codex";
+      provider.fire("change");
+      assert.equal(model.value, "gpt-6-astra");
+      const reasoning = t.dom.root.querySelector("#home-reasoning")!;
+      assert.equal(reasoning.value, "medium");
+      reasoning.value = "high";
+      const box = textarea(t.dom);
+      box.value = "Compare two public sites";
+      box.fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.deepEqual(server.posts[0]!.body, { goal: box.value || "Compare two public sites", capabilities: ["browser"],
+        adapter: "codex", model: "gpt-6-astra", execution_mode: "executor", reasoning_effort: "high" });
+    } finally { t.teardown(); }
+  });
+
+  it("sends explicit subagent choices only when Use subagents is checked", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG };
+    const t = await mount(server);
+    try {
+      const orchestrator = t.dom.root.querySelector("#home-orchestrator")!;
+      (orchestrator as unknown as HTMLInputElement).checked = true;
+      orchestrator.fire("change");
+      assert.equal((orchestrator as unknown as HTMLInputElement).checked, true);
+      assert.equal(t.dom.root.querySelector("#home-executor-options")!.hidden, false);
+      const provider = t.dom.root.querySelector("#executor-provider")!;
+      provider.value = "codex";
+      provider.fire("change");
+      const model = t.dom.root.querySelector("#executor-model")!;
+      model.value = "__custom__";
+      model.fire("change");
+      const custom = t.dom.root.querySelector("#executor-custom-model")!;
+      custom.value = "custom-supported-model";
+      custom.fire("input");
+      const box = textarea(t.dom);
+      box.value = "Check the public documentation";
+      box.fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      const body = server.posts[0]!.body as Record<string, unknown>;
+      assert.equal(body.execution_mode, "orchestrator");
+      assert.deepEqual(body.executor, { adapter: "codex", model: "custom-supported-model" });
+      assert.equal(body.adapter, "claude");
+      assert.equal(body.model, "claude-opus-4-5", "keep the configured model unless the person changes it");
+    } finally { t.teardown(); }
+    const next = await mount({ runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG });
+    try { assert.equal((next.dom.root.querySelector("#home-orchestrator") as unknown as HTMLInputElement).checked, false); }
+    finally { next.teardown(); }
+  });
+
+  it("uses selected-provider readiness and rejects an invalid custom ID before posting", async () => {
+    const server: Server = { runtime: NO_AI, tasks: [], posts: [], models: MODEL_CATALOG };
+    const t = await mount(server);
+    try {
+      const provider = t.dom.root.querySelector("#home-provider")!;
+      provider.value = "codex";
+      provider.fire("change");
+      const model = t.dom.root.querySelector("#home-model")!;
+      model.value = "__custom__";
+      model.fire("change");
+      const custom = t.dom.root.querySelector("#home-custom-model")!;
+      custom.value = "bad model with spaces";
+      custom.fire("input");
+      const box = textarea(t.dom);
+      box.value = "Compare public pages";
+      box.fire("input");
+      startButton(t.dom).click();
+      await settle(2);
+      assert.equal(server.posts.length, 0);
+      assert.match(t.dom.root.textContent, /Enter an exact model ID/);
+      custom.value = "gpt-6-astra";
+      custom.fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal(server.posts.length, 1, "the blocked global provider does not block the selected signed-in one");
+    } finally { t.teardown(); }
+  });
+
+  it("checks the chosen subagent connection only when Use subagents is checked", async () => {
+    const models = structuredClone(MODEL_CATALOG);
+    models.providers[1]!.connected = false;
+    models.providers[1]!.start_available = false;
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models };
+    const t = await mount(server);
+    try {
+      const provider = t.dom.root.querySelector("#home-provider")!;
+      provider.value = "codex";
+      provider.fire("change");
+      const executor = t.dom.root.querySelector("#executor-provider")!;
+      executor.value = "claude";
+      executor.fire("change");
+      const orchestrator = t.dom.root.querySelector("#home-orchestrator")!;
+      (orchestrator as unknown as HTMLInputElement).checked = true;
+      orchestrator.fire("change");
+      textarea(t.dom).value = "Review public pages";
+      textarea(t.dom).fire("input");
+      assert.match(t.dom.root.textContent, /Check the Claude connection/);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      (orchestrator as unknown as HTMLInputElement).checked = false;
+      orchestrator.fire("change");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal((server.posts[0]!.body as Record<string, unknown>).execution_mode, "executor");
+      assert.equal((server.posts[0]!.body as Record<string, unknown>).executor, undefined);
+    } finally { t.teardown(); }
+  });
+
+  it("keeps the detected model visible and guides signed-out accounts through Settings without queuing a task", async () => {
+    const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
+    Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "signed_out" });
+    const server: Server = { runtime: NO_AI, tasks: [], posts: [], models,
+      session: { execution_mode: "codex", model: "gpt-6-astra" } };
+    const t = await mount(server, { pill: true });
+    try {
+      const pill = t.dom.document.getElementById("tb-pill")!;
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "gpt-6-astra");
+      assert.equal(pill.querySelector(".label")!.textContent, "Codex · GPT-6 Astra");
+      assert.match(pill.getAttribute("aria-label") ?? "", /Selected model: gpt-6-astra.*sign-in required/);
+      assert.doesNotMatch(pill.textContent, /No model connected|on your plan/);
+      assert.match(t.dom.root.textContent, /Sign in to Codex.*Your model is selected/);
+      const signIn = t.dom.root.querySelector(".blocker-actions")!.querySelector("button")!;
+      assert.equal(signIn.textContent, "Sign in");
+      signIn.click();
+      assert.equal(t.dom.hash(), "#/settings/ai?pick=codex");
+      textarea(t.dom).value = "Read this public site";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      assert.equal(startButton(t.dom).textContent, "Start task");
+
+      models.providers[0]!.connection_status = "signing_in";
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await settle(8);
+      assert.match(t.dom.root.textContent, /Finish signing in to Codex/);
+      assert.match(pill.textContent, /finish sign-in/);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+
+      Object.assign(models.providers[0]!, { connected: true, start_available: true, connection_status: "connected" });
+      server.runtime = runtime();
+      location.hash = "#/";
+      await settle(8);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
+      assert.equal(textarea(t.dom).value, "Read this public site");
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "gpt-6-astra");
+      assert.match(pill.textContent, /on your plan/);
+      assert.deepEqual(server.posts, [], "finishing sign-in does not silently start the draft");
+    } finally { t.teardown(); }
+  });
+
+  it("refreshes selected-provider authentication automatically even while the global provider is ready", async () => {
+    const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
+    Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "signed_out" });
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models };
+    const t = await mount(server);
+    try {
+      const provider = t.dom.root.querySelector("#home-provider")!;
+      provider.value = "codex";
+      provider.fire("change");
+      textarea(t.dom).value = "Check a public page";
+      textarea(t.dom).fire("input");
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      await settle(8);
+      const before = server.modelChecks!;
+      // The official CLI signs in externally. No focus, reload or Settings event.
+      Object.assign(models.providers[0]!, { connected: true, start_available: true, connection_status: "signed_in" });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await settle(8);
+      assert.ok(server.modelChecks! > before, "selected readiness remains in the existing poll loop");
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
+      assert.equal(provider.value, "codex");
+      assert.equal(t.dom.root.querySelector("#home-model")!.value, "gpt-6-astra");
+      assert.deepEqual(server.posts, []);
+
+      // Ready polls stop; returning to the tab must still notice a later sign-out.
+      Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "signed_out" });
+      window.dispatchEvent(new Event("focus"));
+      await settle(8);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      assert.match(t.dom.root.textContent, /Sign in to Codex/);
+    } finally { t.teardown(); }
+  });
+
+  it("separates a provider limit from sign-in and uses connection metadata on older catalogs", async () => {
+    const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
+    Object.assign(models.providers[0]!, { start_available: false });
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models,
+      session: { execution_mode: "codex", model: "gpt-6-astra" },
+      connections: { codex: { status: "connected", provider: "codex", model: "gpt-6-astra",
+        limit: { reason: "quota_exhausted", resets_at: null } } } };
+    const t = await mount(server, { pill: true });
+    try {
+      const pill = t.dom.document.getElementById("tb-pill")!;
+      assert.match(pill.textContent, /Codex · GPT-6 Astra.*plan limit reached/);
+      assert.match(t.dom.root.textContent, /Codex limit reached.*Codex is signed in/);
+      assert.doesNotMatch(t.dom.root.textContent, /Sign in to Codex/);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+    } finally { t.teardown(); }
+  });
+});
 
 function textarea(dom: Dom): FakeElement {
   const found = dom.all().find((node) => node.tagName === "TEXTAREA");
@@ -113,8 +479,19 @@ function startButton(dom: Dom): FakeElement {
   return button;
 }
 
-async function mount(server: Server, options: { hash?: string } = {}) {
+async function mount(server: Server, options: { hash?: string; pill?: boolean } = {}) {
+  resetSession();
   const dom = installDom(options);
+  if (options.pill) {
+    const pill = dom.document.createElement("button");
+    pill.id = "tb-pill";
+    for (const cls of ["dot", "label", "sub"]) {
+      const span = dom.document.createElement("span");
+      span.className = cls;
+      pill.append(span);
+    }
+    dom.document.body.append(pill);
+  }
   const restoreFetch = serve(server);
   const view = createHomeView({ activeMs: 2, hiddenMs: 4 });
   view.mount(dom.root as unknown as HTMLElement);
@@ -135,7 +512,7 @@ async function mount(server: Server, options: { hash?: string } = {}) {
  * ---------------------------------------------------------------------- */
 
 describe("home — the words on the screen", () => {
-  it("uses only the five status words ux-spec §2.1 allows", () => {
+  it("names task outcomes and current control without guessing the holder", () => {
     assert.deepEqual(recentStatus("running"), { word: "Working", tone: "run" });
     assert.deepEqual(recentStatus("pending_approval"), { word: "Waiting for you", tone: "warn" });
     assert.deepEqual(recentStatus("takeover_requested"), { word: "Waiting for you", tone: "warn" });
@@ -143,6 +520,11 @@ describe("home — the words on the screen", () => {
     assert.deepEqual(recentStatus("completed"), { word: "Done", tone: "ok" });
     assert.deepEqual(recentStatus("cancelled"), { word: "You stopped it", tone: "neutral" });
     assert.deepEqual(recentStatus("failed"), { word: "Couldn’t finish", tone: "danger" });
+    assert.deepEqual(recentStatus("running", "human"), { word: "Human control", tone: "warn" });
+    assert.deepEqual(recentStatus("running", "paused"), { word: "Control paused", tone: "warn" });
+    assert.deepEqual(recentStatus("running", "resume_validating"), { word: "Returning control", tone: "run" });
+    assert.deepEqual(recentStatus("running", "takeover_requested"), { word: "Waiting for you", tone: "warn" });
+    assert.deepEqual(recentStatus("completed", "human"), { word: "Done", tone: "ok" });
   });
 
   it("carries no jargon anywhere a person can read it", () => {
@@ -272,7 +654,7 @@ describe("home — the start button always states its reason", () => {
       armed: false,
       submitting: false,
     });
-    assert.equal(state.hint, "Pick an AI above and this is ready to go");
+      assert.equal(state.hint, "Connect a model above to start");
   });
 
   it("offers a way out of a queued start", () => {
@@ -347,6 +729,32 @@ describe("home — on arrival", () => {
 });
 
 describe("home — starting a task", () => {
+  it("requires a real link for a starter and preserves a draft while choosing one", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const m = await mount(server);
+    try {
+      const box = textarea(m.dom);
+      box.value = "Focus on customers who run a small business.";
+      m.dom.findAll(".example")[0]!.click();
+      assert.match(box.value, /^Focus on customers/);
+      assert.equal(box.value.slice(box.selectionStart, box.selectionEnd), "[website URL]");
+      startButton(m.dom).click();
+      await settle();
+      assert.equal(server.posts.length, 0);
+      assert.match(m.dom.find(".taskbox-message")!.textContent, /Replace the selected placeholder/);
+      box.value = box.value.replace("[website URL]", "not-a-link");
+      startButton(m.dom).click();
+      await settle();
+      assert.equal(server.posts.length, 0);
+      assert.match(m.dom.find(".taskbox-message")!.textContent, /https:\/\//);
+      box.value = box.value.replace("not-a-link", "https://example.org");
+      startButton(m.dom).click();
+      await settle();
+      assert.equal(server.posts.length, 1);
+      assert.match(JSON.stringify(server.posts[0]!.body), /https:\/\/example.org/);
+    } finally { m.teardown(); }
+  });
+
   it("posts exactly once on ⌘↩ and goes to the new task", async () => {
     const server: Server = { runtime: runtime(), tasks: [], posts: [] };
     const m = await mount(server);
@@ -430,7 +838,7 @@ describe("home — a blocker never takes the box away", () => {
     try {
       const card = m.dom.find(".blocker");
       assert.ok(card, "the blocker card is on the page");
-      assert.match(card.textContent, /Your bot needs its own computer/);
+      assert.match(card.textContent, /Install Docker to continue/);
 
       const box = textarea(m.dom);
       assert.ok(box, "the task box is still here");
@@ -600,6 +1008,39 @@ describe("home — Recent", () => {
       m.teardown();
     }
   });
+
+  it("loads and refreshes human control without treating an old task's control as this task's", async () => {
+    const server: Server = {
+      runtime: runtime(), tasks, posts: [],
+      takeovers: [
+        { id: "old", task_id: "old_task", computer_id: "c", state: "human" },
+        { id: "tk1", task_id: "t1", computer_id: "c", state: "human" },
+      ],
+    };
+    const m = await mount(server);
+    try {
+      assert.match(m.dom.findAll(".recent-row")[0]!.textContent, /Human control/);
+      assert.match(m.dom.findAll(".recent-row")[1]!.textContent, /Done/);
+      for (const [state, expected] of [["paused", "Control paused"], ["resume_validating", "Returning control"], ["agent", "Working"]]) {
+        server.takeovers![1]!.state = state;
+        attention.sync([]);
+        await settle(8);
+        assert.ok(m.dom.findAll(".recent-row")[0]!.textContent.includes(expected!), `state ${state}`);
+      }
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("keeps recent tasks readable without claiming the bot is working when control cannot be read", async () => {
+    const m = await mount({ runtime: runtime(), tasks, posts: [], failTakeovers: true });
+    try {
+      assert.match(m.dom.findAll(".recent-row")[0]!.textContent, /Active · 2 min/);
+      assert.match(m.dom.findAll(".recent-row")[1]!.textContent, /Done/);
+    } finally {
+      m.teardown();
+    }
+  });
 });
 
 describe("home — when ModelBot goes away", () => {
@@ -617,8 +1058,8 @@ describe("home — when ModelBot goes away", () => {
 
       const card = m.dom.find(".blocker-offline");
       assert.ok(card, "the recovery card is up");
-      assert.match(card.textContent, /ModelBot stopped unexpectedly\./);
-      assert.match(card.textContent, /It restarts by itself/);
+      assert.match(card.textContent, /BotHearth stopped unexpectedly\./);
+      assert.match(card.textContent, /Your draft is saved/);
       assert.doesNotMatch(card.textContent, /you (broke|did)/i);
       assert.ok(m.dom.findAll(".blocker-offline .btn").some((b) => b.textContent === "Try again"));
       assert.ok(

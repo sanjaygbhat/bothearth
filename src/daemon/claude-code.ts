@@ -4,7 +4,8 @@ export function claudeEnvironment(configDir: string): NodeJS.ProcessEnv {
   const daemonOnly = new Set(["CREDENTIALS_DIRECTORY", "NOTIFY_SOCKET", "LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES"]);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MODELBOT_") && !daemonOnly.has(key)));
   // Even the default directory spelled explicitly changes native keychain identity on macOS.
-  return { ...env, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}), ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
+  return { ...env, PATH: [dirname(process.execPath), env.PATH].filter(Boolean).join(delimiter),
+    ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}), ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
 }
 
 export function claudeTaskArgs(model: string, url: string, resume?: string): string[] {
@@ -30,3 +31,4 @@ export function claudeEvent(event: any): any {
     : { type: "turn.completed" };
   return {};
 }
+import { delimiter, dirname } from "node:path";

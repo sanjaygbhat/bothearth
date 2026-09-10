@@ -138,7 +138,7 @@ test("revoking one phone touches only that phone", async () => {
     assert.ok(world.mutations.includes("/api/v1/session/devices/phone"));
     assert.equal(world.mutations.includes("/api/v1/session/logout"), false);
     assert.equal(world.devices.length, 1);
-    assert.match(all(pane).map((n) => n.textContent).join(" "), /can no longer reach ModelBot/);
+    assert.match(all(pane).map((n) => n.textContent).join(" "), /can no longer reach BotHearth/);
   } finally {
     dispose();
     dom.restore();

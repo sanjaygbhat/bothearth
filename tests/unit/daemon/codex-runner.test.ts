@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
@@ -8,7 +8,7 @@ import { until } from "../../helpers/until.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
 import { fakeCli } from "../../helpers/fake-cli.ts";
 
-async function fixture(mode: string, publicOrigin?: string, maxRuntimeSec = 0) {
+async function fixture(mode: string, publicOrigin?: string, maxRuntimeSec = 0, takeoverTtlSec?: number) {
   const { home: root, binary } = fakeCli("mb-codex-runner", () => `import assert from 'node:assert/strict';
 import { writeFileSync, renameSync } from 'node:fs';
 import { Client } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/client/index.js"))};
@@ -21,11 +21,15 @@ const token=process.env.MODELBOT_SCOPED_TOKEN;
 assert.ok(token); assert.equal(argv.join(' ').includes(token),false);
 assert.equal(process.env.MODELBOT_VAULT_KEY_HEX,undefined); assert.equal(process.env.MODELBOT_MCP_TOKEN,undefined);
 assert.ok(argv.includes('--ignore-user-config')); assert.ok(argv.includes('features.shell_tool=false'));
-assert.ok(argv.includes('features.multi_agent=true')); assert.ok(argv.includes('web_search="disabled"'));
+assert.ok(argv.includes('features.multi_agent=false')); assert.ok(argv.includes('model_reasoning_effort="medium"'));
+assert.ok(argv.includes('web_search="disabled"'));
 const report={url,token,pid:process.pid,argv};
 const publish=()=>{writeFileSync('scope.tmp',JSON.stringify(report),{mode:0o600});renameSync('scope.tmp','scope.json');};
 publish();
 let input=''; for await (const chunk of process.stdin) input+=chunk;
+assert.ok(input.startsWith('Execute this task directly in executor mode. Do not spawn or delegate to subagents.'));
+assert.equal(input.includes('Use your native subagents'),false);
+assert.equal(input.includes('Exit without done is not successful completion'),false);
 emit({type:'thread.started',thread_id:'00000000-0000-0000-0000-000000000001'});
 const client=new Client({name:'runner-fixture',version:'1'});
 await client.connect(new StreamableHTTPClientTransport(new URL(url),{requestInit:{headers:{authorization:'Bearer '+token}}}));
@@ -41,7 +45,26 @@ if(mode==='hold') {
  process.on('SIGTERM',()=>{emit({type:'item.completed',item:{type:'agent_message',text:'late after cancel'}});process.exit(0);});
  setInterval(()=>{},1000);
 } else {
- if(mode==='chat'&&!argv.includes('resume')) {
+ if(mode==='wait-idle'&&!argv.includes('resume')) {
+  emit({type:'item.completed',item:{type:'agent_message',text:'The conversation is open.'}});
+ } else if(mode.startsWith('question')&&!argv.includes('resume')) {
+  emit({type:'item.completed',item:{type:'agent_message',text:'Which public website should I audit?'}});
+  if(mode==='question-queued') await new Promise(r=>setTimeout(r,500));
+ } else if(mode.startsWith('question')) {
+  assert.ok(input.includes('Use the public website'));
+  assert.equal(input.includes('STILL pending'),false);
+  assert.equal((await client.callTool({name:'browser_snapshot',arguments:{}})).isError,false);
+  report.continuedTools=true;publish();
+  assert.equal((await client.callTool({name:'done',arguments:{status:'success',summary:'Continued on the same conversation'}})).isError,false);
+ } else if(mode==='instruction') {
+  report.chatReady=true;publish();await new Promise(r=>setTimeout(r,500));
+  const message=await client.callTool({name:'takeover_status',arguments:{}});
+  assert.equal(message.isError,true);assert.ok(message.content[0].text.includes('Keep going'));
+  emit({type:'item.completed',item:{type:'agent_message',text:'I will use that direction and continue.'}});
+  assert.equal((await client.callTool({name:'browser_snapshot',arguments:{}})).isError,false);
+  report.continuedTools=true;publish();
+  assert.equal((await client.callTool({name:'done',arguments:{status:'success',summary:'Followed the direction without another permission'}})).isError,false);
+ } else if(mode==='chat'&&!argv.includes('resume')) {
   report.chatReady=true;publish();await new Promise(r=>setTimeout(r,500));
   const message=await client.callTool({name:'takeover_status',arguments:{}});
   assert.equal(message.isError,true);assert.ok(message.content[0].text.includes('Just answer'));
@@ -70,11 +93,16 @@ if(mode==='hold') {
 }
 `, "codex-fixture.mjs");
   const runsRoot = join(root, "runs");
+  const oldToolPath = process.env.MODELBOT_TOOL_PATH;
+  if (mode === "complete-service-path") {
+    symlinkSync(binary, join(root, "codex"));
+    process.env.MODELBOT_TOOL_PATH = root;
+  }
   const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER, oldVault = process.env.MODELBOT_VAULT_KEY_HEX;
   process.env.MODELBOT_TEST_FAKE_COMPUTER = "1"; process.env.MODELBOT_VAULT_KEY_HEX = "daemon-only-canary";
   const daemon = await startDaemon({ port: 0, mcpToken: "daemon-mcp", bootstrapToken: "bootstrap",
-    publicOrigin, workspaceRoot: join(root, "workspace"), maxRuntimeSec,
-    codexRunner: { binary, codexHome: root, model: mode, runsRoot } });
+    publicOrigin, workspaceRoot: join(root, "workspace"), maxRuntimeSec, takeoverTtlSec,
+    codexRunner: { execution_location: "host", binary: mode === "complete-service-path" ? undefined : binary, codexHome: root, model: mode, runsRoot } });
   const bootstrap = publicOrigin ? new URL(daemon.store.createPairing(daemon.baseUrl)!.url).hash.slice(11) : "bootstrap";
   const { headers } = await bootstrapSession(daemon, bootstrap);
   const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, { headers,
@@ -90,6 +118,7 @@ if(mode==='hold') {
     .filter(existsSync).map((file) => JSON.parse(readFileSync(file, "utf8"))) : [];
   return { daemon, api, start, scopes, headers, async close() {
     await daemon.close();
+    if (oldToolPath === undefined) delete process.env.MODELBOT_TOOL_PATH; else process.env.MODELBOT_TOOL_PATH = oldToolPath;
     if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER; else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
     if (oldVault === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX; else process.env.MODELBOT_VAULT_KEY_HEX = oldVault;
   } };
@@ -107,12 +136,79 @@ test("scoped Codex completion works with multiple computers and revokes its toke
   } finally { await f.close(); }
 });
 
-test("exit zero without canonical done is a failed task", async () => {
-  const f = await fixture("no-done");
+test("a clean first-turn question stays open and its answer continues tools on the same thread", async () => {
+  const f = await fixture("question");
   try {
     const task = await f.start();
-    await until(() => f.daemon.store.getTask(task.id)?.status === "failed", "exit zero was mistaken for completion");
+    await until(async () => (await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message,
+      "clean question did not leave the conversation open");
+    assert.equal(f.daemon.store.getTask(task.id)?.status, "running");
+    assert.ok(f.daemon.store.taskTranscript(task.id).some(message => message.content === "Which public website should I audit?"));
+    const first = f.scopes()[0];
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.equal(f.scopes()[0].pid, first.pid, "the runner must not prompt itself again");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Use the public website" })).status, 202);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "answer did not continue the task");
+    assert.ok(f.scopes()[0].argv.includes("resume"));
+    assert.ok(f.scopes()[0].argv.includes("00000000-0000-0000-0000-000000000001"));
+    assert.equal(f.scopes()[0].continuedTools, true);
   } finally { await f.close(); }
+});
+
+test("native tools keep running after a mid-task instruction without another permission", async () => {
+  const f = await fixture("instruction");
+  try {
+    const task = await f.start();
+    await until(() => f.scopes()[0]?.chatReady, "runner not ready");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Keep going; check the current page." })).status, 202);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "instruction caused an unnecessary wait");
+    assert.equal(f.scopes()[0].continuedTools, true);
+    assert.equal(f.scopes()[0].argv.includes("resume"), false, "the native turn itself should continue its tools");
+    assert.equal(f.daemon.store.activeTakeoverForComputer("selected", task.id), undefined);
+  } finally { await f.close(); }
+});
+
+test("a reply queued before native turn completion resumes without another message", async () => {
+  const f = await fixture("question-queued");
+  try {
+    const task = await f.start();
+    await until(() => f.daemon.store.taskTranscript(task.id).some(message => message.content === "Which public website should I audit?"),
+      "native question was not displayed");
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Use the public website" })).status, 202);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "queued reply was stranded");
+    assert.equal(f.scopes()[0].continuedTools, true);
+    assert.equal(f.daemon.store.pendingMessages(task.id).length, 0);
+  } finally { await f.close(); }
+});
+
+test("cancelling an idle native conversation never prompts it again", async () => {
+  const f = await fixture("question");
+  try {
+    const task = await f.start();
+    await until(async () => (await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message,
+      "question did not wait");
+    const firstPid = f.scopes()[0].pid;
+    assert.equal((await f.api(`/api/v1/tasks/${task.id}/cancel`, {})).status, 200);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.equal(f.daemon.store.getTask(task.id)?.status, "cancelled");
+    assert.equal(f.scopes()[0].pid, firstPid);
+    assert.equal(f.scopes()[0].argv.includes("resume"), false);
+  } finally { await f.close(); }
+});
+
+test("native login and tasks use the daemon's Node when a service has no Node on PATH", async () => {
+  const previous = process.env.PATH;
+  process.env.PATH = "/no-service-node";
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  try {
+    f = await fixture("complete-service-path");
+    const task = await f.start();
+    await until(() => f!.daemon.store.getTask(task.id)?.status === "completed", "native CLI could not find Node");
+  } finally {
+    await f?.close();
+    if (previous === undefined) delete process.env.PATH;
+    else process.env.PATH = previous;
+  }
 });
 
 test("different tasks cannot exchange tokens; stop revokes scope and ignores late output", async () => {
@@ -146,6 +242,25 @@ test("operator wait parks the runner and resumes the same thread after control i
     assert.equal((await f.api(`/api/v1/takeover/${takeover.id}/decline`, {})).status, 200);
     await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "task did not resume");
     assert.equal(f.scopes()[0].argv.includes("resume"), true);
+  } finally { await f.close(); }
+});
+
+test("taking and returning control from an idle conversation resumes the same native thread", async () => {
+  const f = await fixture("wait-idle");
+  try {
+    const task = await f.start();
+    await until(async () => (await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message,
+      "native conversation did not become idle");
+    const request = await f.api("/api/v1/takeover/request", { computer_id: "selected", task_id: task.id });
+    assert.equal(request.status, 200);
+    const id = ((await request.json()) as any).takeover.takeover_id;
+    assert.equal((await f.api(`/api/v1/takeover/${id}/acquire`, {})).status, 200);
+    await until(async () => !(await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message,
+      "runner did not observe the computer handoff");
+    assert.equal(f.scopes()[0].argv.includes("resume"), false, "native tools must stay idle while the operator has control");
+    assert.equal((await f.api(`/api/v1/takeover/${id}/release`, {})).status, 200);
+    await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "returning control stranded the conversation");
+    assert.ok(f.scopes()[0].argv.includes("resume"));
   } finally { await f.close(); }
 });
 
@@ -232,15 +347,17 @@ test("preexisting HUMAN observed through status can resolve before the child exi
   } finally { await f.close(); }
 });
 
-test("closed browser connection remains the safe terminal reason instead of a missing-done error", async () => {
+test("a tool connection error does not turn a clean native question into a failed conversation", async () => {
   const original = FakeComputer.prototype.call;
   FakeComputer.prototype.call = async () => ({ ok: false, error: { code: "E_IO", message: "computer-server stream closed" } });
-  const f = await fixture("no-done");
+  const f = await fixture("question");
   try {
     const task = await f.start();
-    await until(() => f.daemon.store.getTask(task.id)?.status === "failed", "task did not fail");
+    await until(async () => (await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any).task.awaiting_message,
+      "native question was not kept open after a tool error");
     const detail = await f.api(`/api/v1/tasks/${task.id}`).then((r) => r.json()) as any;
-    assert.ok(detail.steps.some((step: any) => /browser connection closed.*Review any completed actions/.test(step.body.summary ?? "")));
+    assert.equal(detail.task.status, "running");
+    assert.ok(detail.steps.some((step: any) => step.body.content === "Which public website should I audit?"));
     assert.equal(JSON.stringify(detail).includes("Codex ended without marking"), false);
   } finally { FakeComputer.prototype.call = original; await f.close(); }
 });
@@ -268,13 +385,14 @@ test("remote operator origin leaves local scoped provider MCP transport on loopb
 });
 
 
-test("operator can converse during takeover without granting control; messages persist and terminal tasks reject them", async () => {
-  const f = await fixture("wait-message");
+for (const expired of [false, true]) test(`operator can converse during ${expired ? "expired" : "active"} takeover without granting control; messages persist and terminal tasks reject them`, async () => {
+  const f = await fixture("wait-message", undefined, 0, expired ? 0.5 : undefined);
   try {
     const task = await f.start();
     await until(() => Boolean(f.daemon.store.activeTakeoverForComputer("selected", task.id)), "no takeover");
     const takeover = f.daemon.store.activeTakeoverForComputer("selected", task.id)!;
     assert.equal((await f.api(`/api/v1/takeover/${takeover.id}/acquire`, {})).status, 200);
+    if (expired) await until(() => f.daemon.store.getTakeover(takeover.id)?.state === "paused", "lease did not expire");
     assert.equal((await fetch(`${f.daemon.baseUrl}/api/v1/tasks/${task.id}/messages`, { method: "POST", headers: { ...f.headers, "X-CSRF-Token": "wrong" }, body: JSON.stringify({ text: "unauthorised" }) })).status, 403);
     assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: " " })).status, 400);
     assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "x".repeat(8001) })).status, 400);
@@ -282,11 +400,18 @@ test("operator can converse during takeover without granting control; messages p
     assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "What is blocking you?" })).status, 202);
     await until(() => f.daemon.store.taskTranscript(task.id).some(m => m.content === "I am waiting for your control handoff."), "no mid-task reply");
     assert.equal(f.daemon.store.getTask(task.id)?.status, "running");
-    assert.equal(f.daemon.store.activeTakeoverForComputer("selected", task.id)?.state, "human");
+    assert.equal(f.daemon.store.activeTakeoverForComputer("selected", task.id)?.state, expired ? "paused" : "human");
     const detail = await f.api(`/api/v1/tasks/${task.id}`).then(r => r.json()) as any;
     assert.ok(detail.steps.some((s: any) => s.kind === "user" && s.body.content === "What is blocking you?"));
     assert.equal(f.daemon.store.pendingMessages(task.id).length, 0);
-    assert.equal((await f.api(`/api/v1/takeover/${takeover.id}/release`, {})).status, 200);
+    let releaseId = takeover.id;
+    if (expired) {
+      const request = await f.api("/api/v1/takeover/request", { computer_id: "selected", task_id: task.id });
+      assert.equal(request.status, 200);
+      releaseId = ((await request.json()) as any).takeover.takeover_id;
+      assert.equal((await f.api(`/api/v1/takeover/${releaseId}/acquire`, {})).status, 200);
+    }
+    assert.equal((await f.api(`/api/v1/takeover/${releaseId}/release`, {})).status, 200);
     await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "did not resume");
     assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "late" })).status, 409);
   } finally { await f.close(); }

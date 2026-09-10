@@ -7,6 +7,7 @@ import {
   chmodSync,
   chownSync,
   mkdirSync,
+  lstatSync,
   statSync,
   type Stats,
 } from "node:fs";
@@ -15,8 +16,8 @@ import { BROWSER_GID, BROWSER_UID } from "./flags.ts";
 
 export const WORKSPACE_DOWNLOADS = "downloads";
 
-/** Owner+group only. World bits are never set. */
-export const WORKSPACE_MODE_MAX = 0o770;
+/** Owner+group only; new children inherit the workspace's shared group. */
+export const WORKSPACE_MODE_MAX = 0o2770;
 export const WORKSPACE_MODE_OWNER = 0o700;
 
 export interface WorkspacePermStat {
@@ -30,6 +31,7 @@ export interface WorkspacePermFs {
   chmodSync(path: string, mode: number): void;
   chownSync(path: string, uid: number, gid: number): void;
   statSync(path: string): WorkspacePermStat;
+  lstatSync(path: string): WorkspacePermStat;
 }
 
 export interface EnsureWorkspacePermOpts {
@@ -37,6 +39,8 @@ export interface EnsureWorkspacePermOpts {
   browserUid?: number;
   browserGid?: number;
   hostUid?: number;
+  hostGid?: number;
+  hostGroups?: number[];
 }
 
 function nodeFs(): WorkspacePermFs {
@@ -46,6 +50,10 @@ function nodeFs(): WorkspacePermFs {
     chownSync,
     statSync: (path): WorkspacePermStat => {
       const st: Stats = statSync(path);
+      return { uid: st.uid, gid: st.gid, mode: st.mode };
+    },
+    lstatSync: (path): WorkspacePermStat => {
+      const st: Stats = lstatSync(path);
       return { uid: st.uid, gid: st.gid, mode: st.mode };
     },
   };
@@ -95,9 +103,14 @@ function makeWritableByBrowser(
   fs: WorkspacePermFs,
   browserUid: number,
   browserGid: number,
+  hostUid: number | undefined,
+  hostGroups: number[],
 ): number {
   try {
     fs.mkdirSync(path, { recursive: true, mode: WORKSPACE_MODE_OWNER });
+    // A guest can create links in its workspace. Permission repair must never
+    // follow one into host files or a private browser profile.
+    if ((fs.lstatSync(path).mode & 0o170000) === 0o120000) throw permError(path);
   } catch {
     throw permError(path);
   }
@@ -116,6 +129,17 @@ function makeWritableByBrowser(
       st = fs.statSync(path);
     } catch {
       throw permError(path);
+    }
+  }
+
+  // macOS can inherit an inaccessible parent group (for example /tmp's wheel)
+  // and silently clear setgid on chmod. An owning host user can chgrp to one
+  // of its own groups when assigning the container's UID/GID is unavailable.
+  if (st.uid === hostUid && !hostGroups.includes(st.gid)) {
+    for (const gid of hostGroups) {
+      if (!tryChown(fs, path, -1, gid)) continue;
+      try { st = fs.statSync(path); } catch { throw permError(path); }
+      if (st.gid === gid) break;
     }
   }
 
@@ -139,13 +163,13 @@ function makeWritableByBrowser(
   } catch {
     throw permError(path);
   }
-  if (!noWorld(st.mode) || (st.mode & 0o070) !== 0o070) throw permError(path);
+  if (!noWorld(st.mode) || (st.mode & 0o2070) !== 0o2070) throw permError(path);
   return st.gid;
 }
 
 /**
- * Create `<workspace>/downloads` for the shared container group. Never
- * world-writable. Fail closed with E_WORKSPACE_PERM.
+ * Prepare workspace, downloads and results for the shared container group.
+ * Private profiles and homes are outside this tree and are never changed.
  */
 export function ensureWorkspaceBrowserWritable(
   workspaceHost: string,
@@ -154,12 +178,13 @@ export function ensureWorkspaceBrowserWritable(
   const fs = opts.fs ?? nodeFs();
   const browserUid = opts.browserUid ?? BROWSER_UID;
   const browserGid = opts.browserGid ?? BROWSER_GID;
-  const workspaceGid = makeWritableByBrowser(workspaceHost, fs, browserUid, browserGid);
-  const downloadsGid = makeWritableByBrowser(
-    join(workspaceHost, WORKSPACE_DOWNLOADS),
-    fs,
-    browserUid,
-    workspaceGid,
-  );
-  if (downloadsGid !== workspaceGid) throw permError(join(workspaceHost, WORKSPACE_DOWNLOADS));
+  const hostUid = opts.hostUid ?? process.getuid?.();
+  const hostGid = opts.hostGid ?? process.getgid?.();
+  const hostGroups = [...new Set([hostGid, ...(opts.hostGroups ?? process.getgroups?.() ?? [])])]
+    .filter((gid): gid is number => gid !== undefined);
+  const workspaceGid = makeWritableByBrowser(workspaceHost, fs, browserUid, browserGid, hostUid, hostGroups);
+  for (const directory of [WORKSPACE_DOWNLOADS, "out"]) {
+    const path = join(workspaceHost, directory);
+    if (makeWritableByBrowser(path, fs, browserUid, workspaceGid, hostUid, hostGroups) !== workspaceGid) throw permError(path);
+  }
 }

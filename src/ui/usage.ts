@@ -178,7 +178,7 @@ export function renderUsage(pane: HTMLElement): () => void {
         "p",
         humanApiError(
           error,
-          "Usage could not be read just now. Check that ModelBot is running, then open this section again.",
+          "Usage could not be read just now. Check that BotHearth is running, then open this section again.",
         ),
         "set-msg",
       );

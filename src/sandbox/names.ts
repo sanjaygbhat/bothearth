@@ -16,6 +16,7 @@ export function resourceNames(name: string) {
     networkInternal: `modelbot-${n}-internal`,
     networkEgress: `modelbot-${n}-egress`,
     volumeProfile: `modelbot-${n}-profile`,
+    volumeAgentHome: `modelbot-${n}-agent-home`,
     containerBrowser: `modelbot-${n}-browser`,
     containerShell: `modelbot-${n}-shell`,
     containerProxy: `modelbot-${n}-proxy`,

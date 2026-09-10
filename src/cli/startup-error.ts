@@ -78,6 +78,13 @@ export function classifyStartupError(
   const home = modelbotHome(homeOpt);
 
   if (isVaultError(raw)) {
+    if (process.env.CREDENTIALS_DIRECTORY || /Secret Service is unavailable|systemd credential/i.test(raw)) {
+      return {
+        message: oneLine(`BotHearth could not access its vault key (${cause}). Restore access to the configured keyring or encrypted service credential, then retry. See docs/REMOTE-DEPLOY.md. The existing vault is unchanged.`),
+        action: "none",
+        exitCode: EX_CONFIG,
+      };
+    }
     return {
       message: oneLine(
         `ModelBot could not unlock the encrypted vault for this home (${cause}). ` +

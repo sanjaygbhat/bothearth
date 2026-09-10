@@ -26,6 +26,7 @@ type RoutinesNotifyFn = (
 
 export interface RoutinesDaemonDeps {
   store: Store;
+  autoStart?: boolean;
   createTask: (input: {
     computer_id: string;
     goal: string;
@@ -120,7 +121,7 @@ export function startRoutines(deps: RoutinesDaemonDeps): RoutinesHandle {
       },
     },
   });
-  scheduler.start();
+  if (deps.autoStart !== false) scheduler.start();
 
   async function handleApi(
     _req: IncomingMessage,

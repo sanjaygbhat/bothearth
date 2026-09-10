@@ -217,13 +217,12 @@ const cases: Case[] = [
     gate: "new_domain",
   },
   {
-    name: "navigate new origin supervised",
+    name: "navigate new origin supervised without interrupting the task",
     input: {
       tool: "browser_navigate",
-      args: { url: "https://evil.com/path" },
+      args: { url: "https://example.com/path" },
     },
-    expect: "require_approval",
-    gate: "new_domain",
+    expect: "allow",
   },
   {
     name: "navigate new origin strict → deny",

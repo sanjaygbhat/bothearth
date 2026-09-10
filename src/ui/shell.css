@@ -157,11 +157,18 @@
   display: flex;
   align-items: center;
   gap: var(--space-2xs);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 #tb-pill {
   max-width: 42ch;
+  min-width: 0;
+}
+
+#tb-licence {
+  flex: 0 0 auto;
+  text-decoration: none;
 }
 
 #tb-pill > .label {
@@ -185,6 +192,8 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  /* Task cards keep their local priority below app dialogs and their scrims. */
+  isolation: isolate;
 }
 
 /* The view root is the parent of exactly one mounted view. A view that wants
@@ -258,7 +267,7 @@
 
 /* ---------------------------------------------------------------------------
    4. TOASTS
-   Bottom-centre, above everything except a takeover. Two live regions: status
+   Bottom-centre, above the app views. Two live regions: status
    for the quiet kinds, alert for the ones that interrupt.
    ------------------------------------------------------------------------ */
 
@@ -378,6 +387,10 @@
 
   .brand-name {
     font-size: var(--text-body);
+  }
+
+  .titlebar[data-licence] .brand-name {
+    display: none;
   }
 
   /* At this width the pill's model detail is noise; the dot and the provider

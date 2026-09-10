@@ -156,7 +156,7 @@ describe("the contextual alerts ask", () => {
 
     const text = shown?.text ?? "";
     assert.match(text, /Want a heads-up when your bot needs you\?/);
-    assert.match(text, /never says what the task is/, "the privacy promise is stated up front");
+    assert.match(text, /Task details stay out of alerts/, "the privacy promise is stated up front");
     assert.ok(shown?.find("Turn on alerts"), "primary action");
     assert.ok(shown?.find("Not now"), "declining is a real button, not a dismissal X");
     assert.doesNotMatch(text, /Enable desktop alerts/, "the old footer-button copy is gone");

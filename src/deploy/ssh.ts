@@ -33,13 +33,13 @@ export interface SshPlanInput {
   configSnippet?: string;
 }
 
-function sshPrefix(user: string, host: string, key?: string): string {
+function sshPrefix(user: string, host: string, key?: string, flags: string[] = []): string {
   assertSshIdentifier("user", user, /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/);
   assertSshIdentifier("host", host, /^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])$/);
   if (key && !/^\/[A-Za-z0-9_./ -]+$/.test(key)) throw new Error("unsafe ssh key path");
   const target = `${user}@${host}`;
   const keyPart = key ? `-i '${key.replaceAll("'", "'\\''")}' ` : "";
-  return `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${keyPart}${target}`;
+  return `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${keyPart}${flags.length ? flags.join(" ") + " " : ""}${target}`;
 }
 
 function assertSshIdentifier(label: string, value: string, pattern: RegExp): void {
@@ -48,8 +48,8 @@ function assertSshIdentifier(label: string, value: string, pattern: RegExp): voi
   if (!pattern.test(value)) throw new Error(`unsafe ssh ${label}`);
 }
 
-export function sshTunnelCommand(user: string, host: string): string {
-  return `ssh -L ${DAEMON_PORT}:${DAEMON_BIND_HOST}:${DAEMON_PORT} ${user}@${host}`;
+export function sshTunnelCommand(user: string, host: string, key?: string): string {
+  return sshPrefix(user, host, key, ["-N", "-o", "ExitOnForwardFailure=yes", "-L", `${DAEMON_PORT}:${DAEMON_BIND_HOST}:${DAEMON_PORT}`]);
 }
 
 /**
@@ -81,13 +81,17 @@ export function planSshSteps(input: SshPlanInput): DeployStep[] {
       id: "preflight",
       summary: "Require Node >=22.18, Docker images, user systemd and the configured vault key source",
       command: remote(`set -eu
+fail() { echo "$1" >&2; exit 78; }
+for required in node npm curl systemctl; do command -v "$required" >/dev/null || fail "Install $required on the SSH host first (docs/REMOTE-DEPLOY.md)."; done
 node -e 'const [major,minor]=process.versions.node.split(".").map(Number); if (major<22 || (major===22 && minor<18)) { console.error("Node >=22.18 required"); process.exit(1); }'
-command -v npm >/dev/null
-${credential ? `command -v systemd-creds >/dev/null; test "$(systemctl --version | head -1 | cut -d " " -f 2)" -ge 258; test -r ${credential}` : "command -v secret-tool >/dev/null"}
-systemctl --user show-environment >/dev/null
-${credential ? `systemd-run --user --wait --pipe --collect -p LoadCredentialEncrypted=modelbot-vault:${credential} /usr/bin/true` : ""}
-docker info >/dev/null
-docker image inspect modelbot/computer:dev modelbot/shell:dev modelbot/proxy:dev >/dev/null`),
+${credential ? `command -v systemd-creds >/dev/null || fail "Install systemd-creds on the SSH host first."
+test "$(systemctl --version | head -1 | cut -d " " -f 2)" -ge 258 || fail "Encrypted user services require systemd 258 or newer. On older headless hosts use the system-service setup in docs/REMOTE-DEPLOY.md; the vault will not be replaced."
+test -r ${credential} || fail "The SSH user cannot read the configured encrypted credential. Check its path and owner."` : `command -v secret-tool >/dev/null || fail "No Linux keyring is installed. For a headless host, prepare an encrypted systemd credential (docs/REMOTE-DEPLOY.md)."
+keyring_error="$(secret-tool lookup service com.modelbot.vault account preflight 2>&1 >/dev/null)" || test -z "$keyring_error" || fail "The Linux keyring is unavailable. Unlock it or use the headless encrypted-credential setup in docs/REMOTE-DEPLOY.md."`}
+systemctl --user show-environment >/dev/null || fail "The SSH user's systemd manager is unavailable. Ask the host administrator to enable its user service and lingering, or use the documented system-service setup."
+${credential ? `systemd-run --user --wait --pipe --collect -p LoadCredentialEncrypted=modelbot-vault:${credential} /usr/bin/true || fail "The user service could not decrypt this credential. Check the original host/user key and docs/REMOTE-DEPLOY.md; do not replace an existing vault key."` : ""}
+docker info >/dev/null || fail "Docker is unavailable to this SSH user. Start Docker and check this account's access."
+docker image inspect modelbot/computer:dev modelbot/shell:dev modelbot/proxy:dev >/dev/null || fail "Build or load the computer, shell and proxy images from the same BotHearth revision before deploying (docs/QUICKSTART.md)."`),
     },
     {
       id: "ensure-dirs",
@@ -116,8 +120,8 @@ docker image inspect modelbot/computer:dev modelbot/shell:dev modelbot/proxy:dev
     },
     {
       id: "enable-daemon",
-      summary: "Start user service and verify runtime initialization via healthz",
-      command: remote('set -eu; systemctl --user daemon-reload; systemctl --user enable --now modelbot.service; for attempt in $(seq 1 30); do if curl -fsS http://127.0.0.1:7777/healthz; then exit 0; fi; sleep 1; done; systemctl --user status modelbot.service; exit 1'),
+      summary: "Restart user service with the installed code and verify runtime initialization via healthz",
+      command: remote('set -eu; systemctl --user daemon-reload; systemctl --user enable modelbot.service; systemctl --user restart modelbot.service; for attempt in $(seq 1 30); do if curl -fsS http://127.0.0.1:7777/healthz; then exit 0; fi; sleep 1; done; systemctl --user status modelbot.service; exit 1'),
     },
   ];
 
@@ -148,7 +152,7 @@ docker image inspect modelbot/computer:dev modelbot/shell:dev modelbot/proxy:dev
     steps.push({
       id: "print-ssh-tunnel",
       summary: "Print SSH local-forward recovery command",
-      command: sshTunnelCommand(user, host),
+      command: sshTunnelCommand(user, host, sshKeyPath),
     });
   }
 
@@ -159,11 +163,12 @@ export function accessHintFor(
   user: string,
   host: string,
   hasTailscale: boolean,
+  key?: string,
 ): string {
   if (hasTailscale) {
-    return `Tailscale Serve on port ${DAEMON_PORT} (private). Recovery: ${sshTunnelCommand(user, host)}`;
+    return `Private Tailscale HTTPS on port 443. Recovery: ${sshTunnelCommand(user, host, key)}`;
   }
-  return sshTunnelCommand(user, host);
+  return sshTunnelCommand(user, host, key);
 }
 
 export type RemoteRunner = (step: DeployStep) => Promise<void>;
@@ -238,16 +243,8 @@ export class SshProvider implements DeployProvider {
     if (!host) throw new Error("ssh provider requires --host");
 
     const existing = loadRemoteState(opts.name, this.home);
-    if (existing && existing.provider === "ssh" && existing.host === host) {
-      const steps = await this.plan(opts);
-      return {
-        name: opts.name,
-        provider: "ssh",
-        dryRun: !!opts.dryRun,
-        steps,
-        accessHint: accessHintFor(user, host, Boolean(opts.tailscaleAuthkey || opts.tailscaleServe)),
-        skippedCreate: true,
-      };
+    if (existing && (existing.provider !== "ssh" || existing.host !== host || (existing.user ?? "ubuntu") !== user)) {
+      throw new Error("This deployment name belongs to another target. Use a different --name to preserve its configuration.");
     }
 
     const steps = await this.plan(opts);
@@ -268,11 +265,11 @@ export class SshProvider implements DeployProvider {
         {
           name: opts.name,
           provider: "ssh",
-          deploymentId: randomUUID(),
+          deploymentId: existing?.deploymentId ?? randomUUID(),
           host,
           user,
-          createdAt: new Date().toISOString(),
-          access: (opts.tailscaleAuthkey || opts.tailscaleServe) ? "tailscale" : "ssh",
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
+          access: (opts.tailscaleAuthkey || opts.tailscaleServe) ? "tailscale" : existing?.access ?? "ssh",
         },
         this.home,
       );
@@ -283,7 +280,8 @@ export class SshProvider implements DeployProvider {
       provider: "ssh",
       dryRun: !!opts.dryRun,
       steps,
-      accessHint: accessHintFor(user, host, Boolean(opts.tailscaleAuthkey || opts.tailscaleServe)),
+      accessHint: accessHintFor(user, host, Boolean(opts.tailscaleAuthkey || opts.tailscaleServe || existing?.access === "tailscale"), opts.sshKeyPath),
+      skippedCreate: Boolean(existing),
     };
   }
 

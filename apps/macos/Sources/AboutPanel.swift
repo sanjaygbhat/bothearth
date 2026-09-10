@@ -1,11 +1,6 @@
 import AppKit
 
-/// The About panel. Not the stock one — the stock one shows a file name and a
-/// build number and says nothing a person wants to know.
-///
-/// This one leads with the wordmark, then answers the two questions someone
-/// opening About actually has: what is this, and who is being paid. Open Field
-/// palette, the design brief's voice, no motion.
+/// Product name, version, provider context, and links.
 final class AboutPanelController: NSWindowController {
   private let wordmark = NSImageView()
 
@@ -26,7 +21,7 @@ final class AboutPanelController: NSWindowController {
     window.titleVisibility = .hidden
     window.isMovableByWindowBackground = true
     window.backgroundColor = Theme.bg
-    window.title = "About ModelBot"
+    window.title = "About BotHearth"
     window.isReleasedWhenClosed = false
     self.init(window: window)
     window.contentView = buildBody()
@@ -49,7 +44,7 @@ final class AboutPanelController: NSWindowController {
 
     wordmark.translatesAutoresizingMaskIntoConstraints = false
     wordmark.imageScaling = .scaleProportionallyUpOrDown
-    wordmark.setAccessibilityLabel("ModelBot")
+    wordmark.setAccessibilityLabel("BotHearth")
 
     let version = NSTextField(labelWithString: Self.versionLine)
     version.font = Theme.ui(size: 12)
@@ -60,14 +55,12 @@ final class AboutPanelController: NSWindowController {
     rule.translatesAutoresizingMaskIntoConstraints = false
 
     let what = NSTextField(wrappingLabelWithString:
-      "ModelBot runs on this Mac. A subscription you already have does the thinking, "
-      + "and your files stay here.")
+      "BotHearth runs on this Mac. Your chosen model provider receives task context.")
     what.font = Theme.ui(size: 13)
     what.textColor = Theme.text
 
     let fine = NSTextField(wrappingLabelWithString:
-      "Source-available · free for personal use. Not an Anthropic or OpenAI product "
-      + "— usage is billed under your own plan, at your plan's normal rates.")
+      "Source-available · free for personal use. Provider terms, limits and charges apply.")
     fine.font = Theme.ui(size: 12)
     fine.textColor = Theme.muted
 
@@ -104,9 +97,9 @@ final class AboutPanelController: NSWindowController {
       stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -32),
       stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 40),
       rule.widthAnchor.constraint(equalTo: stack.widthAnchor),
-      // 559.32 x 75.56 in the source SVG; 24pt cap keeps it beside 13pt body.
+      // Match the shipped 260 × 48 wordmark.
       wordmark.heightAnchor.constraint(equalToConstant: 24),
-      wordmark.widthAnchor.constraint(equalTo: wordmark.heightAnchor, multiplier: 559.32 / 75.56),
+      wordmark.widthAnchor.constraint(equalTo: wordmark.heightAnchor, multiplier: 260.0 / 48.0),
     ])
     return root
   }
@@ -150,9 +143,7 @@ final class AboutPanelController: NSWindowController {
     onOpenExternal?(Self.sourceURL)
   }
 
-  /// ModelBot is free for personal use under PolyForm Noncommercial 1.0.0;
-  /// anything commercial is a separate licence from the author. This is where
-  /// somebody who needs one finds out how to ask.
+  /// Open the current commercial terms.
   @objc private func openCommercial() {
     onOpenExternal?(Self.commercialURL)
   }

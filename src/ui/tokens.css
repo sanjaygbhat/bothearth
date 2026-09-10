@@ -302,8 +302,8 @@
 
 /* ---------------------------------------------------------------------------
    8. Z-INDEX — semantic ladder. Never write a bare number in a component.
-   --z-takeover sits above everything: when a person has taken control, that
-   status must never be occluded by a toast or a tooltip.
+   --z-takeover raises control cards within the isolated shell view.
+   App dialogs and their scrims remain above every view-local layer.
    ------------------------------------------------------------------------ */
 
 :root {

@@ -106,7 +106,9 @@ export function startProxy(opts: ProxyOptions = {}): {
   const connectTimeoutMs =
     opts.connectTimeoutMs ?? Number(process.env.CONNECT_TIMEOUT_MS ?? 10_000);
   const idleTimeoutMs =
-    opts.idleTimeoutMs ?? Number(process.env.IDLE_TIMEOUT_MS ?? 60_000);
+    // Native clients own their request deadlines; quiet model reasoning can
+    // legitimately outlast a generic socket timeout. An operator can set one.
+    opts.idleTimeoutMs ?? Number(process.env.IDLE_TIMEOUT_MS ?? 0);
   const listenHost = opts.listenHost ?? "0.0.0.0";
   const policy = opts.policy ?? loadPolicyFromEnv();
   const dnsPort = opts.dnsPort ?? Number(process.env.DNS_PORT ?? 53);

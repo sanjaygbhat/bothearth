@@ -140,7 +140,7 @@ describe("runtime readiness ladder", () => {
     assert.equal(claude.title, "Connect Claude Code");
     assert.equal(claude.action.kind, "open_settings");
     assert.doesNotMatch(claude.detail, /sign in from settings/i);
-    assert.match(claude.detail, /signed in on this machine/);
+    assert.match(claude.detail, /is signed in/);
 
     const codex = status({
       taskStartAvailable: false,

@@ -6,13 +6,17 @@ interface NavigationDenied { url: string; reason: string; initial_popup?: boolea
 /** Top-level navigation guard. Subresource traffic remains the proxy's responsibility. */
 export class NavigationGuard {
   private origins: string[] | null = null;
+  private allowPublicNavigation = false;
   private denied: NavigationDenied | null = null;
   private sessions = new Map<Page, Promise<CDPSession>>();
 
   private readonly human: () => boolean;
   constructor(human: () => boolean) { this.human = human; }
 
-  setPolicy(origins: string[]): void { this.origins = [...origins]; }
+  setPolicy(origins: string[], allowPublicNavigation = false): void {
+    this.origins = [...origins];
+    this.allowPublicNavigation = allowPublicNavigation;
+  }
   consumeDenied(): NavigationDenied | null {
     const denied = this.denied;
     this.denied = null;
@@ -23,12 +27,13 @@ export class NavigationGuard {
     this.refuse(url, "Initial agent popups are blocked; use browser_tabs new or browser_navigate.", true);
   }
   private active(): boolean { return this.origins !== null && !this.human(); }
-  private permitted(url: string): boolean {
+  private permitted(url: string, method = "GET"): boolean {
     if (!this.active() || url === "about:blank") return true;
     try {
       const destination = new URL(url);
       return ["http:", "https:"].includes(destination.protocol) &&
-        this.origins!.some((origin) => originMatchesPattern(destination.origin, origin));
+        ((this.allowPublicNavigation && (method === "GET" || method === "HEAD")) ||
+          this.origins!.some((origin) => originMatchesPattern(destination.origin, origin)));
     } catch { return false; }
   }
   private refuse(url: string, reason: string, initial_popup = false): void {
@@ -58,7 +63,7 @@ export class NavigationGuard {
       return;
     }
     // Cancellation preserves the source DOM; a browser error page would invalidate approved retries.
-    if (!this.permitted(request.url())) {
+    if (!this.permitted(request.url(), request.method())) {
       this.refuse(request.url(), "Navigation destination is outside the declared origins.");
       await route.abort("aborted");
       return;
@@ -81,7 +86,7 @@ export class NavigationGuard {
       const mainFrame = frameTree.frame.id;
       cdp.on("Fetch.requestPaused", (event) => {
         void (async () => {
-          const denied = event.frameId === mainFrame && !this.permitted(event.request.url);
+          const denied = event.frameId === mainFrame && !this.permitted(event.request.url, event.request.method);
           if (denied) this.refuse(event.request.url, "Navigation destination is outside the declared origins.");
           await cdp.send(denied ? "Fetch.failRequest" : "Fetch.continueRequest", {
             requestId: event.requestId,

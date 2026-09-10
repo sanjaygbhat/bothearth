@@ -7,11 +7,8 @@ import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { Store } from "../../../src/daemon/store.ts";
 
 /**
- * A site the operator has allowed is allowed for everything the task does
- * there. Granting mail.google.com and then being asked again — worded "the
- * first time your bot has opened this site" — for every keystroke, Enter and
- * click on it cost four of the six approvals in one 23-minute run, each one
- * stopping the bot dead.
+ * Reading a site is ordinary task work. Explicitly remembering a submission
+ * approval covers subsequent form interactions on that site for this task.
  *
  * What a grant does NOT cover: another origin, and the gates that are about the
  * action rather than the site (payment, delete, upload, external send).
@@ -26,7 +23,7 @@ class Browser extends FakeComputer {
     }
     if (method === "browser_navigate") {
       const url = String((args as { url?: string }).url);
-      if (!(context?.navigationOrigins ?? []).includes(new URL(url).origin)) {
+      if (!context?.allowPublicNavigation && !(context?.navigationOrigins ?? []).includes(new URL(url).origin)) {
         return { ok: false, error: { code: "E_POLICY", message: "blocked before contact",
           details: { navigation_url: url } } };
       }
@@ -56,8 +53,7 @@ function harness() {
     },
   });
   // `policy.strict_allowlist` is empty by default, so a shipped install starts a
-  // task trusting no origin at all: everything the task may do on a site comes
-  // from what the operator allowed during the run.
+  // task with no write grants. Reading a site must not silently add one.
   const context = { computerId: "g1", taskId: task.id, mode: "supervised" as const,
     originSets: { readable: [], writable: [] } };
 
@@ -86,8 +82,10 @@ function harness() {
 test("one site grant covers typing, Enter, keys and clicks on that origin", async () => {
   const h = harness();
   try {
-    assert.equal(await h.run("browser_navigate", { url: "https://mail.google.com/mail/u/0/" }), 1,
-      "opening the site is the one question");
+    assert.equal(await h.run("browser_navigate", { url: "https://mail.google.com/mail/u/0/" }), 0);
+    assert.deepEqual(h.store.taskGrantedOrigins(h.taskId), []);
+    assert.equal(await h.run("browser_type", { ref: "e1", text: "Noise/Social", submit: true }), 1,
+      "submitting data is a separate decision from reading the page");
     assert.ok(h.store.taskGrantedOrigins(h.taskId).includes("https://mail.google.com"));
 
     // Everything the bot then does on that site. Each of these raised its own
@@ -103,14 +101,17 @@ test("one site grant covers typing, Enter, keys and clicks on that origin", asyn
   } finally { await h.close(); }
 });
 
-test("a new origin is still a question, and its grant does not reach back", async () => {
+test("reading another site is free but does not extend a previous write grant", async () => {
   const h = harness();
   try {
     await h.run("browser_navigate", { url: "https://mail.google.com/" });
-    assert.equal(await h.run("browser_navigate", { url: "https://calendar.google.com/" }), 1,
-      "a different origin is a new trust boundary");
+    assert.equal(await h.run("browser_type", { text: "label", submit: true }), 1);
+    assert.equal(await h.run("browser_navigate", { url: "https://calendar.google.com/" }), 0);
+    assert.ok(!h.store.taskGrantedOrigins(h.taskId).includes("https://calendar.google.com"));
+    assert.equal(await h.run("browser_type", { text: "event", submit: true }), 1,
+      "a form on another origin needs its own consent");
     assert.equal(h.asked.length, 2);
-    assert.equal(h.asked[1]!.reason, "navigate_new_origin:https://calendar.google.com");
+    assert.equal(h.asked[1]!.reason, "form_submit_new_origin:https://calendar.google.com");
   } finally { await h.close(); }
 });
 

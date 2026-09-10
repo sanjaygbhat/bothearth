@@ -282,7 +282,7 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       interactive_only: false,
       depth: 8,
       max_chars: 16_000,
-    }, { navigationOrigins });
+    }, { navigationOrigins, allowPublicNavigation: context.mode !== "strict" });
     const origin = resultOrigin(snapshot) ??
       (context.origin ? normalizedOrigin(context.origin) : undefined) ??
       knownOrigins.get(context.computerId) ?? "about:blank";
@@ -443,12 +443,16 @@ export function createToolDispatcher(opts: DispatcherOptions): {
     let navigationUrl: string | undefined;
     let gateOrigin = decision.decision === "require_approval" ? decision.origin : undefined;
     const originalHash = computeActionHash({ tool, args, gate: "new_domain", origin: observed.origin });
-    const navigationApproval = approvals.find((a) => {
-      const approved = JSON.parse(a.args_json) as Record<string, unknown>;
-      return a.tool === tool && typeof (JSON.parse(a.bind_json) as { navigation_url?: unknown }).navigation_url === "string" &&
-        approved.action && typeof approved.action === "object" &&
-        computeActionHash({ tool, args: approved.action as Record<string, unknown>, gate: "new_domain", origin: observed.origin }) === originalHash;
-    });
+    // Pending redirect approvals from an older daemon must not re-gate a
+    // public GET. Keep their history; only effectful calls still consume them.
+    const navigationApproval = context.mode !== "strict" &&
+      (tool === "browser_navigate" || (tool === "browser_tabs" && args.action === "new"))
+      ? undefined : approvals.find((a) => {
+        const approved = JSON.parse(a.args_json) as Record<string, unknown>;
+        return a.tool === tool && typeof (JSON.parse(a.bind_json) as { navigation_url?: unknown }).navigation_url === "string" &&
+          approved.action && typeof approved.action === "object" &&
+          computeActionHash({ tool, args: approved.action as Record<string, unknown>, gate: "new_domain", origin: observed.origin }) === originalHash;
+      });
     if (navigationApproval && decision.decision === "allow") {
       const navArgs = JSON.parse(navigationApproval.args_json) as Record<string, unknown>;
       const target = normalizedOrigin(String(navArgs.navigation_url));
@@ -567,7 +571,7 @@ export function createToolDispatcher(opts: DispatcherOptions): {
     await opts.emit("tool.call", { name: tool, arguments: args }, ids);
     if (cancelled()) return toolError("E_POLICY", "task cancelled");
     const callContext = /^(browser_|computer_)/.test(tool)
-      ? { navigationOrigins: [...originSets.readable, ...originSets.writable] } : undefined;
+      ? { navigationOrigins: [...originSets.readable, ...originSets.writable], allowPublicNavigation: context.mode !== "strict" } : undefined;
     let result = opts.execute
       ? await opts.execute(client, tool, args, callContext)
       : await client.call(tool, args, callContext);

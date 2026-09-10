@@ -16,7 +16,7 @@ type Scenario = {
   connection: (provider: string) => Record<string, unknown>;
   runtime?: Record<string, unknown>;
   posts: string[];
-  onPost?: (path: string, body: Record<string, unknown>) => Record<string, unknown> | undefined;
+  onPost?: (path: string, body: Record<string, unknown>) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
 };
 
 async function mountAi(scenario: Scenario) {
@@ -24,7 +24,7 @@ async function mountAi(scenario: Scenario) {
     if (init?.method === "POST") {
       scenario.posts.push(path);
       const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-      const reply = scenario.onPost?.(path, body);
+      const reply = await scenario.onPost?.(path, body);
       return json(reply ?? { status: "connected", provider: "claude", model: "opus-4.5" });
     }
     if (path.startsWith("/api/v1/runtime")) {
@@ -56,13 +56,15 @@ test("plain-English copy is what a row says; identifiers stay behind Details", (
   );
   assert.equal(
     providerRowCopy("codex", { status: "signed_out", provider: "codex", model: "" }, true),
-    "Found on this Mac · not signed in",
+    "Found · not signed in",
   );
   assert.equal(
     providerRowCopy("codex", { status: "missing", provider: "codex", model: "" }, false),
-    "Not on this Mac yet",
+    "Not installed yet",
   );
-  assert.equal(providerRowCopy("claude", null, true), "Found on this Mac");
+  assert.equal(providerRowCopy("claude", null, true), "Found");
+  assert.equal(providerRowCopy("claude", { status: "signed_out", provider: "claude", model: "",
+    execution_location: "computer" }, true), "In the bot’s computer · not signed in");
   assert.equal(lastCheckedLabel(1_000), "a moment ago");
   assert.equal(lastCheckedLabel(120_000), "2 minutes ago");
   assert.equal(lastCheckedLabel(3 * 3_600_000), "3 hours ago");
@@ -210,6 +212,97 @@ test("a sign-in that lives in a terminal only offers Check again, and posts noth
   }
 });
 
+test("guest sign-in relays official plain text and private replies, then clears on connection", async () => {
+  let status = "signed_out";
+  const bodies: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const state = () => ({ status, provider: "claude", model: "claude-fable-5-1", login_mode: "terminal",
+    execution_location: "computer", computer_id: "cmp_signin",
+    ...(status === "signing_in" ? { native_terminal: { output: "<img src=x onerror=alert(1)>\nhttps://example.invalid/private-sign-in", can_reply: true } } : {}),
+  });
+  const scenario: Scenario = {
+    posts: [], connection: provider => provider === "codex"
+      ? { status: "signed_out", provider: "codex", model: "gpt-6-astra", execution_location: "computer" }
+      : state(),
+    onPost(path, body) {
+      bodies.push({ path, body });
+      if (path.endsWith("sign-in")) status = "signing_in";
+      if (path.endsWith("input") && body.text === "private-login-reply") status = "signed_in";
+      if (path.endsWith("connect")) status = "connected";
+      return state();
+    },
+  };
+  const { dom, pane, dispose } = await mountAi(scenario);
+  try {
+    assert.doesNotMatch(pane.textContent, /this Mac|command-line PATH/);
+    assert.equal((pane.querySelector(".set-details input") as unknown as HTMLInputElement).maxLength, 512);
+    assert.equal(actionButton(pane).textContent, "Sign in through Claude Code");
+    actionButton(pane).fire("click");
+    await settle(8);
+    const panel = pane.querySelector(".set-terminal")!;
+    const reply = panel.querySelector("input")!;
+    assert.equal(panel.hidden, false);
+    assert.match(panel.querySelector("pre")!.textContent, /<img src=x/);
+    assert.equal(panel.querySelectorAll("img").length, 0);
+    assert.equal(panel.querySelectorAll("a").length, 0, "CLI URLs stay plain text");
+    panel.fire("submit");
+    await settle(6);
+    assert.deepEqual(bodies.find(item => item.path.endsWith("input"))!.body,
+      { provider: "claude", computer_id: "cmp_signin", text: "" }, "an empty line sends native Enter");
+    reply.value = "bad\0line";
+    panel.fire("submit");
+    assert.match(pane.textContent, /one line of up to 8,192/);
+    assert.equal(bodies.filter(item => item.path.endsWith("input")).length, 1);
+    reply.value = "private-login-reply";
+    panel.fire("submit");
+    assert.equal(reply.value, "", "clear private reply as soon as it is sent");
+    await settle(8);
+    assert.equal(status, "connected");
+    assert.equal(panel.hidden, true);
+    assert.equal(panel.querySelector("pre")!.textContent, "");
+    assert.equal(bodies.find(item => item.path.endsWith("connect"))!.body.computer_id, "cmp_signin");
+    assert.ok(bodies.every(item => !item.path.includes("tasks")));
+    assert.doesNotMatch(JSON.stringify([...dom.storage]), /private-login-reply|private-sign-in/);
+  } finally { dispose(); dom.restore(); }
+});
+
+test("cancel and disposal clear terminal output and ignore a late private reply", async () => {
+  let status = "signing_in";
+  let finishReply: ((value: Record<string, unknown>) => void) | undefined;
+  const state = () => ({ status, provider: "claude", model: "claude-fable-5-1", login_mode: "terminal",
+    execution_location: "computer", computer_id: "cmp_signin",
+    ...(status === "signing_in" ? { native_terminal: { output: "private login instructions", can_reply: true } } : {}),
+  });
+  const scenario: Scenario = { posts: [], connection: () => state(),
+    onPost(path) {
+      if (path.endsWith("input")) return new Promise(resolve => { finishReply = resolve; });
+      if (path.endsWith("cancel")) status = "signed_out";
+      return state();
+    },
+  };
+  const { dom, pane, dispose } = await mountAi(scenario);
+  try {
+    const panel = pane.querySelector(".set-terminal")!;
+    panel.querySelector("input")!.value = "private reply";
+    panel.fire("submit");
+    await settle();
+    byText(pane, "Cancel sign-in")!.fire("click");
+    assert.equal(panel.hidden, true);
+    assert.equal(panel.querySelector("pre")!.textContent, "");
+    await settle(6);
+    finishReply!({ status: "signing_in" });
+    await settle(6);
+    assert.equal(panel.hidden, true, "a late input response cannot restore a cancelled sign-in");
+    status = "signing_in";
+    byText(pane, "Check again")!.fire("click");
+    await settle(6);
+    assert.equal(panel.hidden, false);
+    dispose();
+    assert.equal(panel.hidden, true);
+    assert.equal(panel.querySelector("pre")!.textContent, "");
+    assert.equal(panel.querySelector("input")!.value, "");
+  } finally { dispose(); dom.restore(); }
+});
+
 test("the Codex one-time code is shown only for the official page, and is cleared on the way out", async () => {
   let challenge: Record<string, unknown> = {
     verification_uri: "https://auth.openai.com/codex/device",
@@ -229,9 +322,15 @@ test("the Codex one-time code is shown only for the official page, and is cleare
   const { dom, pane, dispose } = await mountAi(scenario);
   try {
     const panel = all(pane).find((n) => n.className.includes("set-device")) as FakeElement;
+    const copied: string[] = [];
+    navigator.clipboard.writeText = async text => { copied.push(text); };
     assert.equal(panel.hidden, false);
     assert.equal(panel.children[0]?.href, "https://auth.openai.com/codex/device");
+    assert.equal(panel.children[0]?.textContent, "Copy code and open ChatGPT");
     assert.match(panel.textContent, /ABCD-12345/);
+    panel.children[0]!.fire("click");
+    await settle();
+    assert.deepEqual(copied, ["ABCD-12345"]);
 
     challenge = { ...challenge, verification_uri: "https://attacker.invalid" };
     dom.runTimers();
@@ -239,6 +338,8 @@ test("the Codex one-time code is shown only for the official page, and is cleare
     await settle();
     assert.equal(panel.hidden, true, "an unofficial verification page is never linked");
     assert.doesNotMatch(panel.textContent, /ABCD/);
+    panel.children[0]!.fire("click");
+    assert.deepEqual(copied, ["ABCD-12345"], "untrusted links cannot copy a sign-in code");
 
     challenge = {
       verification_uri: "https://auth.openai.com/codex/device",
@@ -256,7 +357,7 @@ test("the Codex one-time code is shown only for the official page, and is cleare
   }
 });
 
-test("a task in flight refuses the change in words, not in a status code", async () => {
+test("a connection conflict shows the actual reason without inventing a task restriction", async () => {
   const scenario: Scenario = {
     posts: [],
     connection: () => ({ status: "signed_in", provider: "claude", model: "" }),
@@ -264,7 +365,7 @@ test("a task in flight refuses the change in words, not in a status code", async
   const dom = installDom({ timers: "manual", hash: "#/settings", fetch: async (path, init) => {
     if (init?.method === "POST") {
       scenario.posts.push(path);
-      return Response.json({ error: "E_TASK_ACTIVE", message: "nope" }, { status: 409 });
+      return Response.json({ error: "E_CONNECTION_BUSY", message: "The connection check is already in progress." }, { status: 409 });
     }
     if (path.startsWith("/api/v1/runtime")) return json({ ai: { provider: "claude", cli_found: true, cli_path_kind: "path", logged_in: true, detail: "" } });
     return json(scenario.connection(""));
@@ -281,7 +382,7 @@ test("a task in flight refuses the change in words, not in a status code", async
     await settle();
     assert.match(
       all(pane).map((n) => n.textContent).join(" "),
-      /Finish or stop your current task before changing the AI connection\./,
+      /The connection check is already in progress\./,
     );
     dispose();
   } finally {
@@ -307,7 +408,7 @@ test("both providers are shown honestly, and choosing one re-asks for that one",
     assert.equal(rows[0]?.getAttribute("aria-checked"), "true");
     assert.match(rows[0]?.textContent ?? "", /Claude Code/);
     assert.match(rows[1]?.textContent ?? "", /Codex/);
-    assert.match(rows[1]?.textContent ?? "", /Not on this Mac yet/, "the other row is probed too");
+    assert.match(rows[1]?.textContent ?? "", /Not installed yet/, "the other row is probed too");
 
     (rows[1] as FakeElement).fire("click");
     await settle();
@@ -346,7 +447,7 @@ test("switching the AI updates the titlebar chip without a reload", async () => 
 
     assert.ok(scenario.posts.some((path) => path.endsWith("/connection/connect")));
     assert.equal(pill.querySelector(".label")!.textContent, "Claude · Opus 5");
-    assert.match(pill.getAttribute("aria-label") ?? "", /AI connection: Claude · Opus 5/);
+    assert.match(pill.getAttribute("aria-label") ?? "", /Model connection: Claude · Opus 5/);
   } finally {
     dispose();
     dom.restore();

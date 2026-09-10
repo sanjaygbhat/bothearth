@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// The shell's security-relevant pure paths, asserted.
 enum SelfTest {
@@ -16,7 +16,7 @@ enum SelfTest {
   }
 
   static func run() -> Bool {
-    print("ModelBot shell selftest")
+    print("BotHearth shell selftest")
 
     // --- parseReady ------------------------------------------------------
     let json = #"{"type":"modelbot.ready","port":7801,"bootstrap_url":"http://127.0.0.1:7801/#bootstrap=abc","pid":42}"#
@@ -51,8 +51,8 @@ enum SelfTest {
     // --- PlainCause: no CLI on a failure screen --------------------------
     expect(PlainCause.looksLikeCommand("run modelbot init first"), "detects a shell instruction")
     expect(PlainCause.looksLikeCommand("try running modelbot doctor"), "detects an instruction to run")
-    expect(!PlainCause.looksLikeCommand("ModelBot could not read your settings"), "leaves prose alone")
-    let humanised = PlainCause.humanise("ModelBot could not open its settings. run modelbot init first")
+    expect(!PlainCause.looksLikeCommand("BotHearth could not read your settings"), "leaves prose alone")
+    let humanised = PlainCause.humanise("BotHearth could not open its settings. run modelbot init first")
     expect(!humanised.text.lowercased().contains("modelbot init"),
            "the command never reaches the screen")
     expect(humanised.technical?.contains("modelbot init") == true,
@@ -136,6 +136,15 @@ enum SelfTest {
            "the menu says waiting, not working, while the bot is blocked")
     let idleIcon = StatusItemController.markImage(side: 18)
     let waitingIcon = StatusItemController.attentionImage(side: 18)
+    let bitmap = idleIcon.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))
+    let hasInk = bitmap.map { image in
+      (0..<image.pixelsWide).contains { x in
+        (0..<image.pixelsHigh).contains { y in
+          (image.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0
+        }
+      }
+    } ?? false
+    expect(hasInk, "the idle cairn draws visible ink")
     expect(waitingIcon.isTemplate, "the waiting mark is still a template image")
     expect(idleIcon.tiffRepresentation != waitingIcon.tiffRepresentation,
            "the waiting mark is not byte-identical to the idle one")

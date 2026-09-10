@@ -25,6 +25,9 @@ const ENV_KEYS = [
   "MODELBOT_ALLOW_PUBLIC_BIND",
   "MODELBOT_WORKSPACE_ROOT",
   "MODELBOT_VAULT_KEY_HEX",
+  "SSH_CONNECTION",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
 ] as const;
 
 async function withCleanStartEnv<T>(fn: () => Promise<T>): Promise<T> {
@@ -58,8 +61,12 @@ describe("buildProductionComposition bootstrap", () => {
         "--quiet",
         "--force",
       ]);
+      process.env.DISPLAY = ":synthetic-desktop";
       const first = await buildProductionComposition({ home, port: 0 });
+      assert.equal(first.daemon.headless, false);
+      process.env.SSH_CONNECTION = "synthetic-ssh-session";
       const second = await buildProductionComposition({ home, port: 0 });
+      assert.equal(second.daemon.headless, true);
       assert.notEqual(first.bootstrapToken, second.bootstrapToken);
       assert.ok(first.bootstrapToken.length >= 32);
       assert.ok(second.bootstrapToken.length >= 32);

@@ -212,19 +212,19 @@ export class Scheduler {
         }) ?? history;
 
       if (status === "failed") {
-        await this.applyFatigue(routine, notifyTargets, notifyOn, result.error ?? "failed");
+        await this.applyFatigue(history.id, routine, notifyTargets, notifyOn, result.error ?? "failed");
       } else {
         const shouldNotify = notifyOn.includes("done");
         if (shouldNotify && notifyTargets.length) {
-          await this.notifyFn(notifyTargets, {
+          await this.notify(history.id, notifyTargets, {
             kind: "task_done",
-            title: `ModelBot routine ${status}: ${routine.name}`,
+            title: `BotHearth routine ${status}: ${routine.name}`,
             reason: `Routine ${routine.name} finished with status ${status}`,
             task_id: result.task_id,
           });
         }
       }
-      return finished;
+      return this.store.getHistory(history.id) ?? finished;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const finished =
@@ -233,14 +233,15 @@ export class Scheduler {
           error: message,
           finished_at: this.clock.now(),
         }) ?? history;
-      await this.applyFatigue(routine, notifyTargets, notifyOn, message);
-      return finished;
+      await this.applyFatigue(history.id, routine, notifyTargets, notifyOn, message);
+      return this.store.getHistory(history.id) ?? finished;
     } finally {
       this.inFlight.delete(routine.id);
     }
   }
 
   private async applyFatigue(
+    historyId: string,
     routine: RoutineRow,
     notifyTargets: string[],
     notifyOn: ReturnType<RoutinesStore["parseNotifyOn"]>,
@@ -248,21 +249,27 @@ export class Scheduler {
   ): Promise<void> {
     const failures = this.store.consecutiveFailures(routine.id);
     if (notifyOn.includes("fail") && notifyTargets.length) {
-      await this.notifyFn(notifyTargets, {
+      await this.notify(historyId, notifyTargets, {
         kind: "routine_fail",
-        title: `ModelBot routine failed: ${routine.name}`,
+        title: `BotHearth routine failed: ${routine.name}`,
         reason: `Routine ${routine.name} failed: ${error}`,
       });
     }
     if (failures >= FATIGUE_LIMIT) {
       this.store.setEnabled(routine.id, false);
       if (notifyTargets.length) {
-        await this.notifyFn(notifyTargets, {
+        await this.notify(historyId, notifyTargets, {
           kind: "routine_fail",
-          title: `ModelBot routine disabled: ${routine.name}`,
+          title: `BotHearth routine disabled: ${routine.name}`,
           reason: FATIGUE_NOTIFY,
         });
       }
     }
+  }
+
+  private async notify(historyId: string, targets: string[], payload: NotifyPayload): Promise<void> {
+    // ponytail: delivery is attempted once; add a durable outbox if automatic retries are needed.
+    try { await this.notifyFn(targets, payload); }
+    catch { this.store.recordNotificationFailure(historyId); }
   }
 }

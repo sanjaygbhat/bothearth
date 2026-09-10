@@ -48,6 +48,7 @@ export interface RoutineHistoryRow {
   artifacts_json: string;
   cost_usd: number | null;
   error: string | null;
+  notification_error: string | null;
   missed: number;
 }
 
@@ -124,6 +125,20 @@ export class RoutinesStore {
       CREATE INDEX IF NOT EXISTS idx_routine_history_routine
         ON routine_history(routine_id, started_at DESC);
     `);
+    const columns = this.db.prepare("PRAGMA table_info(routine_history)").all() as { name: string }[];
+    if (!columns.some(column => column.name === "notification_error"))
+      this.db.exec("ALTER TABLE routine_history ADD COLUMN notification_error TEXT");
+  }
+
+  /** Called only by the daemon that successfully acquired the listener. */
+  recoverInterrupted(now = new Date()): void {
+    this.db.prepare("UPDATE routine_history SET status='failed', finished_at=?, error=? WHERE status='running'")
+      .run(nowIso(now), "Daemon stopped before routine completion was recorded. Check saved task results before retrying.");
+  }
+
+  recordNotificationFailure(id: string): void {
+    this.db.prepare("UPDATE routine_history SET notification_error=? WHERE id=?")
+      .run("Notification delivery could not be confirmed. Check the channel and routine history.", id);
   }
 
   close(): void {
@@ -293,6 +308,7 @@ export class RoutinesStore {
       artifacts_json: JSON.stringify(input.artifacts ?? []),
       cost_usd: input.cost_usd ?? null,
       error: input.error ?? null,
+      notification_error: null,
       missed: input.missed ? 1 : 0,
     };
     this.db
@@ -355,7 +371,7 @@ export class RoutinesStore {
       this.db
         .prepare(
           `SELECT id, routine_id, status, started_at, finished_at, task_id,
-                  artifacts_json, cost_usd, error, missed
+                  artifacts_json, cost_usd, error, notification_error, missed
            FROM routine_history WHERE id = ?`,
         )
         .get(id),
@@ -367,7 +383,7 @@ export class RoutinesStore {
       this.db
         .prepare(
           `SELECT id, routine_id, status, started_at, finished_at, task_id,
-                  artifacts_json, cost_usd, error, missed
+                  artifacts_json, cost_usd, error, notification_error, missed
            FROM routine_history WHERE routine_id = ?
            ORDER BY started_at DESC LIMIT ?`,
         )
@@ -412,6 +428,7 @@ export class RoutinesStore {
       artifacts: JSON.parse(h.artifacts_json) as unknown[],
       cost_usd: h.cost_usd,
       error: h.error,
+      notification_error: h.notification_error,
       missed: h.missed === 1,
     };
   }

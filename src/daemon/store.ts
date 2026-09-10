@@ -7,6 +7,7 @@ import type {
   ApprovalStatus,
   ComputerCapability,
   DriverKind,
+  NativeTaskSettings,
   TakeoverState,
   TaskSummary,
   UsageEventBody,
@@ -26,6 +27,11 @@ export interface TaskRow {
   computer_id: string;
   goal: string;
   adapter: string | null;
+  model?: string;
+  execution_mode?: NativeTaskSettings["execution_mode"];
+  reasoning_effort?: NativeTaskSettings["reasoning_effort"];
+  execution_location?: NativeTaskSettings["execution_location"];
+  executor?: NativeTaskSettings["executor"];
   driver: string | null;
   capabilities: string | null;
   max_steps: number;
@@ -82,15 +88,17 @@ export const MAX_TASK_ORIGIN_GRANTS = 32;
  */
 export const RECEIPT_REPAIR_VERSION = 1;
 
-/** 2 closes takeover rows left open by tasks that ended (`closeStaleTakeovers`). */
+/** 2 closes unanswered takeover rows left by tasks that ended (`closeStaleTakeovers`). */
 export const STALE_TAKEOVER_VERSION = 2;
 
 /** A takeover row still holding a computer, whatever the person has answered so far. */
 const OPEN_TAKEOVER_STATES = "('takeover_requested','human','resume_validating','paused')";
 
-/** True while the row's task is still running, or the row names no task at all. */
+const HUMAN_TAKEOVER_HELD = "(takeovers.state IN ('human','resume_validating') OR (takeovers.state IN ('paused','takeover_requested') AND takeovers.granted_to IS NOT NULL))";
+
+/** Human control survives its task. Unanswered asks need a live task. */
 const TAKEOVER_TASK_ALIVE =
-  `(takeovers.task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id = takeovers.task_id
+  `(${HUMAN_TAKEOVER_HELD} OR takeovers.task_id IS NULL OR EXISTS (SELECT 1 FROM tasks WHERE tasks.id = takeovers.task_id
       AND tasks.status NOT IN ${TERMINAL_TASK_STATUS_SQL}))`;
 
 interface TaskDbRow extends Omit<TaskRow, "summary"> {
@@ -339,6 +347,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS workspace_default (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         computer_id TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS installation_licence (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        certificate TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -833,11 +845,11 @@ export class Store {
        WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
     ).run(status, at, cancelledAt, id);
     const finished = Number(result.changes) === 1;
-    // A terminal task cannot still be the reason "your bot needs you" is lit:
-    // close out any takeover it opened that a person never got to.
+    // Close unanswered requests. Ending work cannot revoke a person's desktop
+    // or erase the ownership needed to return it after a lease expires.
     if (finished) {
       this.db.prepare(
-        "UPDATE takeovers SET state = 'terminated' WHERE task_id = ? AND state NOT IN ('agent', 'terminated')",
+        `UPDATE takeovers SET state = 'terminated' WHERE task_id = ? AND state NOT IN ('agent', 'terminated') AND NOT ${HUMAN_TAKEOVER_HELD}`,
       ).run(id);
     }
     return finished;
@@ -881,7 +893,12 @@ export class Store {
    * every read recomputes and so is always current.
    */
   private hydrateTask(r: TaskDbRow): TaskRow {
-    const { summary_json, ...rest } = r;
+    const { summary_json, ...columns } = r;
+    const settings = row<{ body_json: string }>(this.db.prepare(
+      "SELECT body_json FROM steps WHERE task_id = ? AND kind = 'native_settings' ORDER BY rowid LIMIT 1",
+    ).get(r.id));
+    // Keep the original session choice when connection defaults later change.
+    const rest = { ...columns, ...(settings ? JSON.parse(settings.body_json) as NativeTaskSettings : {}) };
     if (summary_json) {
       return { ...rest, summary: JSON.parse(summary_json) as TaskSummary };
     }
@@ -1397,11 +1414,9 @@ export class Store {
   }
 
   /**
-   * The takeover still holding this computer. A row whose task has ended holds
-   * nothing — nobody is coming to answer a question the task can no longer use
-   * — and a row belonging to a different live task is that task's business, so
-   * a caller that names its own task never inherits another one's wait. Rows
-   * with no task are the operator's own control of the computer and always count.
+   * Human control holds the entire computer until returned, even after its task
+   * ends. An unanswered request belongs only to its live task. An operator's
+   * taskless request also holds the computer.
    */
   activeTakeoverForComputer(computerId: string, taskId?: string): TakeoverRow | undefined {
     return row(
@@ -1409,7 +1424,7 @@ export class Store {
         .prepare(
           `SELECT ${TAKEOVER_COLUMNS} FROM takeovers
            WHERE computer_id = ? AND state IN ${OPEN_TAKEOVER_STATES}
-             AND (task_id IS NULL OR ? IS NULL OR task_id = ?)
+             AND (task_id IS NULL OR ? IS NULL OR task_id = ? OR ${HUMAN_TAKEOVER_HELD})
              AND ${TAKEOVER_TASK_ALIVE}
            ORDER BY created_at DESC LIMIT 1`,
         )
@@ -1420,8 +1435,8 @@ export class Store {
   /**
    * Tasks that died on an older daemon left their takeover rows open, and an
    * open row on a computer reads as "a person is still expected here" — so the
-   * next task on that computer refused to take a single step. Close every row
-   * whose task is terminal or gone. Versioned on `PRAGMA user_version`, so it
+   * next task on that computer refused to take a single step. Close unanswered
+   * rows whose task is terminal or gone, preserving human control. Versioned on `PRAGMA user_version`, so it
    * runs once per database; running it again would change nothing anyway.
    */
   closeStaleTakeovers(): { applied: boolean; closed: number } {

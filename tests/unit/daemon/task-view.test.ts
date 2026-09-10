@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { Store } from "../../../src/daemon/store.ts";
-import { taskActivity } from "../../../src/daemon/task-view.ts";
+import { taskActivity, takeoverContext } from "../../../src/daemon/task-view.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
 
 test("UI readiness is truthful and unconfigured task creation cannot create a running row", async () => {
@@ -47,5 +47,28 @@ test("task activity is bounded and excludes arbitrary tool results", () => {
     const view = taskActivity(store, "bounded");
     assert.equal(view.steps.length, 100); assert.equal(view.truncated, true);
     assert.equal(JSON.stringify(view).includes("NO_EXPOSE_CANARY"), false);
+  } finally { store.close(); }
+});
+
+test("handoff instructions survive replay, remain bounded and expose no raw arguments", () => {
+  const store = new Store();
+  try {
+    const task = store.insertTask({ computer_id: "computer", goal: "Review the FAQ", max_steps: 10 });
+    store.insertTakeover({ id: "tk_review", computer_id: "computer", task_id: task.id, state: "takeover_requested", expires_at: null });
+    const source = { takeover_id: "tk_review", reason: "Review the FAQ. Bearer SYNTHETIC_SECRET",
+      arguments: { password: "PRIVATE_ARGUMENT" }, result: "PRIVATE_RESULT" };
+    const saved = store.appendAuditRef({ task_id: task.id, type: "takeover.requested", body: source, hash: "test" });
+    const body = taskActivity(store, task.id).steps[0]!.body;
+    assert.deepEqual(body, { takeover_id: "tk_review", reason: "Review the FAQ. [redacted]" });
+    assert.deepEqual(takeoverContext(source), body, "live and replay use the same projection");
+    assert.doesNotMatch(JSON.stringify(body), /SYNTHETIC_SECRET|PRIVATE_/);
+    assert.equal(takeoverContext({ reason: "x".repeat(3000), takeover_id: "bad id" }).reason!.length, 2000);
+    assert.equal(takeoverContext({ takeover_id: "bad id" }).takeover_id, undefined);
+    store.db.prepare("UPDATE audit_refs SET ts = '2026-01-01T00:00:00Z' WHERE seq = ?").run(saved.seq);
+    for (let i = 0; i < 105; i++) store.appendAuditRef({ task_id: task.id, type: "tool.call", body: { name: "takeover_status" }, hash: "test" });
+    const history = taskActivity(store, task.id);
+    assert.equal(history.steps.length, 100);
+    assert.equal(history.history_truncated, true);
+    assert.deepEqual(history.steps.find(step => step.kind === "takeover.requested")!.body, body);
   } finally { store.close(); }
 });

@@ -135,7 +135,8 @@ export class ExecComputerClient extends EventEmitter implements ComputerClient {
     try {
       const client = await this.rpc(this.roleFor(method));
       const result = context
-        ? await client.request("policy.call", { method, params, navigation_origins: context.navigationOrigins })
+        ? await client.request("policy.call", { method, params, navigation_origins: context.navigationOrigins,
+          ...(context.allowPublicNavigation ? { allow_public_navigation: true } : {}) })
         : await client.request(method, params);
       return result as ToolResult;
     } catch (e) {
@@ -279,8 +280,9 @@ export class ExecComputerClient extends EventEmitter implements ComputerClient {
 
   stopLive(): void {
     this.liveWanted = false;
-    this.liveClient = null;
     this.liveTail = this.liveTail.then(async () => {
+      // A queued startup may have subscribed since stopLive was called.
+      this.liveClient = null;
       await this.browser?.request("screencast.unsubscribe", {});
     }).catch(() => undefined);
   }

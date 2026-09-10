@@ -19,7 +19,7 @@
 import { apiFetch, ApiError, apiGet, apiPost, humanApiError } from "./api.ts";
 import { appendTextChild } from "./safe.ts";
 import { currentDeviceId, currentSession, type SessionInfo } from "./session.ts";
-import { navigate, registerView, setTitle, toast, type Tone } from "./shell.ts";
+import { navigate, registerView, setStatusPill, setTitle, toast, type Tone } from "./shell.ts";
 import { bindCommand } from "./palette.ts";
 import { limitTime } from "./runtime.ts";
 import { formatUsd } from "./usage.ts";
@@ -62,6 +62,9 @@ export type TaskRecord = {
   max_steps?: number;
   /** Which AI ran it. Only newer records carry it. */
   adapter?: string | null;
+  model?: string | null;
+  execution_mode?: "executor" | "orchestrator" | null;
+  executor?: { adapter: string; model: string } | null;
   /* The daemon has grown these over time and not every record carries every
      one. `taskSpan` reads whichever exist and never trusts a single field. */
   started_at?: string | null;
@@ -464,8 +467,8 @@ function limitLede(limit: PlanLimit): string {
   const plan = `Your ${limit.provider ?? "AI"} plan`;
   const back = limit.resetAt ? ` It comes back at ${limit.resetAt}.` : "";
   return limit.reason === "quota_exhausted"
-    ? `${plan} hit its limit, so it stopped.${back} Switch to your other AI connection, or wait it out.`
-    : `${plan} turned this task down for too many requests, so it stopped.${back} Switch to your other AI connection, or start it again in a minute.`;
+    ? `${plan} hit its limit, so it stopped.${back} Switch model connections, or wait for the limit to reset.`
+    : `${plan} turned this task down for too many requests, so it stopped.${back} Switch model connections, or try again later.`;
 }
 
 export interface TerminalCopy {
@@ -779,6 +782,20 @@ export function feedLine(
       return { text: "Opened its computer", voice: "do" };
     case "task.step":
       return null;
+    case "native_tool": {
+      const name = readString(body, "name");
+      const type = readString(body, "type") ?? name;
+      const finished = body.status === "completed";
+      let text: string;
+      if (type === "command_execution" || name === "Bash") text = finished ? "Command finished" : "Running a command";
+      else if (type === "file_change" || ["Edit", "Write", "MultiEdit"].includes(name ?? "")) text = finished ? "File edit finished" : "Editing files";
+      else if (type === "web_search" || name === "WebSearch") text = finished ? "Web search finished" : "Searching the web";
+      else if (name && /^[a-zA-Z0-9_.:-]{1,120}$/.test(name)) {
+        const label = name.replaceAll("_", " ");
+        text = finished ? `${label} finished` : `Using ${label}`;
+      } else text = finished ? "Tool step finished" : "Using a tool";
+      return { text, voice: "do" };
+    }
     case "task.completed":
     case "task.failed":
     case "task.cancelled": {
@@ -967,12 +984,39 @@ export function renderInline(host: ParentNode, text: string): void {
   }
 }
 
-/** Block-level markdown: headings, paragraphs, bullet and numbered lists, fences. */
+/** Split pipe tables without splitting escaped pipes or pipes inside inline code. */
+function tableCells(line: string): string[] {
+  const text = line.trim().replace(/^\|/, "");
+  const cells: string[] = [];
+  let cell = "", ticks = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === "\\" && (text[i + 1] === "|" || text[i + 1] === "\\")) {
+      cell += text[++i];
+    } else if (ch === "`") {
+      let count = 1;
+      while (text[i + count] === "`") count++;
+      ticks = ticks === count ? 0 : ticks || count;
+      cell += "`".repeat(count);
+      i += count - 1;
+    } else if (ch === "|" && ticks === 0) {
+      cells.push(cell.trim());
+      cell = "";
+      if (i === text.length - 1) return cells;
+    } else cell += ch;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+/** Block markdown, including ordinary comparison tables; all content remains text nodes. */
 export function renderRich(host: HTMLElement, text: string): void {
   host.classList.add("rich");
   let list: HTMLElement | null = null;
   let fence: HTMLElement | null = null;
-  for (const raw of text.split("\n")) {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const raw = lines[index]!;
     const line = raw.replace(/\s+$/, "");
     if (/^\s*```/.test(line)) {
       if (fence) fence = null;
@@ -986,6 +1030,32 @@ export function renderRich(host: HTMLElement, text: string): void {
     }
     if (!line.trim()) {
       list = null;
+      continue;
+    }
+    const headers = tableCells(line), divider = tableCells(lines[index + 1] ?? "");
+    // ponytail: up to 20 columns; wider or malformed tables remain readable text.
+    if (headers.length > 1 && headers.length <= 20 && headers.length === divider.length && divider.every(cell => /^:?-{3,}:?$/.test(cell))) {
+      list = null;
+      const wrap = appendTextChild(host, "div", "", "result-table");
+      wrap.tabIndex = 0;
+      wrap.setAttribute("role", "region");
+      wrap.setAttribute("aria-label", "Comparison table");
+      const table = appendTextChild(wrap, "table", "");
+      const head = appendTextChild(appendTextChild(table, "thead", ""), "tr", "");
+      for (const cell of headers) {
+        const th = appendTextChild(head, "th", "");
+        th.setAttribute("scope", "col");
+        renderInline(th, cell);
+      }
+      const body = appendTextChild(table, "tbody", "");
+      index++;
+      while (index + 1 < lines.length && lines[index + 1]!.includes("|")) {
+        const cells = tableCells(lines[index + 1]!);
+        if (cells.length !== headers.length) break;
+        const row = appendTextChild(body, "tr", "");
+        for (const cell of cells) renderInline(appendTextChild(row, "td", ""), cell);
+        index++;
+      }
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -1038,6 +1108,14 @@ function emptyFacts(): Facts {
 
 type Item = FeedLine & { at: string; kind: string };
 
+const MODEL_MESSAGES_KEY = "modelbot.show-model-messages";
+
+/** Task identity comes from its saved settings, never today's connection. */
+export function taskModelLabel(task: Pick<TaskRecord, "adapter" | "model">): string {
+  const provider = task.adapter === "codex" ? "Codex" : task.adapter === "claude" ? "Claude" : task.adapter;
+  return [provider, task.model?.trim() || "Model not recorded"].filter(Boolean).join(" · ");
+}
+
 type SurfaceKind = "none" | "approval" | "driving" | "observing" | "needs-you";
 
 /**
@@ -1070,6 +1148,8 @@ class TaskView {
   private root!: HTMLElement;
   private taskId = "";
   private detail: TaskDetail | null = null;
+  private loadRevision = 0;
+  private loadError: HTMLElement | null = null;
   private readonly items = new Map<string, Item>();
   private readonly takeoverReasons = new Map<string, string>();
   /** takeover id -> the device the daemon granted it to (`takeover.started`). */
@@ -1094,6 +1174,8 @@ class TaskView {
   private goalMore!: HTMLButtonElement;
   private goalFull!: HTMLElement;
   private spend!: HTMLElement;
+  private modelInfo!: HTMLElement;
+  private showModelMessages = true;
   /** The receipt’s cost value, refreshed with the bar so the two agree. */
   private receiptCost: HTMLElement | null = null;
   private stopBtn!: HTMLButtonElement;
@@ -1196,6 +1278,9 @@ class TaskView {
   /** Rebuild the whole screen for `this.taskId` from the record on the daemon. */
   private reset(): void {
     if (!this.host) return;
+    this.loadRevision++;
+    this.detail = null;
+    this.loadError = null;
     this.items.clear();
     this.takeoverReasons.clear();
     this.takeoverActors.clear();
@@ -1235,6 +1320,7 @@ class TaskView {
     this.events = null;
     ws?.close();
     setTitle(null);
+    setStatusPill(null);
   }
 
   private buildFrame(el: HTMLElement): void {
@@ -1244,6 +1330,20 @@ class TaskView {
     if (takeStartedTask() === this.taskId) this.root.classList.add("starting");
 
     const bar = appendTextChild(this.root, "div", "", "task-bar");
+    this.modelInfo = appendTextChild(bar, "span", "Loading model…", "task-model");
+    try { this.showModelMessages = localStorage.getItem(MODEL_MESSAGES_KEY) !== "false"; } catch { /* Keep this view's choice. */ }
+    const messages = appendTextChild(bar, "label", "", "task-output-toggle");
+    const show = document.createElement("input");
+    show.type = "checkbox";
+    show.checked = this.showModelMessages;
+    show.setAttribute("aria-controls", "task-feed");
+    show.addEventListener("change", () => {
+      this.showModelMessages = show.checked;
+      try { localStorage.setItem(MODEL_MESSAGES_KEY, String(show.checked)); } catch { /* Storage is optional. */ }
+      this.renderedRows = [];
+      this.renderFeed();
+    });
+    messages.append(show, document.createTextNode("Model messages"));
     this.spend = appendTextChild(bar, "span", "", "spend");
     this.stopBtn = document.createElement("button");
     this.stopBtn.type = "button";
@@ -1306,7 +1406,11 @@ class TaskView {
         await apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/messages`, { text });
         if (!this.alive || taskId !== this.taskId) return;
         if (draft.value.trim() === text) draft.value = "";
-        status.textContent = "Queued for the bot’s next step. Computer control stays with you until you return it.";
+        status.textContent = this.drivingNow()
+          ? "Message queued until you return control."
+          : this.takeover?.state === "human" || this.takeover?.state === "paused"
+            ? "Message queued until control is returned."
+          : "Message queued for the bot’s next step.";
         await this.load();
       } catch (error) {
         status.textContent = humanApiError(error, "Message could not be sent. Try again.");
@@ -1314,6 +1418,7 @@ class TaskView {
     });
     this.left.append(this.composer);
     this.feed = appendTextChild(this.left, "div", "", "feed");
+    this.feed.id = "task-feed";
     this.feed.setAttribute("role", "log");
     this.feed.setAttribute("aria-live", "polite");
     this.feed.setAttribute("aria-label", "What your bot is doing");
@@ -1344,11 +1449,12 @@ class TaskView {
   }
 
   private async load(): Promise<void> {
+    const revision = ++this.loadRevision;
     try {
       const detail = (await apiGet(
         `/api/v1/tasks/${encodeURIComponent(this.taskId)}`,
       )) as TaskDetail;
-      if (!this.alive) return;
+      if (!this.alive || revision !== this.loadRevision) return;
       this.detail = detail;
       if (detail.task.status !== "paused") this.pausedStep = null;
       // The receipt is a pure function of THIS record. When the daemon
@@ -1360,11 +1466,14 @@ class TaskView {
       this.seed(detail.steps ?? []);
       this.ensurePanel();
       await this.refreshAlerts();
-      if (!this.alive) return;
+      if (!this.alive || revision !== this.loadRevision) return;
       this.render();
-    } catch {
-      if (!this.alive) return;
-      this.renderUnreachable();
+      this.loadError?.remove();
+      this.loadError = null;
+      this.grid.hidden = false;
+    } catch (error) {
+      if (!this.alive || revision !== this.loadRevision) return;
+      this.renderUnreachable(error);
     }
   }
 
@@ -1824,10 +1933,13 @@ class TaskView {
       const created = (await apiPost("/api/v1/tasks", {
         goal: task.goal,
         computer_id: task.computer_id,
+        ...(task.adapter ? { adapter: task.adapter } : {}),
+        ...(task.model ? { model: task.model } : {}),
+        execution_mode: "executor",
       })) as { task: { id: string } };
       navigate(`#/tasks/${created.task.id}`);
     } catch {
-      toast("error", "Couldn’t start it again. Check the AI connection in Settings.");
+      toast("error", "Couldn’t start it again. Check the model connection in Settings.");
     }
   }
 
@@ -1909,6 +2021,14 @@ class TaskView {
 
   private renderBar(): void {
     const task = this.detail?.task;
+    if (task) {
+      const identity = taskModelLabel(task);
+      const executor = task.execution_mode === "orchestrator"
+        ? ` · Subagents: ${task.executor ? taskModelLabel(task.executor) : "Model not recorded"}` : "";
+      this.modelInfo.textContent = identity + executor;
+      setStatusPill({ text: identity, label: `This task: ${identity}${executor}`,
+        ...(task.execution_mode === "orchestrator" ? { sub: "· Subagents" } : {}) });
+    }
     const finished = task ? isFinished(task.status) : false;
     // A paused task has a receipt on screen too, and can still be stopped.
     const settled = finished || (task?.status === "paused" && !this.pausedForTakeover());
@@ -1976,10 +2096,13 @@ class TaskView {
           : this.takeover
             ? "needs-you"
             : "none";
+    const reason = this.takeover ? (this.takeoverReasons.get(this.takeover.id) ?? null) : null;
+    const sameHandoff = want === "needs-you" && this.needsYou?.root.dataset.reason === (reason ?? "")
+      && this.needsYou.root.dataset.takeoverId === this.takeover?.id;
     const sameApproval =
       want === "approval" &&
       this.approval?.root.dataset.approvalId === this.approvalReq?.approval_id;
-    if (want === this.surfaceKind && (want !== "approval" || sameApproval)) return;
+    if (want === this.surfaceKind && (want !== "approval" || sameApproval) && (want !== "needs-you" || sameHandoff)) return;
 
     this.surfaceKind = want;
     if (want !== "approval") {
@@ -2047,10 +2170,12 @@ class TaskView {
     // has been handed over there is nothing left to decline.
     const asking = this.takeover?.state === "takeover_requested" ? this.takeover.id : null;
     this.needsYou = renderNeedsYou({
-      reason: this.takeover ? (this.takeoverReasons.get(this.takeover.id) ?? null) : null,
+      reason,
       onTake: () => void this.takeControl(),
       ...(asking ? { onDecline: () => void this.decline(asking) } : {}),
     });
+    this.needsYou.root.dataset.reason = reason ?? "";
+    this.needsYou.root.dataset.takeoverId = this.takeover?.id ?? "";
     this.surface.append(this.needsYou.root);
     this.needsYou.focus();
   }
@@ -2061,7 +2186,9 @@ class TaskView {
 
   private renderFeed(): void {
     const nearBottom = !this.renderedRows.length || this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 120;
-    const rows = collapseFeed(this.sortedItems());
+    const items = this.sortedItems();
+    const question = this.detail?.task.awaiting_message ? items.slice().reverse().find((item) => item.kind === "assistant") : undefined;
+    const rows = collapseFeed(items.filter((item) => this.showModelMessages || item.kind !== "assistant" || item === question));
     if (!rows.length) {
       this.feed.replaceChildren();
       this.renderedRows = [];
@@ -2069,7 +2196,8 @@ class TaskView {
       appendTextChild(
         this.feed,
         "p",
-        finished ? "Nothing was saved about this run." : "Getting its computer ready",
+        !this.showModelMessages && this.items.size ? "Model messages are hidden. Steps will appear here."
+          : finished ? "Nothing was saved about this run." : "Getting its computer ready",
         "feed-empty",
       );
       return;
@@ -2312,10 +2440,10 @@ class TaskView {
     // so the screen leads with what happened, not with the exception text.
     if (summary && summary === this.terminalError()) {
       const detail = appendTextChild(scroll, "details", "", "done-detail");
-      appendTextChild(detail, "summary", "What the AI reported");
+      appendTextChild(detail, "summary", "Error details");
       appendTextChild(detail, "p", summary);
     } else if (summary) {
-      renderRich(appendTextChild(scroll, "div", "", "result"), summary);
+      this.renderResult(scroll, task, terminal!, summary);
     }
 
     this.renderArtifacts(task, scroll);
@@ -2347,7 +2475,7 @@ class TaskView {
       switchAi = document.createElement("button");
       switchAi.type = "button";
       switchAi.className = "btn primary";
-      switchAi.textContent = "Switch AI connection";
+      switchAi.textContent = "Switch model connection";
       switchAi.addEventListener("click", () => navigate("#/settings/ai"));
       acts.append(switchAi, again, another);
     } else if (copy.limitReached) {
@@ -2412,6 +2540,64 @@ class TaskView {
 
     this.renderReceipt(task);
     (resume ?? switchAi ?? resumeLimit ?? another).focus({ preventScroll: true });
+  }
+
+  /** Read the admitted final summary, never raw tool or audit output. */
+  private renderResult(scroll: HTMLElement, task: TaskRecord, terminal: DurableStep, summary: string): void {
+    const result = appendTextChild(scroll, "div", "", "result");
+    renderRich(result, summary);
+    const controls = appendTextChild(scroll, "div", "", "result-tools");
+    const note = appendTextChild(scroll, "p", "", "result-note");
+    note.setAttribute("role", "status");
+    let text = summary;
+    let clipped = terminal.body.summary_truncated === true;
+    const resultId = terminal.result_id;
+    const canLoad = clipped && Number.isSafeInteger(resultId) && resultId! > 0;
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "btn sm";
+    copy.textContent = clipped ? "Copy preview" : "Copy result";
+    copy.addEventListener("click", async () => {
+      const label = clipped ? "Copy preview" : "Copy result";
+      const copied = await this.toClipboard(text, copy, label);
+      note.textContent = copied
+        ? clipped ? "Preview copied. The report is longer than this preview." : "Result copied."
+        : "Couldn’t copy. Select the report text to copy it manually.";
+    });
+    controls.append(copy);
+    if (!clipped) return;
+    note.textContent = canLoad ? "This is a shortened preview." : "This saved preview is shortened. Check the files below for the full report.";
+    if (!canLoad) return;
+    const full = document.createElement("button");
+    full.type = "button";
+    full.className = "btn sm";
+    full.textContent = "Read full result";
+    controls.prepend(full);
+    full.addEventListener("click", async () => {
+      if (full.disabled) return;
+      full.disabled = true;
+      note.textContent = "Loading full result…";
+      try {
+        const data = await apiGet(`/api/v1/tasks/${encodeURIComponent(task.id)}/results/${resultId}`) as {
+          text?: unknown; truncated?: boolean;
+        };
+        if (!this.alive || this.taskId !== task.id || !this.left.contains(result)) return;
+        if (typeof data.text !== "string" || data.text.length > 256000) throw new Error("Invalid result");
+        text = data.text;
+        clipped = data.truncated === true;
+        result.replaceChildren();
+        renderRich(result, text);
+        copy.textContent = clipped ? "Copy preview" : "Copy result";
+        full.hidden = true;
+        note.textContent = clipped
+          ? "This report exceeds the display limit. Check its saved files for the rest."
+          : "Full result loaded.";
+        copy.focus({ preventScroll: true });
+      } catch {
+        if (this.alive && this.taskId === task.id && this.left.contains(result))
+          note.textContent = "Couldn’t load the full result. Your preview is still here; try again.";
+      } finally { full.disabled = false; }
+    });
   }
 
   /**
@@ -2534,7 +2720,7 @@ class TaskView {
     const span = this.span(task);
     const receipt = this.receipt();
     const lines = [
-      `ModelBot task ${task.id}`,
+      `BotHearth task ${task.id}`,
       `outcome: ${copy.kind}`,
       `reason: ${this.stopReason() ?? "not recorded"}`,
       `status: ${task.status}`,
@@ -2549,16 +2735,19 @@ class TaskView {
     await this.toClipboard(lines.join("\n"), button, "Copy diagnostics");
   }
 
-  private async toClipboard(text: string, button: HTMLButtonElement | HTMLElement, label: string): Promise<void> {
+  private async toClipboard(text: string, button: HTMLButtonElement | HTMLElement, label: string): Promise<boolean> {
+    let copied = false;
     try {
       await navigator.clipboard.writeText(text);
+      copied = true;
       button.textContent = "Copied";
     } catch {
       button.textContent = "Couldn’t copy";
     }
     window.setTimeout(() => {
-      button.textContent = label;
+      if (button.textContent === "Copied" || button.textContent === "Couldn’t copy") button.textContent = label;
     }, 2000);
+    return copied;
   }
 
   /** The right column becomes the receipt — the honest answer to "what did
@@ -2679,17 +2868,34 @@ class TaskView {
     }
   }
 
-  private renderUnreachable(): void {
-    setTitle("Task", { dot: "danger", back: "#/", backLabel: "All tasks" });
-    this.left.replaceChildren();
-    appendTextChild(this.left, "h1", "We couldn’t open this task", "t-title");
+  private renderUnreachable(error: unknown): void {
+    const status = error instanceof ApiError ? error.status : null;
+    // Keep the frame and draft intact: a retry or later event still renders into them.
+    this.loadError?.remove();
+    const notice = document.createElement("div");
+    notice.className = "task-left";
+    notice.setAttribute("role", "alert");
+    this.loadError = notice;
+    this.root.insertBefore(notice, this.grid);
+    this.grid.hidden = !this.detail;
+    if (!this.detail) setTitle("Task", { dot: "danger", back: "#/", backLabel: "All tasks" });
+    appendTextChild(notice, this.detail ? "h2" : "h1",
+      status === 401 ? "Connect this browser to BotHearth" :
+      status === 404 ? "Task not found on this BotHearth" :
+      this.detail ? "Couldn’t refresh this task" : "We couldn’t open this task", "t-title");
     appendTextChild(
-      this.left,
+      notice,
       "p",
-      "ModelBot may have restarted. It comes back by itself — try again in a moment.",
+      status === 401
+        ? modelbotNative.isNative
+          ? "Open BotHearth from Applications again to reconnect, then return to this task."
+          : "This browser is not signed in. Run bothearth pair in Terminal and open its fresh link in this browser, then try again."
+        : status === 404
+          ? "This task link belongs to another installation, or the task was removed. Open All tasks to see what is available here."
+          : "The task could not be loaded. Check that BotHearth is running, then try again.",
       "done-lede",
     );
-    const acts = appendTextChild(this.left, "div", "", "done-acts");
+    const acts = appendTextChild(notice, "div", "", "done-acts");
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn primary";

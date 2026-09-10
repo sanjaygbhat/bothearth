@@ -1,6 +1,6 @@
 # Enterprise service activation
 
-The website remains static on GitHub Pages. `server.mjs` is a separate Node.js 22.18+ HTTP service with a persistent SQLite database and Resend email delivery. The local BotHearth daemon is never exposed to the public internet. No browser JavaScript, authentication framework, or payment SDK is needed.
+The website remains static on GitHub Pages. `server.mjs` is a separate Node.js 22.18+ HTTP service with a persistent SQLite database and Resend email delivery. The local BotHearth daemon is never exposed to the public internet. The legacy service needs no browser JavaScript or payment SDK. The optional new account path uses the existing `jose` library for Google ID-token validation and a small script for copying a revealed key.
 
 The implemented flow is work email → one-time code → acceptance of the offer terms → a downloadable licence certificate. Later sign-ins on the same registrable domain see the same certificate. Additional-licence enquiries are stored and emailed to the private `ENTERPRISE_CONTACT` recipient, with the verified work email as `reply_to`.
 
@@ -42,3 +42,52 @@ The SQL schema is created on startup. No paid checkout or payment-created entitl
 ## Public contact form
 
 `contact.mjs` is a separate, stateless Node service for the public contact form. It requires `ENTERPRISE_CONTACT`, `ENTERPRISE_FROM`, and `RESEND_API_KEY` only. Run one instance (including Cloud Run with maximum instances 1), listening on `PORT` or 8080. `/health` checks availability; `/enquiry` accepts native form POSTs only from `https://bothearth.com`. It validates fields, applies a honeypot and conservative rate limits, forwards enquiries with an unverified reply-to address, and never renders the recipient. No customer database or local agent is exposed. Set the website repository variable `SITE_CONTACT_URL` to the deployed HTTPS `/enquiry` URL after verifying real delivery. Provider failures return an explicit error, never a success receipt.
+
+## Optional versioned Google account service
+
+The new `/account` path is **disabled by default**. Enabling it adds separate account, consent and signed-certificate tables in the same SQLite database; it never changes legacy work-email routes, certificates, prices or published no-activation rights. No release boundary or replacement legal terms are selected automatically. Keep using the full source checkout for this service; its verifier is `src/licensing/certificate.ts`, loaded using Node's native type stripping.
+
+Implemented: Google sign-in → explicit account/licence terms acceptance → one noncommercial certificate per account, covered release and terms → Reveal/Copy/Download. Repeated requests and restarts return the exact original certificate. The account page includes installation instructions, account/licence/accepted-terms JSON export, and a separate optional newsletter preference. Google sign-in does not authorise access to a local BotHearth daemon.
+
+Configure the existing service variables above, plus these external secrets/configuration:
+
+| Variable | Required value |
+|---|---|
+| `ENTERPRISE_ACCOUNT_CONFIG` | Absolute path to the JSON configuration described below; omit to disable the new path |
+| `GOOGLE_CLIENT_ID` | Google web OAuth client ID for this account service |
+| `GOOGLE_CLIENT_SECRET` | That client's secret, supplied by the host's secret manager/environment |
+| `ENTERPRISE_LICENCE_KEY_FILE` | Absolute path to an owner/root-owned regular Ed25519 PKCS#8 PEM private key file, mode `0600`; symlinks are rejected |
+| `ENTERPRISE_ACCOUNT_DATA_KEY` | A separate stable random 32-byte key, base64-encoded, for encrypting stored certificates and email-link/PKCE secrets |
+
+The configuration file contains no credentials. All three terms files are complete, approved plain text; paths resolve relative to the configuration file. These identifiers are examples of the required shape, **not an adopted release or licence**:
+
+```json
+{
+  "model": "google-offline-v1",
+  "coveredRelease": "EXACT_OWNER_SELECTED_RELEASE_OR_COMMIT",
+  "keyId": "issuer-key-01",
+  "terms": {
+    "account": { "id": "APPROVED_ACCOUNT_TERMS_ID", "file": "account-terms.txt" },
+    "noncommercial": { "id": "APPROVED_NONCOMMERCIAL_TERMS_ID", "file": "noncommercial-terms.txt" },
+    "privacy": { "id": "APPROVED_ACCOUNT_PRIVACY_ID", "file": "account-privacy.txt" }
+  }
+}
+```
+
+Use separate production and staging Google clients, databases and keys. The exact authorised Google redirect URI is `ENTERPRISE_ORIGIN/account/auth/google/callback`; production requires HTTPS. Open signup in the person's normal browser. Google receives only the requested `openid email` scopes, with state, nonce and S256 PKCE. `jose` validates Google's RS256 signature, issuer, audience, token age and expiry against Google's fixed JWKS endpoint. Only the stable subject and email are retained; names, avatars, access tokens and refresh tokens are discarded. Do not infer organisation authority from an email domain. See [Google's OIDC flow](https://developers.google.com/identity/openid-connect/openid-connect) and [ID-token validation](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+
+Sessions last 24 hours, with a fresh sign-in required after 15 minutes before key reveal/download/export or new certificate issuance. Necessary Secure/HttpOnly/SameSite cookies are separate from legacy enterprise and local daemon sessions. Expired authentication challenges and sessions are removed at least once per minute while the process runs, as well as on account requests. No authentication tokens, key bodies or email contents are logged by the service; configure the reverse proxy to omit sensitive query strings and headers too.
+
+Certificates use compact JWS with fixed `Ed25519`, `bothearth-license+jws` and a pinned issuer key ID. Verification is entirely local and accepts only the exact `covered_release`. There is no expiry, heartbeat, fingerprint or installation registry. Noncommercial certificates have no invented concurrent-installation cap. Commercial certificates, once a real fulfilment integration exists, represent one concurrent daemon each. A certificate is private entitlement evidence, not an account password or remote-control credential. Its payload has opaque holder/licence IDs, coverage and a terms hash; it is readable, not encrypted. Exact signed certificates are encrypted in SQLite using AES-256-GCM. No private signing key ships in the app.
+
+Pin the public verification key in the applicable app release through its separate release configuration. Do not let a pasted licence supply its own trusted public key. On signer rotation, use a new `keyId`, preserve old public verification keys and keep historic signed certificates; older builds must already trust a key before receiving its new certificates. The service rejects changing a public key under an existing ID, rewriting an existing terms ID, or using the wrong account-data encryption key. Back up the encryption key separately from encrypted database backups; rotating the session secret signs users out but leaves certificates readable. Offline key copies cannot be remotely invalidated everywhere, and offline licence verification does not remove a task's need for model/network services.
+
+Newsletter consent is unchecked and separate. Requests record the exact consent text/version, source and time, then send a 24-hour confirmation link. GET visits do not subscribe or unsubscribe. Confirmation and unsubscribe POSTs use independent opaque capabilities; unsubscribe requires no login and supports one-click email POSTs. Withdrawal suppresses all records for the destination immediately, including pending confirmation, and never changes a licence. A changed Google email does not transfer newsletter consent. `newsletterRecipients(db)` applies suppression at send time; any future campaign sender must call it again for retries and must restore/reapply suppression changes after restoring backups. No newsletter campaign sender, analytics or tracking pixels are implemented. Service/provider/mailbox and statutory record-retention policies still need deployment-specific configuration.
+
+The account page also supports recovery and closure after a fresh Google sign-in. A recovery code is shown once; only its SHA-256 digest is stored, and generating another replaces it. Sign into a different Google identity without an existing BotHearth profile to redeem it once. Recovery preserves the original holder and exact certificates, revokes the old identity’s sessions and withdraws its newsletter consent. Existing accounts cannot be merged. Account closure requires an explicit confirmation, revokes sessions, removes the Google identity, email and recovery code, and suppresses newsletter delivery. Opaque certificate and accepted-terms evidence remain for existing perpetual rights. Backup and legally required retention need deployment-specific policies; closure does not invalidate offline certificates.
+
+`GET /account/status` reports whether signup is enabled and always reports checkout unavailable. The commercial page shows **US$60 once per bot**, **planned future US$199** (not a former price), quantities **1–50**, and the existing Contact us form for larger orders. `POST /account/orders` validates the quantity and returns `503` without creating an order, collecting money or issuing paid certificates. No payment provider has been configured or verified; there is no fake webhook, success redirect or manual payment switch. Add fulfilment only against the actual approved provider, with server-verified payment events, one certificate per seat, durable idempotency, recoverable signing/delivery and reconciliation. Existing seller and refund decisions remain unchanged.
+
+Before public activation, supply the approved release boundary and legal/privacy texts, Google domain/branding/client configuration, verified sender and real delivery evidence, public verification-key packaging, encrypted-backup/restore ownership, and the applicable privacy/retention/contact arrangements. Paid checkout/receipts and payment dispute handling are not implemented. Google account loss leaves exported certificates usable; the unauthenticated Contact us route remains available for account help. Do not describe this local implementation as deployed or payment-ready.
+
+Run `node --test tests/unit/licensing/certificate.test.ts tests/unit/website/accounts.test.ts tests/unit/website/enterprise.test.ts tests/unit/website/contact.test.ts`. These tests use generated test keys, a synthetic Google provider and intercepted mail, never a real login, email or purchase.

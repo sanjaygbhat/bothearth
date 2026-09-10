@@ -165,8 +165,25 @@ describe("runtime — the status pill", () => {
 
   it("says so plainly when nothing is connected", () => {
     const pill = aiIdentity({ status: status({ task_start_available: false }), model: null });
-    assert.equal(pill.text, "No AI connected");
+    assert.equal(pill.text, "No model connected");
     assert.equal(pill.tone, "warn");
+  });
+
+  it("keeps a selected model visible while reporting its actual connection state", () => {
+    for (const [connectionStatus, message] of [
+      ["signed_out", "sign-in required"], ["signing_in", "finish sign-in"],
+      ["missing", "setup needed"], ["error", "connection check failed"],
+    ] as const) {
+      const pill = aiIdentity({ status: status({ task_start_available: false }),
+        model: "gpt-6-astra", executionMode: "codex", connectionStatus });
+      assert.equal(pill.text, "Codex · GPT-6 Astra");
+      assert.equal(pill.sub, `· ${message}`);
+      assert.equal(pill.tone, "warn");
+      assert.match(pill.label, /Selected model: gpt-6-astra/);
+      assert.doesNotMatch(pill.label, /on your own plan/);
+    }
+    assert.equal(aiIdentity({ status: null, model: "gpt-6-astra", executionMode: "codex" }).sub,
+      "· checking connection");
   });
 
   it("keeps the detail the pill had to drop in its accessible name", () => {

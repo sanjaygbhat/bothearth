@@ -43,12 +43,15 @@ test("senders hit local mock HTTP server", async () => {
     [
       `ntfy://${base}/topic-a`,
       `webhook:${base}/hook`,
-      `telegram:tok123:chat99`,
+      `telegram:123456:synthetic-token:chat99`,
     ],
     async (input, init) => {
       // Rewrite telegram API host to local mock
       const u = String(input);
+      assert.ok(init?.signal instanceof AbortSignal, "every channel has a bounded request");
       if (u.includes("api.telegram.org")) {
+        assert.ok(u.endsWith("/bot123456:synthetic-token/sendMessage"));
+        assert.equal(JSON.parse(String(init?.body)).chat_id, "chat99");
         return fetch(`${base}/telegram`, init);
       }
       return fetch(input, init);

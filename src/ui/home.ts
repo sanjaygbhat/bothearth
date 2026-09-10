@@ -22,12 +22,15 @@ import {
   type RuntimeWatcher,
 } from "./runtime.ts";
 import { element } from "./safe.ts";
+import { publishLicenceBadge } from "./licence.ts";
 import { currentSession, PAIR_AGAIN, type SessionInfo } from "./session.ts";
 import { attention, modelbotNative, type AttentionItem } from "./native.ts";
 import { countdownText } from "./needs-you.ts";
 import { navigate, registerView, setStatusPill, setTitle } from "./shell.ts";
 import { markTaskStarted } from "./task.ts";
 import type { TaskRow } from "./task-view.ts";
+import { isActiveTakeover, type TakeoverRow } from "./takeover.ts";
+import type { Connection, Provider } from "./connection.ts";
 
 /* -------------------------------------------------------------------------
  * Copy and constants — ux-spec §2.1 / §2.2, design-brief §5.
@@ -36,10 +39,12 @@ import type { TaskRow } from "./task-view.ts";
 const HEADING_LINES = ["What should your bot", "get done?"] as const;
 
 export const EXAMPLES = [
-  "Pull last month’s invoices off my billing page into a spreadsheet",
-  "Check every link on my site and list the ones that are broken",
-  "Watch this listing and tell me the moment the price drops",
+  "Audit [website URL] for AI search visibility. Prioritize three fixes and draft one for me to review.",
+  "Check links on [website URL]. List broken links with their source pages.",
+  "Summarize [page URL]. Include source links, key facts and three takeaways.",
 ] as const;
+
+const STARTER_LINK = /\[(?:website|page) URL\]/;
 
 /**
  * The Mac shell is an app you reopen; a browser is a link the daemon minted,
@@ -51,12 +56,12 @@ function thisMachine(): string {
 
 function reconnectHelp(): string {
   return modelbotNative.isNative
-    ? "Open ModelBot from your Applications folder again — your draft is still here."
+    ? "Open BotHearth from your Applications folder again. Your draft is saved."
     : `${PAIR_AGAIN} Your draft is still here.`;
 }
 
 export const EMPTY_RECENT =
-  "No tasks yet. Start with something small you can check — like finding last month’s invoice on a site you already use.";
+  "No tasks yet. Try a public page you can check yourself.";
 
 const PLACEHOLDER = "Describe it the way you’d say it to a person";
 
@@ -105,7 +110,13 @@ export function waitingByTask(items: AttentionItem[]): Map<string, number> {
   return out;
 }
 
-export function recentStatus(status: string): { word: string; tone: StatusTone } {
+export function recentStatus(status: string, controlState?: string): { word: string; tone: StatusTone } {
+  if (!["completed", "cancelled", "failed"].includes(status)) {
+    if (controlState === "human") return { word: "Human control", tone: "warn" };
+    if (controlState === "paused") return { word: "Control paused", tone: "warn" };
+    if (controlState === "resume_validating") return { word: "Returning control", tone: "run" };
+    if (controlState === "takeover_requested") return { word: "Waiting for you", tone: "warn" };
+  }
   switch (status) {
     case "running":
       return { word: "Working", tone: "run" };
@@ -175,7 +186,8 @@ export type BlockerAction = {
   kind: "primary" | "secondary" | "ghost";
   /** An href opens something outside the app; onClick stays inside it. */
   href?: string;
-  intent?: "settings" | "prepare" | "disclose";
+  intent?: "settings" | "licence" | "prepare" | "disclose";
+  provider?: Provider;
 };
 
 export interface BlockerCard {
@@ -194,11 +206,11 @@ export interface BlockerCard {
 }
 
 const WATCH_CHECKING = {
-  text: "Checking every couple of seconds — this page moves on by itself.",
+  text: "Checking automatically…",
   tone: "run" as StatusTone,
 };
 const WATCH_TRUST = {
-  text: "No other setup on your Mac — no screen recording, no accessibility access, ever.",
+  text: "Sign in through your model provider.",
   tone: "ok" as StatusTone,
 };
 
@@ -217,9 +229,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       key: "prepare_failed",
       glyph: "alert",
       heading: "Setup didn’t finish",
-      body:
-        "The one-time setup stopped partway. Nothing was lost and nothing was changed on your Mac — " +
-        "you can run it again.",
+      body: "Setup stopped partway. Try again to continue.",
       actions: [
         { label: "Try again", kind: "primary", intent: "prepare" },
         ...(prepare.error
@@ -233,7 +243,20 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
 
   const blocker = primaryBlocker(status);
 
+  if (blocker?.id === "licence_required") return {
+    key: blocker.id, glyph: "alert", heading: blocker.title, body: blocker.detail,
+    actions: [{ label: "Add licence key", kind: "primary", intent: "licence" }], watch: WATCH_CHECKING,
+  };
+
   if (blocker?.id === "ai_not_connected") return aiCard(status, blocker);
+
+  if (blocker?.id.startsWith("selected_provider_")) return {
+    key: `${blocker.id}:${status.ai.provider}`, glyph: "key", heading: blocker.title, body: blocker.detail,
+    actions: [{ label: blocker.id === "selected_provider_signed_out" ? "Sign in"
+      : blocker.id === "selected_provider_signing_in" ? "Finish sign-in" : "Model connection",
+      kind: "primary", intent: "settings", ...(status.ai.provider ? { provider: status.ai.provider } : {}) }],
+    watch: WATCH_CHECKING,
+  };
 
   if (blocker?.id === "node_version" && !modelbotNative.isNative) {
     return {
@@ -241,7 +264,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       glyph: "alert",
       heading: blocker.title,
       body:
-        `ModelBot needs a newer Node than ${thisMachine()} has (${status.node.version}). Install the ` +
+        `BotHearth needs a newer Node than ${thisMachine()} has (${status.node.version}). Install the ` +
         "current version, then run `modelbot start` again.",
       actions: blocker.action.url
         ? [{ label: "Show me how", kind: "primary", href: blocker.action.url }]
@@ -254,11 +277,8 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
     return {
       key: "docker_missing",
       glyph: "computer",
-      heading: "Your bot needs its own computer",
-      body:
-        `It works inside a private computer on ${thisMachine()}, so it never touches your files or ` +
-        "your logged-in browser. Docker is what builds that computer. It’s free, and we’ll wait " +
-        "right here while you install it.",
+      heading: "Install Docker to continue",
+      body: `Docker runs the bot’s separate browser on ${thisMachine()}.`,
       actions: [
         { label: "Install OrbStack", kind: "primary", href: blocker.action.url ?? ORBSTACK_URL },
         { label: "Use Docker Desktop", kind: "secondary", href: DOCKER_DESKTOP_URL },
@@ -267,11 +287,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       watch: WATCH_CHECKING,
       detail: {
         label: "Why is this needed?",
-        text:
-          "Your bot clicks around real websites. Giving it a computer of its own means a mistake " +
-          "stays in there — it can’t reach your documents, your photos, or the sites you’re already " +
-          "signed in to. OrbStack and Docker Desktop both build that computer; OrbStack is smaller " +
-          "and faster to install.",
+        text: "Docker runs the bot’s browser separately from your everyday browser. Files and accounts you give the bot remain available to it.",
       },
     };
   }
@@ -283,7 +299,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       key: "docker_not_running",
       glyph: "computer",
       heading: `${engine} isn’t running yet`,
-      body: `Open ${engine}, wait for it to finish starting, and this moves on by itself.`,
+      body: `Open ${engine} and leave it running.`,
       actions: [
         {
           label: `Open ${engine}`,
@@ -295,9 +311,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       watch: WATCH_CHECKING,
       detail: {
         label: "Show me how",
-        text:
-          `${engine} is in your Applications folder. Open it and leave it running — it takes about ` +
-          "half a minute to start, and you don’t need to do anything inside it.",
+        text: `Open ${engine} from your Applications folder.`,
       },
     };
   }
@@ -310,9 +324,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       key: "preparing",
       glyph: "cube",
       heading: "Getting its computer ready",
-      body:
-        "Building the private computer it works in. This happens once and can take several " +
-        "minutes. You can write your task now.",
+      body: "Setup can take several minutes. You can write your task now.",
       actions: [],
       watch: WATCH_CHECKING,
       progress: { percent, step: prepare.step || "Starting the one-time setup" },
@@ -327,7 +339,7 @@ export function blockerCard(status: RuntimeStatus | null): BlockerCard | null {
       body: blocker.detail,
       actions: blocker.action.url
         ? [{ label: "Show me how", kind: "primary", href: blocker.action.url }]
-        : [],
+        : blocker.action.kind === "open_settings" ? [{ label: "Open Settings", kind: "primary", intent: "settings" }] : [],
       watch: WATCH_CHECKING,
     };
   }
@@ -341,7 +353,7 @@ function aiCard(status: RuntimeStatus, blocker: RuntimeBlocker): BlockerCard {
   if (status.ai.cli_found) {
     const app = status.ai.provider === "codex" ? "Codex" : "Claude Code";
     const other = status.ai.provider === "codex" ? "Claude" : "Codex";
-    // Signed in and still blocked means ModelBot has not been pointed at it
+    // Signed in and still blocked means BotHearth has not been pointed at it
     // yet. Asking for a sign-in that already happened reads as a bug.
     if (status.ai.logged_in) {
       return {
@@ -349,8 +361,7 @@ function aiCard(status: RuntimeStatus, blocker: RuntimeBlocker): BlockerCard {
         glyph: "key",
         heading: `Connect ${app}`,
         body:
-          `${app} is signed in on ${thisMachine()}, but ModelBot isn’t using it yet. Connect it in ` +
-          `Settings and your bot starts thinking with it — your sign-in stays with ${app}.`,
+          `${app} is signed in. Connect it in Settings to start.`,
         actions: [
           { label: `Connect ${app}`, kind: "primary", intent: "settings" },
           { label: `Use ${other} instead`, kind: "ghost", intent: "settings" },
@@ -362,7 +373,7 @@ function aiCard(status: RuntimeStatus, blocker: RuntimeBlocker): BlockerCard {
       key: "ai_signed_out",
       glyph: "key",
       heading: `${app} needs you to sign in again`,
-      body: "One sign-in in your browser and your bot picks up where it left off.",
+      body: "Sign in through your browser to reconnect.",
       actions: [
         { label: "Sign in", kind: "primary", intent: "settings" },
         { label: `Use ${other} instead`, kind: "ghost", intent: "settings" },
@@ -374,9 +385,7 @@ function aiCard(status: RuntimeStatus, blocker: RuntimeBlocker): BlockerCard {
     key: "ai_not_connected",
     glyph: "key",
     heading: "Connect your model account",
-    body:
-      `BotHearth runs on ${thisMachine()} and connects to your installed model CLI. ` +
-      "The CLI handles sign-in. Provider eligibility, limits, and charges apply.",
+    body: "Connect Codex or Claude Code. Your provider’s eligibility, limits and charges apply.",
     actions: [
       { label: "Use Claude", kind: "primary", intent: "settings" },
       { label: "Use Codex", kind: "secondary", intent: "settings" },
@@ -439,6 +448,16 @@ export function composerState(input: {
     };
   }
   if (!input.ready) {
+    if (input.blockerKey === "licence_required") return {
+      label: "Start task", disabled: true, primary: true, keys: false,
+      hint: "Add your licence key to start", cancel: false,
+    };
+    if (input.blockerKey?.startsWith("selected_provider_")) return {
+      label: "Start task", disabled: true, primary: true, keys: false,
+      hint: input.blockerKey.startsWith("selected_provider_signed_out") ? "Sign in above to start"
+        : input.blockerKey.startsWith("selected_provider_signing_in") ? "Finish signing in to start"
+        : "Check Model connection to start", cancel: false,
+    };
     const aiBlocked =
       input.blockerKey === "ai_not_connected" || input.blockerKey === "ai_signed_out";
     return aiBlocked
@@ -447,7 +466,7 @@ export function composerState(input: {
           disabled: true,
           primary: true,
           keys: false,
-          hint: "Pick an AI above and this is ready to go",
+          hint: "Connect a model above to start",
           cancel: false,
         }
       : {
@@ -485,6 +504,112 @@ function writeDraft(value: string): void {
   } catch {
     // Private mode: the draft still lives in the box for this window.
   }
+}
+
+type ModelSelection = { adapter: Provider | "standalone"; model: string };
+// Matches the native task API, including provider-qualified IDs.
+const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@+\[\]-]{0,511}$/;
+type ModelCatalog = { providers: Array<{
+  id: Provider; label: string; default_model: string;
+  connected?: boolean; start_available?: boolean;
+  connection_status?: Connection["status"]; limit?: Connection["limit"];
+  models: Array<{ id: string; label: string }>;
+}> };
+
+/** Native selects cover the usual choice; a custom ID needs one deliberate selection. */
+function modelFields(id: string, onChange: () => void) {
+  const root = element("fieldset", "home-model-fields");
+  root.disabled = true;
+  root.append(element("legend", "sr-only", id === "home" ? "Task model" : "Subagent model"));
+  const providerLabel = element("label", "home-model-field", "Provider");
+  const provider = document.createElement("select");
+  provider.id = `${id}-provider`;
+  for (const [value, name] of [["codex", "Codex"], ["claude", "Claude"]]) {
+    const option = element("option", undefined, name);
+    option.value = value!;
+    provider.append(option);
+  }
+  provider.value = "codex";
+  providerLabel.append(provider);
+  const modelLabel = element("label", "home-model-field", "Model");
+  const model = document.createElement("select");
+  model.id = `${id}-model`;
+  modelLabel.append(model);
+  const customLabel = element("label", "home-model-field home-model-custom", "Custom model ID");
+  const custom = document.createElement("input");
+  custom.id = `${id}-custom-model`;
+  custom.type = "text";
+  custom.maxLength = 512;
+  custom.autocomplete = "off";
+  custom.spellcheck = false;
+  custom.placeholder = "Exact model ID";
+  customLabel.append(custom);
+  root.append(providerLabel, modelLabel, customLabel);
+  let catalog: ModelCatalog | null = null;
+  let configuredModel = "";
+  let configuredOption: HTMLOptionElement | null = null;
+  const value = (): ModelSelection => ({ adapter: provider.value as ModelSelection["adapter"],
+    model: model.value === "__custom__" ? custom.value.trim() : model.value });
+  const fill = (selected: string, keepCustom = false) => {
+    const configured = provider.value === "standalone";
+    model.disabled = configured;
+    const entry = catalog?.providers.find((p) => p.id === provider.value);
+    const choices = new Map((entry?.models ?? []).map((m) => [m.id, m.label]));
+    if (selected && !choices.has(selected)) choices.set(selected, selected);
+    model.replaceChildren();
+    for (const key of choices.keys()) {
+      const option = element("option", undefined, key);
+      option.value = key;
+      model.append(option);
+    }
+    const other = element("option", undefined, "Custom model…");
+    other.value = "__custom__";
+    if (!configured) model.append(other);
+    if (configured && !selected) {
+      const unknown = element("option", undefined, "Model not reported");
+      unknown.value = "";
+      model.append(unknown);
+    }
+    model.value = configured ? selected : keepCustom || !selected ? "__custom__" : selected;
+    custom.value = selected;
+    customLabel.hidden = configured || (!catalog && !selected) || model.value !== "__custom__";
+  };
+  provider.addEventListener("change", () => {
+    fill(provider.value === "standalone" ? configuredModel : catalog?.providers.find((p) => p.id === provider.value)?.default_model ?? "");
+    onChange();
+  });
+  model.addEventListener("change", () => {
+    customLabel.hidden = model.value !== "__custom__";
+    if (!customLabel.hidden) custom.focus();
+    onChange();
+  });
+  custom.addEventListener("input", onChange);
+  fill("");
+  return { root, value,
+    set(selection: ModelSelection) { provider.value = selection.adapter; fill(selection.model); },
+    setConfigured(modelId: string | null) {
+      if (modelId === null) {
+        configuredOption?.remove();
+        configuredOption = null;
+        return;
+      }
+      configuredModel = modelId;
+      if (!configuredOption) {
+        configuredOption = element("option", undefined, "Configured model");
+        configuredOption.value = "standalone";
+        provider.append(configuredOption);
+      }
+      provider.value = "standalone";
+      fill(modelId);
+    },
+    setCatalog(next: ModelCatalog) {
+      const previous = value();
+      const keepCustom = model.value === "__custom__" && Boolean(previous.model);
+      catalog = next;
+      fill(previous.model || next.providers.find((p) => p.id === previous.adapter)?.default_model || "", keepCustom);
+      root.disabled = false;
+    },
+  };
 }
 
 /* -------------------------------------------------------------------------
@@ -605,11 +730,28 @@ class HomeView {
   private announcer: HTMLElement | null = null;
   private blockerSlot: HTMLElement | null = null;
   private recentSlot: HTMLElement | null = null;
+  private leadModel: ReturnType<typeof modelFields> | null = null;
+  private executorModel: ReturnType<typeof modelFields> | null = null;
+  private orchestrator: HTMLInputElement | null = null;
+  private executorOptions: HTMLDetailsElement | null = null;
+  private executorSummary: HTMLElement | null = null;
+  private modelHint: HTMLElement | null = null;
+  private modelRetry: HTMLButtonElement | null = null;
+  private modelCatalog: ModelCatalog | null = null;
+  private modelsBlocked = true;
+  private configuredCurrent = false;
+  private leadEdited = false;
+  private executorEdited = false;
+  private reasoning: HTMLSelectElement | null = null;
+  private reasoningLabel: HTMLLabelElement | null = null;
+  private modelsRevision = 0;
 
   private watcher: RuntimeWatcher | null = null;
   private status: RuntimeStatus | null = null;
   private session: SessionInfo | null = null;
   private tasks: TaskRow[] | null = null;
+  private takeovers: TakeoverRow[] | null = null;
+  private recentRevision = 0;
   private waitingTick: number | undefined;
 
   private renderedCardKey: string | null = null;
@@ -637,6 +779,13 @@ class HomeView {
       .then((session) => {
         if (!this.root) return;
         this.session = session;
+        if (!this.leadEdited && (session?.execution_mode === "codex" || session?.execution_mode === "claude")) {
+          const selection = { adapter: session.execution_mode, model: session.model ?? "" };
+          this.leadModel?.set(selection);
+          this.executorModel?.set(selection);
+        } else if (!this.leadEdited && session?.execution_mode === "standalone") {
+          this.leadModel?.setConfigured(session.model ?? "");
+        }
         this.publishPill();
         this.startWatching();
         void this.loadRecent();
@@ -649,17 +798,26 @@ class HomeView {
 
     this.on(window, "focus", () => {
       this.focusBox({ onlyIfIdle: true });
-      this.watcher?.refresh();
+      this.refreshReadiness();
       void this.loadRecent();
     });
     this.on(document, "visibilitychange", () => {
-      if (!document.hidden) this.watcher?.refresh();
+      if (!document.hidden) this.refreshReadiness();
+    });
+    this.on(window, "bothearth:licence-changed", () => this.refreshReadiness());
+    this.on(window, "hashchange", () => {
+      if (location.hash === "#/" || location.hash === "") {
+        this.refreshReadiness();
+      }
     });
     this.on(window, "keydown", (event) => this.onGlobalKey(event as KeyboardEvent));
 
     // A Recent row that is counting down has to actually count. The tick runs
     // only while something is waiting, and stops the moment nothing is.
-    this.disposers.push(attention.subscribe(() => this.paintWaiting()));
+    this.disposers.push(attention.subscribe(() => {
+      this.paintWaiting();
+      void this.loadRecent();
+    }));
     this.paintWaiting();
   }
 
@@ -676,6 +834,8 @@ class HomeView {
   }
 
   unmount(): void {
+    this.recentRevision += 1;
+    this.modelsRevision += 1;
     this.watcher?.stop();
     this.watcher = null;
     if (this.waitingTick !== undefined) window.clearInterval(this.waitingTick);
@@ -783,9 +943,181 @@ class HomeView {
     this.message = element("p", "taskbox-message");
     this.message.setAttribute("role", "status");
 
-    wrap.append(label, box, foot, this.message);
+    wrap.append(label, box, this.buildRunOptions(), foot, this.message);
     this.paintComposer();
     return wrap;
+  }
+
+  private buildRunOptions(): HTMLElement {
+    const wrap = element("div", "task-run-options");
+    this.leadModel = modelFields("home", () => {
+      this.leadEdited = true;
+      const selection = this.leadModel!.value();
+      if (selection.adapter === "standalone") {
+        if (this.orchestrator) this.orchestrator.checked = false;
+        this.configuredCurrent = false;
+        void this.loadModels();
+      }
+      if (!this.executorEdited && selection.adapter !== "standalone") this.executorModel?.set(selection);
+      this.paintRunOptions();
+    });
+    const label = element("label", "home-orchestrator");
+    this.orchestrator = document.createElement("input");
+    this.orchestrator.type = "checkbox";
+    this.orchestrator.id = "home-orchestrator";
+    this.orchestrator.checked = false;
+    this.orchestrator.disabled = true;
+    this.orchestrator.setAttribute("aria-controls", "home-executor-options");
+    label.append(this.orchestrator, element("span", undefined, "Use subagents"));
+    this.executorOptions = document.createElement("details");
+    this.executorOptions.id = "home-executor-options";
+    this.executorOptions.className = "home-executor-options";
+    this.executorOptions.hidden = true;
+    this.executorSummary = element("summary", undefined, "Subagent model");
+    this.executorModel = modelFields("executor", () => { this.executorEdited = true; this.paintRunOptions(); });
+    this.executorOptions.append(this.executorSummary, this.executorModel.root);
+    this.orchestrator.addEventListener("change", () => this.paintRunOptions());
+    this.modelHint = element("p", "home-model-hint", "Loading model choices…");
+    this.modelHint.setAttribute("role", "status");
+    this.modelRetry = element("button", "btn ghost sm home-model-retry", "Retry model choices");
+    this.modelRetry.type = "button";
+    this.modelRetry.hidden = true;
+    this.modelRetry.addEventListener("click", () => void this.loadModels());
+    this.reasoningLabel = document.createElement("label");
+    this.reasoningLabel.textContent = "Reasoning ";
+    this.reasoning = document.createElement("select");
+    this.reasoning.id = "home-reasoning";
+    this.reasoning.setAttribute("aria-label", "Reasoning effort");
+    for (const value of ["low", "medium", "high"]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value[0]!.toUpperCase() + value.slice(1);
+      this.reasoning.append(option);
+    }
+    this.reasoning.value = "medium";
+    this.reasoningLabel.append(this.reasoning);
+    wrap.append(this.leadModel.root, this.reasoningLabel, label, this.executorOptions, this.modelHint, this.modelRetry);
+    return wrap;
+  }
+
+  private paintRunOptions(): void {
+    const enabled = Boolean(this.modelCatalog);
+    const configured = this.leadModel?.value().adapter === "standalone";
+    const on = enabled && !configured && this.orchestrator?.checked === true;
+    if (this.orchestrator) {
+      this.orchestrator.disabled = configured || !enabled || this.modelsBlocked || this.submitting;
+    }
+    if (this.leadModel) this.leadModel.root.disabled = !enabled || this.modelsBlocked || this.submitting;
+    if (this.reasoningLabel) this.reasoningLabel.hidden = this.leadModel?.value().adapter !== "codex";
+    if (this.reasoning) this.reasoning.disabled = !enabled || this.modelsBlocked || this.submitting;
+    if (this.executorModel) this.executorModel.root.disabled = !enabled || this.modelsBlocked || this.submitting;
+    if (this.executorOptions) this.executorOptions.hidden = !on;
+    const executor = this.executorModel?.value();
+    if (executor && this.executorSummary) {
+      this.executorSummary.textContent = `Subagent model · ${executor.adapter === "codex" ? "Codex" : "Claude"} · ${executor.model || "Choose a model"}`;
+    }
+    if (this.status) this.renderBlocker(blockerCard(this.effectiveStatus()));
+    this.publishPill();
+    this.paintComposer();
+    if (this.modelCatalog && !this.modelsBlocked && isSettling(this.effectiveStatus())) this.watcher?.start();
+    if (this.armed && this.ready() && !this.submitting) {
+      this.armed = false;
+      void this.start();
+    }
+  }
+
+  private async loadModels(): Promise<void> {
+    const revision = ++this.modelsRevision;
+    const configured = this.leadModel?.value().adapter === "standalone";
+    if (configured) this.configuredCurrent = false;
+    if (this.modelRetry) this.modelRetry.disabled = true;
+    try {
+      const [models, session] = await Promise.allSettled([
+        apiGet("/api/v1/models"), configured ? apiGet("/api/v1/session") : Promise.resolve(null),
+      ]);
+      if (!this.root || revision !== this.modelsRevision) return;
+      if (configured && this.leadModel?.value().adapter === "standalone") {
+        if (session.status === "rejected") throw session.reason;
+        const current = session.value as SessionInfo;
+        this.session = current;
+        if (current.execution_mode === "codex" || current.execution_mode === "claude") {
+          this.leadModel.setConfigured(null);
+          const selection = { adapter: current.execution_mode, model: current.model ?? "" };
+          this.leadModel.set(selection);
+          if (!this.executorEdited) this.executorModel?.set(selection);
+        } else if (current.execution_mode === "standalone") {
+          this.leadModel.setConfigured(current.model ?? "");
+          this.configuredCurrent = true;
+        } else throw new Error("configured model not reported");
+      }
+      if (models.status === "rejected") throw models.reason;
+      const catalog = models.value as ModelCatalog;
+      if (!Array.isArray(catalog.providers)) throw new Error("missing model catalog");
+      const providers = catalog.providers.filter((p) => p && ["codex", "claude"].includes(p.id) && Array.isArray(p.models));
+      if (!providers.length) throw new Error("missing model providers");
+      await Promise.allSettled(providers.map(async (provider) => {
+        if (typeof provider.start_available === "boolean" && (provider.start_available || provider.connection_status)) return;
+        const state = await apiGet(`/api/v1/connection?provider=${provider.id}`) as Connection;
+        provider.connection_status = state.status;
+        provider.limit = state.limit ?? null;
+        provider.connected = ["connected", "signed_in"].includes(state.status);
+        provider.start_available = provider.connected && !state.limit;
+      }));
+      if (!this.root || revision !== this.modelsRevision) return;
+      this.modelCatalog = { providers };
+      this.modelsBlocked = false;
+      this.leadModel?.setCatalog(this.modelCatalog);
+      this.executorModel?.setCatalog(this.modelCatalog);
+      if (this.modelHint) this.modelHint.textContent = "Your provider checks model access when the task starts.";
+      if (this.modelRetry) this.modelRetry.hidden = true;
+      this.paintRunOptions();
+    } catch (error) {
+      if (!this.root || revision !== this.modelsRevision) return;
+      const legacy = error instanceof ApiError && error.status === 404 && !this.modelCatalog;
+      this.modelsBlocked = !legacy;
+      if (this.modelHint) this.modelHint.textContent = legacy
+        ? `This app instance uses the connected model${this.session?.model ? ` (${this.session.model})` : ""}. Per-task model choices need an app update.`
+        : this.leadModel?.value().adapter === "standalone" && !this.configuredCurrent
+        ? "Couldn’t check the configured model. Your draft is kept here. Retry before starting."
+        : this.leadModel?.value().adapter === "standalone"
+        ? "Couldn’t check other models. The configured model is still selected."
+        : "Couldn’t check model choices. Your draft and selections are kept here. Retry before starting.";
+      if (this.modelRetry) this.modelRetry.hidden = false;
+      this.paintRunOptions();
+    } finally {
+      if (this.root && revision === this.modelsRevision && this.modelRetry) this.modelRetry.disabled = false;
+    }
+  }
+
+  private effectiveStatus(): RuntimeStatus | null {
+    const status = this.status;
+    const selected = this.leadModel?.value();
+    if (!status || !this.modelCatalog || selected?.adapter === "standalone") return status;
+    const provider = this.modelCatalog.providers.find((p) => p.id === selected?.adapter);
+    const executor = this.orchestrator?.checked
+      ? this.modelCatalog.providers.find((p) => p.id === this.executorModel?.value().adapter) : null;
+    const available = provider?.start_available === true && (!this.orchestrator?.checked || executor?.start_available === true);
+    const blockers = status.blockers.filter((b) => !["ai_not_connected", "ai_limit_reached"].includes(b.id));
+    const blocked = provider?.start_available ? executor : provider;
+    if (!available) {
+      const name = blocked?.label ?? "the selected provider";
+      const state = blocked?.connection_status;
+      blockers.push({ id: state === "signed_out" ? "selected_provider_signed_out"
+        : state === "signing_in" ? "selected_provider_signing_in" : "selected_provider_unavailable",
+        title: state === "signed_out" ? `Sign in to ${name}`
+          : state === "signing_in" ? `Finish signing in to ${name}`
+          : blocked?.limit ? `${name} limit reached` : `Check the ${name} connection`,
+        detail: state === "signed_out" || state === "signing_in"
+          ? `Your ${blocked === executor ? "executor " : ""}model is selected. Complete ${name} sign-in in Model connection to start.`
+          : blocked?.limit ? `${name} is signed in but has reached a provider limit. Check Model connection for details.`
+          : "Your model selection is kept. Open Model connection to check setup, sign-in and provider access.",
+        action: { kind: "open_settings" } });
+    }
+    const connection = available ? provider : blocked;
+    return { ...status, task_start_available: available, blockers,
+      ai: { ...status.ai, provider: connection?.id ?? null,
+        cli_found: connection?.connected === true || ["signed_out", "signing_in"].includes(connection?.connection_status ?? ""),
+        logged_in: connection?.connected ?? null, limit: connection?.limit ?? null } };
   }
 
   private buildExamples(): HTMLElement {
@@ -807,10 +1139,19 @@ class HomeView {
 
   private fill(text: string): void {
     if (!this.box) return;
-    this.box.value = text;
-    writeDraft(text);
+    let draft = this.box.value.trim();
+    const prior = EXAMPLES.find(example => draft.endsWith(example));
+    if (prior) draft = draft.slice(0, -prior.length).trimEnd();
+    this.box.value = draft ? `${draft}\n\n${text}` : text;
+    writeDraft(this.box.value);
     this.focusBox();
+    this.selectStarterLink();
     this.paintComposer();
+  }
+
+  private selectStarterLink(): void {
+    const match = STARTER_LINK.exec(this.box?.value ?? "");
+    if (match) this.box?.setSelectionRange(match.index, match.index + match[0].length);
   }
 
   private focusBox(options: { onlyIfIdle?: boolean } = {}): void {
@@ -854,8 +1195,14 @@ class HomeView {
    * would otherwise leave the button live and fail at container start.
    */
   private ready(): boolean {
-    if (!this.status?.task_start_available) return false;
-    return !isSettling(this.status);
+    if (this.modelChoicesBlocked()) return false;
+    const status = this.effectiveStatus();
+    if (!status?.task_start_available) return false;
+    return !isSettling(status);
+  }
+
+  private modelChoicesBlocked(): boolean {
+    return this.leadModel?.value().adapter === "standalone" ? !this.configuredCurrent : this.modelsBlocked;
   }
 
   private paintComposer(): void {
@@ -866,6 +1213,12 @@ class HomeView {
       armed: this.armed,
       submitting: this.submitting,
     });
+    if (this.modelChoicesBlocked() && !this.submitting) {
+      state.label = "Start task";
+      state.hint = this.modelRetry?.hidden ? "Loading model choices…" : "Retry model choices to start";
+      state.disabled = true;
+      state.keys = false;
+    }
     const signature = JSON.stringify(state);
     if (signature === this.renderedComposer) return;
     this.renderedComposer = signature;
@@ -901,8 +1254,47 @@ class HomeView {
       return;
     }
     if (this.submitting) return;
+    if (this.modelChoicesBlocked()) {
+      if (this.message) this.message.textContent = this.modelRetry?.hidden ? "Loading model choices…"
+        : "Retry model choices before starting. Your selections are kept here.";
+      if (!this.modelRetry?.hidden) this.modelRetry?.focus();
+      return;
+    }
+    const selected = this.modelCatalog ? this.leadModel?.value() : null;
+    const selection = selected?.adapter === "standalone" ? null : selected;
+    const orchestrator = this.orchestrator?.checked === true && Boolean(selection);
+    const executor = orchestrator ? this.executorModel?.value() : null;
+    if (selection && (!MODEL_ID.test(selection.model) || (executor && !MODEL_ID.test(executor.model)))) {
+      if (this.message) this.message.textContent = "Enter an exact model ID for each selected provider.";
+      return;
+    }
+    if (STARTER_LINK.test(goal)) {
+      if (this.message) this.message.textContent = "Replace the selected placeholder with the website or page link.";
+      this.focusBox();
+      this.selectStarterLink();
+      return;
+    }
+    if (EXAMPLES.some(example => goal.includes(example.split(STARTER_LINK)[1]!))) {
+      const link = goal.match(/https?:\/\/[^\s<>]+/i)?.[0];
+      let valid = false;
+      try { valid = Boolean(link && new URL(link).hostname); } catch { /* Ask for the actual page below. */ }
+      if (!valid) {
+        if (this.message) this.message.textContent = "Add the full website or page link, starting with https://.";
+        this.focusBox();
+        return;
+      }
+    }
 
     if (!this.ready()) {
+      if (this.effectiveStatus()?.blockers.some((blocker) => blocker.id === "licence_required")) {
+        navigate("#/settings/licence");
+        return;
+      }
+      const status = this.effectiveStatus();
+      if (status?.blockers.some((blocker) => blocker.id.startsWith("selected_provider_"))) {
+        navigate(`#/settings/ai${status.ai.provider ? `?pick=${status.ai.provider}` : ""}`);
+        return;
+      }
       // ux-spec §1/§2.2: "it starts the moment the computer is ready". Arming is
       // deliberate and reversible — nothing fires that the person did not ask for.
       this.armed = true;
@@ -914,22 +1306,25 @@ class HomeView {
     this.armed = false;
     this.submitting = true;
     if (this.message) this.message.textContent = "";
-    this.paintComposer();
+    this.paintRunOptions();
 
     try {
-      const body = { goal, capabilities: ["browser"] };
+      const body = { goal, capabilities: ["browser"], ...(selection ? {
+        ...selection, execution_mode: orchestrator ? "orchestrator" : "executor", ...(executor ? { executor } : {}),
+        ...(selection.adapter === "codex" && this.reasoning?.value !== "medium" ? { reasoning_effort: this.reasoning?.value } : {}),
+      } : {}) };
       const response = (await apiPost("/api/v1/tasks", body)) as { task: TaskRow };
       writeDraft("");
       if (this.box) this.box.value = "";
       this.submitting = false;
-      this.paintComposer();
+      this.paintRunOptions();
       // The one screen change in the app that is a handoff rather than a jump
       // (tokens.css §6, moment 1).
       markTaskStarted(response.task.id);
       navigate(`#/tasks/${response.task.id}`);
     } catch (error) {
       this.submitting = false;
-      this.paintComposer();
+      this.paintRunOptions();
       this.showStartError(error);
     }
   }
@@ -950,13 +1345,22 @@ class HomeView {
       return;
     }
     target.textContent =
-      "Your task didn’t start. Check that ModelBot is still running, then try again — your draft is still here.";
+      "Your task didn’t start. Check that BotHearth is running, then try again. Your draft is saved.";
   }
 
   /* ---------------- readiness ---------------- */
 
   private startWatching(): void {
     this.watcher = createRuntimeWatcher({
+      load: async () => {
+        const [status] = await Promise.all([
+          apiGet("/api/v1/runtime") as Promise<RuntimeStatus>, this.loadModels(),
+        ]);
+        if (!this.root) return status;
+        this.status = status;
+        // Keep checking a selected provider even when the global default is ready.
+        return this.effectiveStatus() ?? status;
+      },
       onStatus: (status) => this.onStatus(status),
       onError: (error) => this.onStatusError(error),
       ...(this.options.activeMs === undefined ? {} : { activeMs: this.options.activeMs }),
@@ -965,15 +1369,20 @@ class HomeView {
     this.watcher.start();
   }
 
+  private refreshReadiness(): void {
+    this.watcher?.start();
+    this.watcher?.refresh();
+  }
+
   private onStatus(status: RuntimeStatus): void {
-    this.status = status;
+    if (status.licence) publishLicenceBadge(status.licence);
     this.failures = 0;
     if (this.offline) {
       this.offline = false;
       this.clearOffline();
     }
     this.publishPill();
-    this.renderBlocker(blockerCard(status));
+    this.renderBlocker(blockerCard(this.effectiveStatus()));
     this.paintComposer();
 
     if (shouldAutoPrepare(status) && !this.preparing) {
@@ -1002,10 +1411,14 @@ class HomeView {
   }
 
   private publishPill(): void {
+    const selected = this.modelCatalog ? this.leadModel?.value() : null;
+    const provider = this.modelCatalog?.providers.find((p) => p.id === selected?.adapter);
     publishStatusPill({
-      status: this.status,
-      model: this.session?.model ?? null,
-      executionMode: this.session?.execution_mode ?? null,
+      status: provider ? { task_start_available: provider.start_available === true,
+        ai: { provider: provider.id, limit: provider.limit ?? null } } : this.status,
+      model: selected?.model ?? this.session?.model ?? null,
+      executionMode: selected?.adapter ?? this.session?.execution_mode ?? null,
+      connectionStatus: provider?.connection_status,
     });
   }
 
@@ -1133,9 +1546,13 @@ class HomeView {
 
     const button = element("button", className, action.label);
     button.type = "button";
+    if (action.intent === "licence") {
+      button.addEventListener("click", () => navigate("#/settings/licence"));
+      return button;
+    }
     if (action.intent === "settings") {
       const pick =
-        action.label === "Use Codex"
+        action.provider ? `?pick=${action.provider}` : action.label === "Use Codex"
           ? "?pick=codex"
           : action.label === "Use Claude"
             ? "?pick=claude"
@@ -1179,11 +1596,11 @@ class HomeView {
     const card = element("section", "blocker blocker-offline");
     const body = element("div", "blocker-body");
     body.append(
-      element("h2", undefined, expired ? "ModelBot needs to reconnect." : "ModelBot stopped unexpectedly."),
+      element("h2", undefined, expired ? "BotHearth needs to reconnect." : "BotHearth stopped unexpectedly."),
       element(
         "p",
         undefined,
-        expired ? reconnectHelp() : "It restarts by itself. If this keeps happening, send us the log.",
+        expired ? reconnectHelp() : "Try again. Your draft is saved.",
       ),
     );
 
@@ -1220,7 +1637,7 @@ class HomeView {
 
     this.renderedCardKey = "offline";
     slot.replaceChildren(card);
-    this.announce("ModelBot stopped unexpectedly. Your draft is still here.");
+    this.announce("BotHearth stopped unexpectedly. Your draft is saved.");
     this.paintComposer();
   }
 
@@ -1233,7 +1650,7 @@ class HomeView {
     const message = error instanceof Error ? error.message : String(error);
     const status = error instanceof ApiError ? `\nhttp: ${error.status}` : "";
     return [
-      "ModelBot diagnostics",
+      "BotHearth diagnostics",
       `when: ${new Date().toISOString()}`,
       `page: ${location.pathname}${location.hash}`,
       `readiness: ${message}${status}`,
@@ -1245,15 +1662,21 @@ class HomeView {
   /* ---------------- Recent ---------------- */
 
   private async loadRecent(): Promise<void> {
+    const revision = ++this.recentRevision;
     try {
-      const data = (await apiGet("/api/v1/tasks")) as { tasks: TaskRow[] };
-      if (!this.root) return;
-      this.tasks = [...data.tasks].sort(
+      const [tasks, takeovers] = await Promise.allSettled([
+        apiGet("/api/v1/tasks") as Promise<{ tasks: TaskRow[] }>,
+        apiGet("/api/v1/takeovers") as Promise<{ takeovers: TakeoverRow[] }>,
+      ]);
+      if (!this.root || revision !== this.recentRevision) return;
+      if (tasks.status === "rejected") throw tasks.reason;
+      this.takeovers = takeovers.status === "fulfilled" ? takeovers.value.takeovers ?? [] : null;
+      this.tasks = [...tasks.value.tasks].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
       this.renderRecent();
     } catch {
-      if (!this.root || this.tasks) return;
+      if (!this.root || revision !== this.recentRevision || this.tasks) return;
       this.renderRecentError();
     }
   }
@@ -1284,10 +1707,20 @@ class HomeView {
     const waiting = waitingByTask(attention.pending());
     const list = element("ul", "recent-list");
     for (const task of tasks.slice(0, RECENT_SHOWN)) {
-      const deadline = waiting.get(task.id);
-      const { word, tone } = deadline === undefined
-        ? recentStatus(task.status)
-        : { word: "Waiting for you", tone: "warn" as StatusTone };
+      const terminal = ["completed", "cancelled", "failed"].includes(task.status);
+      const control = terminal ? undefined : this.takeovers?.find((row) =>
+        row.computer_id === task.computer_id &&
+        (!row.task_id || row.task_id === task.id) && isActiveTakeover(row.state),
+      );
+      const deadline = terminal || (control && control.state !== "takeover_requested")
+        ? undefined : waiting.get(task.id);
+      let { word, tone } = recentStatus(task.status, control?.state);
+      if (deadline !== undefined) {
+        word = "Waiting for you";
+        tone = "warn";
+      } else if (this.takeovers === null && task.status === "running") {
+        word = "Active";
+      }
       // An approval expires in about a minute, and this row is where a person
       // is already looking. The countdown is the difference between "I'll get
       // to it" and "I have 48 seconds".

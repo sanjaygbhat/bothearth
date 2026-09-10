@@ -70,6 +70,24 @@ test("a vault failure names the exact recovery command and asks for a key reset"
   );
 });
 
+test("headless key-source failures preserve the vault and never suggest discarding it", () => {
+  const unavailable = classifyStartupError(new Error("vault: Secret Service is unavailable."));
+  assert.equal(unavailable.action, "none");
+  assert.equal(unavailable.exitCode, EX_CONFIG);
+  assert.match(unavailable.message, /Restore access/);
+  assert.doesNotMatch(unavailable.message, /reset-vault-key/);
+  const previous = process.env.CREDENTIALS_DIRECTORY;
+  process.env.CREDENTIALS_DIRECTORY = "/run/credentials/modelbot.service";
+  try {
+    const wrongServiceKey = classifyStartupError(new Error("vault: decryption failed (wrong key or corrupt file)"));
+    assert.equal(wrongServiceKey.action, "none");
+    assert.doesNotMatch(wrongServiceKey.message, /reset-vault-key/);
+  } finally {
+    if (previous === undefined) delete process.env.CREDENTIALS_DIRECTORY;
+    else process.env.CREDENTIALS_DIRECTORY = previous;
+  }
+});
+
 test("the line is one line and the cause never swallows the delimiter", () => {
   const failure = classifyStartupError(
     new Error("vault: the stored vault master key is not usable.\n  second line | with a pipe"),
@@ -179,6 +197,35 @@ test("doctor's vault check decrypts, and fails with the same recovery text", asy
   } finally {
     if (prev === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX;
     else process.env.MODELBOT_VAULT_KEY_HEX = prev;
+  }
+});
+
+test("first startup creates a signed audit anchor and never repairs a truncated log silently", async () => {
+  const { home } = await initHome(KEY_A);
+  const previous = process.env.MODELBOT_VAULT_KEY_HEX;
+  process.env.MODELBOT_VAULT_KEY_HEX = KEY_A;
+  try {
+    const composition = await buildProductionComposition({ home, port: 0 });
+    const log = composition.daemon.auditLog!;
+    assert.equal(log.head().seq, 1);
+    assert.equal(JSON.parse(readFileSync(log.path, "utf8")).type, "audit.anchor");
+    const doctor = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval",
+      `import { runDoctorCli } from ${JSON.stringify(new URL("../../../src/cli/doctor.ts", import.meta.url).href)}; process.exit(await runDoctorCli(["--json"], { home: ${JSON.stringify(home)}, containers: [] }));`,
+    ], {
+      encoding: "utf8", env: process.env,
+    }));
+    assert.equal(doctor().checks.find((row: { id: string }) => row.id === "audit_chain").severity, "PASS");
+    assert.equal((await buildProductionComposition({ home, port: 0 })).daemon.auditLog!.head().seq, 1);
+    writeFileSync(log.path, "");
+    await buildProductionComposition({ home, port: 0 });
+    assert.throws(doctor, (err: unknown) => {
+      const report = JSON.parse((err as { stdout: string }).stdout);
+      assert.match(report.checks.find((row: { id: string }) => row.id === "audit_chain").detail, /truncated/);
+      return true;
+    });
+  } finally {
+    if (previous === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX;
+    else process.env.MODELBOT_VAULT_KEY_HEX = previous;
   }
 });
 

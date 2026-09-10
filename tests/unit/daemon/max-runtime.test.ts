@@ -40,7 +40,7 @@ async function withDaemon(maxRuntimeSec: number, fn: (ctx: {
   const daemon = await startDaemon({
     port: 0, mcpToken: "runtime-mcp", bootstrapToken: "runtime-boot",
     workspaceRoot: join(home, "workspace"), maxRuntimeSec,
-    codexRunner: { binary, codexHome: home, model: "stub", runsRoot: join(home, "runs") },
+    codexRunner: { execution_location: "host", binary, codexHome: home, model: "stub", runsRoot: join(home, "runs") },
   });
   try {
     const { headers } = await bootstrapSession(daemon, "runtime-boot");

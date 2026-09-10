@@ -129,7 +129,7 @@ class TasksView {
     } catch {
       if (revision !== this.revision || !this.root) return;
       this.tasks = [];
-      this.showNote("Your tasks couldn’t be loaded just now. Check that ModelBot is running, then try again.");
+      this.showNote("Your tasks couldn’t be loaded just now. Check that BotHearth is running, then try again.");
       this.list?.replaceChildren();
     }
   }

@@ -15,6 +15,7 @@
 import { apiDelete, apiGet, apiPost, humanApiError } from "./api.ts";
 import { renderAiConnection } from "./connection.ts";
 import { renderDevices } from "./devices.ts";
+import { renderLicence } from "./licence.ts";
 import { appendTextChild } from "./safe.ts";
 import {
   navigate,
@@ -99,7 +100,7 @@ function renderComputers(pane: HTMLElement): () => void {
   appendTextChild(
     pane,
     "p",
-    "Your bot works inside a private computer on this Mac. It never touches your own files or the browser you are signed into.",
+    "Each computer has a separate browser profile and shares its workspace with BotHearth’s host.",
     "set-lede",
   );
 
@@ -122,7 +123,7 @@ function renderComputers(pane: HTMLElement): () => void {
     message.dataset.tone = "danger";
     message.textContent = humanApiError(
       error,
-      "Your computers could not be read just now. Check that ModelBot is running, then try again.",
+      "Your computers could not be read just now. Check that BotHearth is running, then try again.",
     );
   };
 
@@ -184,7 +185,7 @@ function renderComputers(pane: HTMLElement): () => void {
           computerStateCopy(computer, busyWith),
           computer.persistent
             ? "keeps the sites it signed into"
-            : "keeps its own logins and cookies on its own computer between tasks — nothing stored on this Mac, delete it in Settings to clear them",
+            : "keeps browser data and saved files on the host between tasks",
         ].join(" · "),
         "set-w",
       );
@@ -337,10 +338,11 @@ function renderAbout(pane: HTMLElement): () => void {
 }
 
 const SECTIONS: Section[] = [
-  { id: "ai", label: "AI connection", render: renderAiConnection },
+  { id: "ai", label: "Model connection", render: renderAiConnection },
   { id: "computers", label: "Computers", render: renderComputers },
   { id: "devices", label: "Devices", render: renderDevices },
   { id: "usage", label: "Usage", render: renderUsage },
+  { id: "licence", label: "Licence", render: renderLicence },
   { id: "about", label: "About", render: renderAbout },
 ];
 

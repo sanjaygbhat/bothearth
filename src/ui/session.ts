@@ -1,5 +1,14 @@
 import { apiGet, apiPost, setCsrfToken } from "./api.ts";
 
+export type LicenceInfo = {
+  status: "legacy" | "unlicensed" | "active";
+  required: boolean;
+  label: string;
+  account_url?: string;
+  covered_release?: string;
+  tier?: "noncommercial" | "commercial";
+};
+
 export type SessionInfo = {
   ok: boolean;
   csrf: string;
@@ -8,8 +17,9 @@ export type SessionInfo = {
   standalone_available?: boolean;
   task_start_available?: boolean;
   model?: string | null;
-  execution_mode?: "standalone" | "codex" | null;
+  execution_mode?: "standalone" | "codex" | "claude" | null;
   budget_kind?: "tool_proxy" | "provider_estimate" | null;
+  licence?: LicenceInfo;
   /**
    * What one task may be given: the figure it gets when nobody chooses one, and
    * the most the daemon will accept. Only newer daemons send it; without it the
@@ -66,6 +76,12 @@ let inflight: Promise<SessionInfo | null> | null = null;
 export function currentSession(returnHash = ""): Promise<SessionInfo | null> {
   inflight ??= bootstrapSessionFromUrl(returnHash);
   return inflight;
+}
+
+/** Refresh public settings after a successful mutation; keep this device's identity. */
+export function refreshSession(): Promise<SessionInfo | null> {
+  inflight = null;
+  return currentSession();
 }
 
 /**
