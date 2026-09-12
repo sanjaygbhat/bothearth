@@ -6,26 +6,49 @@
  * while the running container has never heard of the tool.
  */
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { DockerCli } from "../../../src/sandbox/docker.ts";
-import { computerImageDrifted } from "../../../src/sandbox/lifecycle.ts";
+import {
+  computerImageDrifted,
+  defaultSeccompPath,
+  refreshComputerImage,
+} from "../../../src/sandbox/lifecycle.ts";
 
 /** Never probe the real machine from a unit test. */
 const runtime = { kind: "docker", binary: "docker" } as const;
 
-function cli(responses: Record<string, string | Error>): DockerCli & { seen: string[][] } {
+function cli(
+  responses: Record<string, string | Error>,
+  opts: { recreate?: boolean } = {},
+): DockerCli & { seen: string[][] } {
   const seen: string[][] = [];
   return {
     binary: "docker",
     seen,
     async run(args: string[]) {
       seen.push(args);
+      if (args[0] === "inspect" && !args.includes("-f")) {
+        return JSON.stringify([
+          { HostConfig: { SecurityOpt: ["seccomp=/sandbox/seccomp-chromium.json"] } },
+        ]);
+      }
       const kind = args.includes("--platform") ? "platform" : args.includes("{{json .ImageManifestDescriptor}}") ? "manifest" : args[0];
       const key = `${kind} ${args.at(-1)}`;
       const hit = responses[key];
-      if (hit === undefined) throw new Error(`Error: No such object: ${args.at(-1)}`);
-      if (hit instanceof Error) throw hit;
-      return hit;
+      if (hit !== undefined) {
+        if (hit instanceof Error) throw hit;
+        return hit;
+      }
+      if (
+        opts.recreate &&
+        ["create", "rm", "start", "unpause", "network", "volume"].includes(args[0]!)
+      ) {
+        return "";
+      }
+      throw new Error(`Error: No such object: ${args.at(-1)}`);
     },
     runSync: () => "",
     spawn: (() => { throw new Error("not used"); }) as never,
@@ -143,5 +166,52 @@ describe("image drift", () => {
       });
       assert.equal(await computerImageDrifted("mine", { runtime, cli: c }), true);
     }
+  });
+
+  it("unpauses a paused drifted computer and recreates it from the current tag", async () => {
+    const c = cli(
+      {
+        "inspect modelbot-mine-browser": "sha256:old|modelbot/computer:dev|1111111111111111",
+        "image modelbot/computer:dev": "sha256:new|2222222222222222\n",
+      },
+      { recreate: true },
+    );
+    const refreshed = await refreshComputerImage("mine", ["browser"], {
+      runtime,
+      cli: c,
+      workspaceRoot: mkdtempSync(join(tmpdir(), "mb-drift-refresh-")),
+      seccompPath: defaultSeccompPath(),
+    });
+    assert.equal(refreshed, true);
+    const unpauseAt = c.seen.findIndex(
+      (a) => a[0] === "unpause" && a.at(-1) === "modelbot-mine-browser",
+    );
+    const rmAt = c.seen.findIndex((a) => a[0] === "rm" && a.includes("modelbot-mine-browser"));
+    const createAt = c.seen.findIndex(
+      (a) => a[0] === "create" && a.includes("modelbot-mine-browser"),
+    );
+    assert.ok(unpauseAt >= 0, "paused container must be unpaused before recreate");
+    assert.ok(rmAt > unpauseAt, "recreate removes the old container after unpause");
+    assert.ok(createAt > rmAt, "recreate creates a new container from the current tag");
+  });
+
+  it("does not recreate a computer whose image has not moved", async () => {
+    const c = cli(
+      {
+        "inspect modelbot-mine-browser": "sha256:same|modelbot/computer:dev|d6a93787a68961ac",
+        "image modelbot/computer:dev": "sha256:same|d6a93787a68961ac\n",
+      },
+      { recreate: true },
+    );
+    const refreshed = await refreshComputerImage("mine", ["browser"], {
+      runtime,
+      cli: c,
+      workspaceRoot: mkdtempSync(join(tmpdir(), "mb-drift-fresh-")),
+      seccompPath: defaultSeccompPath(),
+    });
+    assert.equal(refreshed, false);
+    assert.equal(c.seen.some((a) => a[0] === "unpause"), false);
+    assert.equal(c.seen.some((a) => a[0] === "rm"), false);
+    assert.equal(c.seen.some((a) => a[0] === "create"), false);
   });
 });

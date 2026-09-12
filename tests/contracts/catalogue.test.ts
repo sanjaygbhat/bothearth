@@ -26,7 +26,7 @@ describe("tool catalogue vs ARCH §4", () => {
       TOOL_CATALOGUE.map((t) => t.name),
       [...TOOL_NAMES],
     );
-    assert.equal(TOOL_CATALOGUE.length, 24);
+    assert.equal(TOOL_CATALOGUE.length, 25);
   });
 
   it("has schema + documented sideEffect/driver for each tool", () => {

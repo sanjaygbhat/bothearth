@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { test } from "node:test";
+import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { mock, test } from "node:test";
 import { createCodexConnection } from "../../../src/daemon/codex-connection.ts";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { Store } from "../../../src/daemon/store.ts";
 import { until } from "../../helpers/until.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
+
+isolateModelbotHome();
 
 function fixture() {
   const cli = fakeCli("mb-login", () => `import {existsSync,writeFileSync,appendFileSync,readFileSync} from 'node:fs';
@@ -127,6 +130,338 @@ test("connection defaults can change without changing existing task models and s
   } finally { await daemon.close(); await f.connection.close(); }
 });
 
+test("task start retries a one-shot probe failure and agrees with /connection", async () => {
+  const cli = fakeCli("start-probe", home => `
+import {existsSync,writeFileSync,readFileSync,unlinkSync} from 'node:fs';
+import {join} from 'node:path';
+const p=(name)=>join(${JSON.stringify(home)},name);
+if(process.argv[2]==='login'||process.argv[2]==='auth') {
+  if(process.argv[3]==='status') {
+    const n=existsSync(p('probes'))?Number(readFileSync(p('probes'),'utf8'))+1:1;
+    writeFileSync(p('probes'),String(n));
+    if(existsSync(p('fail-once'))) { unlinkSync(p('fail-once')); process.stderr.write('cannot exec: container is not running\\n'); process.exit(1); }
+    if(existsSync(p('probe-transport'))) { process.stderr.write('cannot exec: container is not running\\n'); process.exit(1); }
+    process.exit(existsSync(p('authenticated'))?0:1);
+  }
+  process.exit(0);
+}
+for await (const chunk of process.stdin) {}
+`);
+  const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  writeFileSync(cli.path("authenticated"), "SYNTHETIC_CREDENTIAL");
+  const daemon = await startDaemon({
+    port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+    bootstrapToken: "start-probe-boot",
+    codexRunner: { execution_location: "host", codexHome: cli.home, binary: cli.binary, model: "gpt-6-astra", runsRoot: cli.path("runs") },
+    codexLogin: { codexHome: cli.home, binary: cli.binary },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "start-probe-boot");
+    const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+      headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+    });
+    daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+    const connected = await api("/api/v1/connection").then((r) => r.json()) as { status: string; computer_id?: string };
+    assert.equal(connected.status, "connected");
+    assert.equal(connected.computer_id, "browser-ready");
+    writeFileSync(cli.path("fail-once"), "1");
+    const created = await api("/api/v1/tasks", { goal: "Start after a missed probe", adapter: "codex", computer_id: "browser-ready" });
+    assert.equal(created.status, 201, await created.clone().text());
+    const after = await api("/api/v1/connection").then((r) => r.json()) as { status: string };
+    assert.equal(after.status, "connected");
+    writeFileSync(cli.path("probe-transport"), "1");
+    const { task } = await created.json() as { task: { id: string } };
+    assert.equal((await api(`/api/v1/tasks/${task.id}/cancel`, {})).status, 200);
+    const staleStart = await api("/api/v1/tasks", { goal: "Start on stale connected", adapter: "codex", computer_id: "browser-ready" });
+    assert.equal(staleStart.status, 201, await staleStart.clone().text());
+  } finally {
+    await daemon.close();
+    if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+  }
+});
+
+test("create-task waits out a signed-out start probe then succeeds", async () => {
+  const cli = fakeCli("start-probe-lag", home => `
+import {existsSync,writeFileSync,readFileSync,unlinkSync} from 'node:fs';
+import {join} from 'node:path';
+const p=(name)=>join(${JSON.stringify(home)},name);
+if(process.argv[2]==='login'||process.argv[2]==='auth') {
+  if(process.argv[3]==='status') {
+    const n=existsSync(p('probes'))?Number(readFileSync(p('probes'),'utf8'))+1:1;
+    writeFileSync(p('probes'),String(n));
+    if(existsSync(p('fail-once'))) { unlinkSync(p('fail-once')); process.exit(1); }
+    process.exit(existsSync(p('authenticated'))?0:1);
+  }
+  process.exit(0);
+}
+for await (const chunk of process.stdin) {}
+`);
+  const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  writeFileSync(cli.path("authenticated"), "SYNTHETIC_CREDENTIAL");
+  const daemon = await startDaemon({
+    port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+    bootstrapToken: "start-probe-lag-boot",
+    codexRunner: { execution_location: "host", codexHome: cli.home, binary: cli.binary, model: "gpt-6-astra", runsRoot: cli.path("runs") },
+    codexLogin: { codexHome: cli.home, binary: cli.binary },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "start-probe-lag-boot");
+    const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+      headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+    });
+    daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+    const connected = await api("/api/v1/connection").then((r) => r.json()) as { status: string };
+    assert.equal(connected.status, "connected");
+    writeFileSync(cli.path("fail-once"), "1");
+    const created = await api("/api/v1/tasks", { goal: "Start after a signed-out probe", adapter: "codex", computer_id: "browser-ready" });
+    assert.equal(created.status, 201, await created.clone().text());
+    const started = await created.json() as { error?: string; status?: string; task?: { id: string } };
+    assert.notEqual(started.status, "signed_out");
+    assert.equal(started.error, undefined);
+    const { task } = started as { task: { id: string } };
+    assert.equal((await api(`/api/v1/tasks/${task.id}/cancel`, {})).status, 200);
+  } finally {
+    await daemon.close();
+    if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+  }
+});
+
+test("create-task waits out a signed-out probe after 15s of daemon uptime", async () => {
+  const cli = fakeCli("start-probe-lag-uptime", home => `
+import {existsSync,writeFileSync,readFileSync,unlinkSync} from 'node:fs';
+import {join} from 'node:path';
+const p=(name)=>join(${JSON.stringify(home)},name);
+if(process.argv[2]==='login'||process.argv[2]==='auth') {
+  if(process.argv[3]==='status') {
+    const n=existsSync(p('probes'))?Number(readFileSync(p('probes'),'utf8'))+1:1;
+    writeFileSync(p('probes'),String(n));
+    if(existsSync(p('fail-once'))) { unlinkSync(p('fail-once')); process.exit(1); }
+    process.exit(existsSync(p('authenticated'))?0:1);
+  }
+  process.exit(0);
+}
+for await (const chunk of process.stdin) {}
+`);
+  const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  writeFileSync(cli.path("authenticated"), "SYNTHETIC_CREDENTIAL");
+  const daemon = await startDaemon({
+    port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+    bootstrapToken: "start-probe-lag-uptime-boot",
+    codexRunner: { execution_location: "host", codexHome: cli.home, binary: cli.binary, model: "gpt-6-astra", runsRoot: cli.path("runs") },
+    codexLogin: { codexHome: cli.home, binary: cli.binary },
+  });
+  const realNow = Date.now;
+  try {
+    const { headers } = await bootstrapSession(daemon, "start-probe-lag-uptime-boot");
+    const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+      headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+    });
+    daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+    const connected = await api("/api/v1/connection").then((r) => r.json()) as { status: string };
+    assert.equal(connected.status, "connected");
+    Date.now = () => realNow() + 16_000;
+    writeFileSync(cli.path("fail-once"), "1");
+    const created = await api("/api/v1/tasks", { goal: "Start after idle probe lag", adapter: "codex", computer_id: "browser-ready" });
+    assert.equal(created.status, 201, await created.clone().text());
+    const started = await created.json() as { error?: string; status?: string; task?: { id: string } };
+    assert.notEqual(started.status, "signed_out");
+    assert.notEqual(started.error, "E_PROVIDER_UNAVAILABLE");
+    assert.equal(started.error, undefined);
+    const { task } = started as { task: { id: string } };
+    assert.equal((await api(`/api/v1/tasks/${task.id}/cancel`, {})).status, 200);
+  } finally {
+    Date.now = realNow;
+    await daemon.close();
+    if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+  }
+});
+
+test("exhausted start-probe wait is starting while unsettled and signed_out once settled", async () => {
+  async function createTask(kind: "settled" | "unsettled") {
+    const cli = fakeCli(`start-probe-exhausted-${kind}`, home => `
+import {existsSync,writeFileSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+const p=(name)=>join(${JSON.stringify(home)},name);
+if(process.argv[2]==='login'||process.argv[2]==='auth') {
+  if(process.argv[3]==='status') {
+    const n=existsSync(p('probes'))?Number(readFileSync(p('probes'),'utf8'))+1:1;
+    writeFileSync(p('probes'),String(n));
+    if(existsSync(p('hold'))) {
+      writeFileSync(p('probing'),String(process.pid));
+      await new Promise(()=>setInterval(()=>{},1000));
+    }
+    process.exit(1);
+  }
+  process.exit(0);
+}
+for await (const chunk of process.stdin) {}
+`);
+    const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+    const daemon = await startDaemon({
+      port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+      bootstrapToken: `start-probe-exhausted-${kind}-boot`,
+      codexRunner: { execution_location: "host", codexHome: cli.home, binary: cli.binary, model: "gpt-6-astra", runsRoot: cli.path("runs") },
+      codexLogin: { codexHome: cli.home, binary: cli.binary },
+    });
+    const realNow = Date.now;
+    let extra = 0;
+    Date.now = () => realNow() + extra;
+    const began = realNow();
+    try {
+      const { headers } = await bootstrapSession(daemon, `start-probe-exhausted-${kind}-boot`);
+      const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+        headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+      });
+      daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+      const probesBefore = existsSync(cli.path("probes")) ? Number(readFileSync(cli.path("probes"), "utf8")) : 0;
+      if (kind === "unsettled") writeFileSync(cli.path("hold"), "1");
+      const created = api("/api/v1/tasks", { goal: `Exhausted ${kind} probe`, adapter: "codex", computer_id: "browser-ready" });
+      await until(() => {
+        if (kind === "unsettled") return existsSync(cli.path("probing"));
+        return existsSync(cli.path("probes")) && Number(readFileSync(cli.path("probes"), "utf8")) > probesBefore;
+      });
+      extra = 16_000;
+      const started = await created;
+      const startedBody = await started.json() as { error?: string; status?: string };
+      return { started, startedBody, ms: realNow() - began };
+    } finally {
+      Date.now = realNow;
+      await daemon.close();
+      if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+      else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+    }
+  }
+
+  const settled = await createTask("settled");
+  assert.ok(settled.ms < 3_000, `settled wait slept ${settled.ms}ms`);
+  assert.equal(settled.started.status, 503);
+  assert.equal(settled.startedBody.error, "E_PROVIDER_UNAVAILABLE");
+  assert.equal(settled.startedBody.status, "signed_out");
+  assert.notEqual(settled.startedBody.error, "E_RUNTIME_STARTING");
+
+  const unsettled = await createTask("unsettled");
+  assert.ok(unsettled.ms < 3_000, `unsettled wait slept ${unsettled.ms}ms`);
+  assert.equal(unsettled.started.status, 503);
+  assert.equal(unsettled.startedBody.error, "E_RUNTIME_STARTING");
+  assert.equal(unsettled.startedBody.status, "starting");
+  assert.notEqual(unsettled.startedBody.status, "signed_out");
+});
+
+test("a transport-only probe does not start a task as signed out", async () => {
+  const cli = fakeCli("start-probe-transport", () => `
+process.stderr.write('cannot exec: container is not running\\n');
+process.exit(1);
+`);
+  const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const daemon = await startDaemon({
+    port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+    bootstrapToken: "start-probe-transport-boot",
+    codexRunner: { execution_location: "host", codexHome: cli.home, binary: cli.binary, model: "gpt-6-astra", runsRoot: cli.path("runs") },
+    codexLogin: { codexHome: cli.home, binary: cli.binary },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "start-probe-transport-boot");
+    const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+      headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+    });
+    daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+    const connection = await api("/api/v1/connection");
+    assert.equal(connection.status, 200);
+    const connectionBody = await connection.json() as { status: string };
+    assert.notEqual(connectionBody.status, "signed_out");
+    const started = await api("/api/v1/tasks", { goal: "Must not look signed out", adapter: "codex", computer_id: "browser-ready" });
+    const startedBody = await started.json() as { error?: string; status?: string };
+    assert.equal(started.status, 503);
+    assert.equal(startedBody.error, "E_PROVIDER_UNAVAILABLE");
+    assert.notEqual(startedBody.status, "signed_out");
+    assert.equal(startedBody.status, connectionBody.status);
+    assert.equal(startedBody.message, "The bot’s computer is not running");
+  } finally {
+    await daemon.close();
+    if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+  }
+});
+
+
+test("a 503 while signing in logs no device challenge", async () => {
+  const prompt = "1. Open this URL\nhttps://auth.openai.com/codex/device\n2. Enter this one-time code (expires soon)\nABCD-12345\n";
+  const cli = fakeCli("start-probe-signin", () => `import {writeFileSync} from 'node:fs';
+if(process.argv[3]==='status')process.exit(1);
+if(process.argv[3]!=='--device-auth')process.exit(9);
+writeFileSync(process.env.CODEX_HOME+'/pid',String(process.pid));
+console.log(${JSON.stringify(prompt)});
+setInterval(()=>{},1000);
+`);
+  const previous = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const lines: string[] = [];
+  const log = mock.method(console, "log", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  const daemon = await startDaemon({
+    port: 0, sqlitePath: cli.path("state.sqlite"), workspaceRoot: cli.path("workspace"),
+    bootstrapToken: "start-probe-signin-boot",
+    codexLogin: { codexHome: cli.home, binary: cli.binary, loginMode: "device", timeoutMs: 5000 },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "start-probe-signin-boot");
+    const api = (path: string, body?: unknown) => fetch(`${daemon.baseUrl}${path}`, {
+      headers, ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
+    });
+    daemon.store.insertComputer({ id: "browser-ready", name: "Ready", capabilities: ["browser"], persistent: true, status: "running" });
+    assert.equal((await api("/api/v1/connection/sign-in", {})).status, 200);
+    let connection = await api("/api/v1/connection").then((r) => r.json()) as { status: string; device_auth?: { user_code?: string; verification_uri?: string } };
+    for (let i = 0; i < 100 && !connection.device_auth; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      connection = await api("/api/v1/connection").then((r) => r.json()) as typeof connection;
+    }
+    assert.equal(connection.status, "signing_in");
+    assert.equal(connection.device_auth?.user_code, "ABCD-12345");
+    const started = await api("/api/v1/tasks", { goal: "Must not leak the code", adapter: "codex", computer_id: "browser-ready" });
+    assert.equal(started.status, 503);
+    const startedBody = await started.json() as { error?: string; status?: string };
+    assert.equal(startedBody.error, "E_PROVIDER_UNAVAILABLE");
+    assert.equal(startedBody.status, "signing_in");
+    const unavailable = lines.flatMap((line) => {
+      try {
+        const row = JSON.parse(line) as Record<string, unknown>;
+        return row.msg === "provider unavailable" ? [row] : [];
+      } catch {
+        return [];
+      }
+    });
+    assert.equal(unavailable.length, 1, JSON.stringify(unavailable));
+    const row = unavailable[0]!;
+    assert.equal(row.path, "/api/v1/tasks");
+    assert.equal(row.computer, "browser-ready");
+    assert.equal(row.status, "signing_in");
+    assert.equal(row.cause, "signing_in");
+    assert.equal(typeof row.message, "string");
+    const allowed = new Set(["level", "msg", "ts", "path", "computer", "status", "message", "cause"]);
+    for (const key of Object.keys(row)) {
+      assert.ok(allowed.has(key), `unexpected log key ${key}`);
+    }
+    const serialized = JSON.stringify(row);
+    assert.equal("device_auth" in row, false);
+    assert.equal("probe" in row, false);
+    assert.equal("native_terminal" in row, false);
+    assert.doesNotMatch(serialized, /device_auth|user_code|verification_uri|ABCD-12345|auth\.openai\.com|native_terminal/);
+  } finally {
+    log.mock.restore();
+    await daemon.close();
+    if (previous === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = previous;
+  }
+});
 
 test("an older status probe cannot hide a newly started login", async () => {
   const f = fixture();
@@ -238,4 +573,158 @@ test("a failed status-probe cleanup cannot leave its concurrent native sign-in r
     await connection.close();
     await pendingStatus;
   }
+});
+
+test("sign-in scratch lives under MODELBOT_HOME and is removed when the attempt finishes", async () => {
+  const home = isolateModelbotHome();
+  const f = fixture();
+  try {
+    writeFileSync(f.path("success"), "1");
+    await f.connection.signIn();
+    await until(() => f.connected.length === 1);
+    await until(async () => (await f.connection.status()).status === "connected");
+    const root = join(home, "sign-in");
+    assert.equal(existsSync(root) ? readdirSync(root).length : 0, 0);
+  } finally { await f.connection.close(); }
+});
+
+function spawnScript(source: string) {
+  return async () => {
+    const child = spawn(process.execPath, ["-e", source], { stdio: ["ignore", "pipe", "pipe"] });
+    return { child, async stop() { if (child.pid) try { process.kill(child.pid, "SIGKILL"); } catch { /* Test-owned. */ } } };
+  };
+}
+
+test("a blocked status probe during private control is not signed out", async () => {
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home", loginMode: "device",
+    model: () => "gpt-6-astra", configured: () => false, connected: () => assert.fail(),
+    spawn: spawnScript("process.stderr.write('Error: Native execution is paused for private control.\\n'); process.exit(1)"),
+  });
+  try {
+    const status = await connection.status();
+    assert.notEqual(status.status, "signed_out");
+    assert.equal(status.status, "unknown");
+    assert.match(status.message, /check while you have control/i);
+    assert.notEqual(status.message, "");
+  } finally { await connection.close(); }
+});
+
+test("a status probe that exits 1 without a login is signed out, never with an empty message", async () => {
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home", loginMode: "device",
+    model: () => "gpt-6-astra", configured: () => false, connected: () => assert.fail(),
+    spawn: spawnScript("process.exit(1)"),
+  });
+  try {
+    const status = await connection.status();
+    assert.equal(status.status, "signed_out");
+    assert.ok(status.message.length > 0);
+  } finally { await connection.close(); }
+});
+
+test("a status probe refused by private control is rechecked after control returns", async () => {
+  let held = true;
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home",
+    model: () => "gpt-6-astra", configured: () => true, connected: () => {},
+    spawn: async () => spawnScript(held
+      ? "process.stderr.write('Native execution is paused for private control.\\n'); process.exit(75)"
+      : "process.exit(0)")(),
+  });
+  try {
+    const blocked = await connection.status();
+    assert.equal(blocked.status, "unknown");
+    assert.notEqual(blocked.status, "signed_out");
+    held = false;
+    const ready = await connection.status();
+    assert.equal(ready.status, "connected");
+    assert.equal(ready.message, "");
+    assert.doesNotMatch(ready.message, /could not be checked|have control/i);
+  } finally { await connection.close(); }
+});
+
+test("a status probe that cannot start is not signed out", async () => {
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home",
+    model: () => "gpt-6-astra", configured: () => false, connected: () => assert.fail(),
+    spawn: async () => { throw new Error("Native execution is paused for private control."); },
+  });
+  try {
+    const status = await connection.status();
+    assert.notEqual(status.status, "signed_out");
+    assert.equal(status.status, "unknown");
+    assert.ok(status.message.length > 0);
+  } finally { await connection.close(); }
+});
+
+test("a status probe that exits 1 with a transport error is not signed out", async () => {
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home",
+    model: () => "gpt-6-astra", configured: () => false, connected: () => assert.fail(),
+    spawn: spawnScript("process.stderr.write('cannot exec: container is not running\\n'); process.exit(1)"),
+  });
+  try {
+    const status = await connection.status();
+    assert.notEqual(status.status, "signed_out");
+    assert.equal(status.status, "error");
+    assert.equal(status.message, "The bot’s computer is not running");
+  } finally { await connection.close(); }
+});
+
+test("a status probe that fails once then succeeds is connected", async () => {
+  let probes = 0;
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home",
+    model: () => "gpt-6-astra", configured: () => true, connected: () => {},
+    spawn: async () => spawnScript(++probes === 1
+      ? "process.stderr.write('cannot exec: container is not running\\n'); process.exit(1)"
+      : "process.exit(0)")(),
+  });
+  try {
+    const status = await connection.status();
+    assert.equal(status.status, "connected");
+    assert.equal(probes, 2);
+    assert.equal(status.stale, undefined);
+  } finally { await connection.close(); }
+});
+
+test("a transport probe after a successful check returns the last known status stale", async () => {
+  let fail = false;
+  const connection = createCodexConnection({
+    codexHome: "/synthetic-guest-home",
+    model: () => "gpt-6-astra", configured: () => true, connected: () => {},
+    spawn: async () => spawnScript(fail
+      ? "process.stderr.write('cannot exec: container is not running\\n'); process.exit(1)"
+      : "process.exit(0)")(),
+  });
+  try {
+    assert.equal((await connection.status()).status, "connected");
+    fail = true;
+    const stale = await connection.status();
+    assert.equal(stale.status, "connected");
+    assert.equal(stale.stale, true);
+    assert.notEqual(stale.status, "signed_out");
+  } finally { await connection.close(); }
+});
+
+for (const outcome of ["cancelled", "failed", "closed"] as const) test(`sign-in scratch is removed when sign-in is ${outcome}`, async () => {
+  const home = isolateModelbotHome();
+  const f = fixture();
+  const leftover = () => existsSync(join(home, "sign-in")) ? readdirSync(join(home, "sign-in")).length : 0;
+  try {
+    if (outcome === "failed") {
+      await f.connection.signIn();
+      await until(() => existsSync(f.path("logins")));
+      await until(async () => (await f.connection.status()).status !== "signing_in");
+    } else {
+      writeFileSync(f.path("hold"), "1");
+      await f.connection.signIn();
+      await until(() => existsSync(f.path("login-pid")));
+      assert.ok(readdirSync(join(home, "sign-in")).some((name) => name.startsWith("codex-")));
+      if (outcome === "cancelled") await f.connection.cancel();
+      else await f.connection.close();
+    }
+    assert.equal(leftover(), 0);
+  } finally { await f.connection.close(); }
 });

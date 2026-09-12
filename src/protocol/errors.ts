@@ -46,3 +46,21 @@ export function toolError(
     },
   };
 }
+
+const TARGET_CRASHED = /target crashed/i;
+
+/** Model-facing copy when Playwright reports `Target crashed`. No takeover ask. */
+export const TAB_CRASH_MESSAGE = "The tab crashed. Call browser_navigate to reload it.";
+
+export function browserIoError(err: unknown): {
+  ok: false;
+  error: { code: ErrorCode; message: string; details?: Record<string, unknown> };
+} {
+  const text = err instanceof Error ? err.message : String(err);
+  return toolError("E_IO", TARGET_CRASHED.test(text) ? TAB_CRASH_MESSAGE : text);
+}
+
+export function isTargetCrashed(err: unknown): boolean {
+  const text = err instanceof Error ? err.message : String(err);
+  return TARGET_CRASHED.test(text);
+}

@@ -1,3 +1,4 @@
+import type { LiveProducer } from "../../src/protocol/live.ts";
 import type {
   ComputerJsonRpcRequest,
   ScreencastFrameHeader,
@@ -6,6 +7,7 @@ import type {
 import { TOOL_NAMES } from "../../src/types/contracts.ts";
 import { toolError } from "../../src/protocol/errors.ts";
 import { redactUrl } from "./redact.ts";
+import { DESKTOP } from "./browser/desktop.ts";
 import type { BrowserSession } from "./browser/session.ts";
 import {
   filesDelete,
@@ -34,6 +36,7 @@ export interface ServerState {
   takeover: TakeoverSession;
   screencastSubscribed: boolean;
   onLiveFrame: ((h: ScreencastFrameHeader, jpeg: Uint8Array) => void) | null;
+  onLiveControl: ((msg: LiveProducer) => void) | null;
 }
 
 export function createState(role: Role): ServerState {
@@ -44,6 +47,7 @@ export function createState(role: Role): ServerState {
     takeover: createTakeoverSession(),
     screencastSubscribed: false,
     onLiveFrame: null,
+    onLiveControl: null,
   };
 }
 
@@ -59,6 +63,25 @@ function browserUnavailable(detail: string): Error {
     ),
     { code: "E_SANDBOX_DEAD" },
   );
+}
+
+async function runBrowser(
+  state: ServerState,
+  act: (b: BrowserSession) => Promise<ToolResult>,
+): Promise<ToolResult> {
+  let b: BrowserSession;
+  try {
+    // Launch/start failures are not a crashed target: do not retry or relaunch.
+    b = await browser(state);
+  } catch (e) {
+    const err = e as Error & { code?: string };
+    if (err.code === "E_SANDBOX_DEAD") {
+      return toolError("E_SANDBOX_DEAD", err.message);
+    }
+    throw e;
+  }
+  const { withCrashedTargetRetry } = await import("./browser/session.ts");
+  return withCrashedTargetRetry(b, () => act(b));
 }
 
 async function browser(state: ServerState, origins?: string[], allowPublicNavigation = false): Promise<BrowserSession> {
@@ -82,6 +105,9 @@ async function browser(state: ServerState, origins?: string[], allowPublicNaviga
     state.browserError = null;
     state.browser.onLiveFrame = (h, jpeg) => {
       if (state.screencastSubscribed) state.onLiveFrame?.(h, jpeg);
+    };
+    state.browser.onLiveControl = (msg) => {
+      if (state.screencastSubscribed) state.onLiveControl?.(msg);
     };
   }
   if (origins) state.browser.setNavigationPolicy(origins, allowPublicNavigation);
@@ -111,6 +137,17 @@ function takeoverIdMismatch(session: TakeoverSession, id: string): boolean {
   return Boolean(id && session.takeoverId && id !== session.takeoverId);
 }
 
+/** Cookie host names only. Never names, values, or paths. */
+export function uniqueCookieHosts(cookies: Array<{ domain?: string }>): string[] {
+  const hosts = new Set<string>();
+  for (const cookie of cookies) {
+    if (typeof cookie.domain !== "string") continue;
+    const host = cookie.domain.replace(/^\./, "").trim().toLowerCase();
+    if (host) hosts.add(host);
+  }
+  return [...hosts].sort();
+}
+
 /**
  * Every method `dispatch` answers, in switch order.
  *
@@ -132,6 +169,8 @@ export const SUPPORTED_METHODS: readonly string[] = [
   "takeover.decline",
   "takeover.validate",
   "takeover.ttl",
+  "takeover.blank",
+  "takeover.goto",
   "live.pointer",
   "live.key",
   "live.text",
@@ -148,6 +187,7 @@ export const SUPPORTED_METHODS: readonly string[] = [
   "browser_tabs",
   "browser_screenshot",
   "browser_wait",
+  "browser_restart",
   "computer_mouse",
   "computer_key",
   "computer_type",
@@ -162,6 +202,7 @@ export const SUPPORTED_METHODS: readonly string[] = [
   "takeover_status",
   "done",
   "connector_call",
+  "profile.signed-in",
   "methods",
 ] as const;
 
@@ -198,20 +239,50 @@ export async function dispatch(
       case "takeover.sync": {
         state.takeover.takeoverId = s(p.takeover_id);
         state.takeover.expiresAt = s(p.expires_at);
-        state.takeover.state = "takeover_requested";
-        state.takeover.epoch += 1;
+        if (p.state === "human") {
+          const epoch = nn(p.epoch);
+          state.takeover.state = "human";
+          if (epoch != null && epoch > 0) state.takeover.epoch = Math.trunc(epoch);
+          state.browser?.setLiveMode("human");
+        } else {
+          state.takeover.state = "takeover_requested";
+          state.takeover.epoch += 1;
+        }
         return { ok: true, data: statusPayload(state.takeover) };
       }
       case "takeover.masked-observation": {
         const b = await browser(state);
         const sensitive = await b.maskSecrets();
-        return { ok: true, data: { still_sensitive: sensitive.length > 0 } };
+        return { ok: true, data: { still_sensitive: sensitive.length > 0, field: sensitive[0] ?? null } };
+      }
+      case "takeover.blank": {
+        if (state.takeover.state !== "human" && state.takeover.state !== "paused") {
+          return toolError("E_POLICY", "invalid takeover blank");
+        }
+        const b = await browser(state);
+        return b.blankTab();
+      }
+      case "takeover.goto": {
+        if (state.takeover.state !== "human") {
+          return toolError("E_POLICY", "invalid takeover goto");
+        }
+        const id = s(p.takeover_id);
+        if (takeoverIdMismatch(state.takeover, id)) {
+          return toolError("E_POLICY", "invalid takeover goto");
+        }
+        const url = s(p.url);
+        if (url !== "https://accounts.google.com/AccountChooser") {
+          return toolError("E_POLICY", "invalid navigation URL");
+        }
+        const b = await browser(state);
+        return b.navigate(url, "domcontentloaded");
       }
       case "screencast.subscribe": {
         const b = await browser(state);
         state.screencastSubscribed = true;
-        await b.startScreencast();
-        return { ok: true, data: { subscribed: true, fps: 2 } };
+        if (state.takeover.state === "human" && b.liveMode !== "human") b.setLiveMode("human");
+        if (state.takeover.state !== "paused" && state.takeover.state !== "resume_validating") await b.startScreencast();
+        return { ok: true, data: { subscribed: true, fps: DESKTOP.fps } };
       }
       case "screencast.unsubscribe": {
         state.screencastSubscribed = false;
@@ -345,8 +416,7 @@ export async function dispatch(
       }
 
       case "browser_navigate": {
-        const b = await browser(state);
-        return b.navigate(s(p.url), sn(p.wait_until));
+        return runBrowser(state, (b) => b.navigate(s(p.url), sn(p.wait_until)));
       }
       case "browser_snapshot": {
         const b = await browser(state);
@@ -377,71 +447,78 @@ export async function dispatch(
         });
       }
       case "browser_press": {
-        const b = await browser(state);
-        return b.press({
+        return runBrowser(state, (b) => b.press({
           key: s(p.key),
           snapshot_id: sn(p.snapshot_id),
           ref: sn(p.ref),
-        });
+        }));
       }
       case "browser_scroll": {
-        const b = await browser(state);
-        return b.scroll({
+        return runBrowser(state, (b) => b.scroll({
           snapshot_id: sn(p.snapshot_id),
           ref: sn(p.ref),
           dx: nn(p.dx),
           dy: nn(p.dy),
           direction: sn(p.direction),
           amount: nn(p.amount),
-        });
+        }));
       }
       case "browser_select": {
-        const b = await browser(state);
-        return b.select({
+        return runBrowser(state, (b) => b.select({
           snapshot_id: s(p.snapshot_id),
           ref: s(p.ref),
           values: Array.isArray(p.values) ? p.values.map(String) : [],
-        });
+        }));
       }
       case "browser_upload": {
-        const b = await browser(state);
-        return b.upload({
+        return runBrowser(state, (b) => b.upload({
           snapshot_id: s(p.snapshot_id),
           ref: s(p.ref),
           paths: Array.isArray(p.paths) ? p.paths.map(String) : [],
-        });
+        }));
       }
       case "browser_tabs": {
-        const b = await browser(state);
-        return b.tabs({
+        return runBrowser(state, (b) => b.tabs({
           action: s(p.action),
           tab_id: sn(p.tab_id),
           url: sn(p.url),
-        });
+        }));
       }
       case "browser_screenshot": {
-        const b = await browser(state);
-        return b.screenshot({
+        return runBrowser(state, (b) => b.screenshot({
           full_page: bn(p.full_page),
           max_width: nn(p.max_width),
           max_height: nn(p.max_height),
           snapshot_id: sn(p.snapshot_id),
           ref: sn(p.ref),
-        });
+        }));
       }
       case "browser_wait": {
-        const b = await browser(state);
-        return b.wait({
+        return runBrowser(state, (b) => b.wait({
           timeout_ms: nn(p.timeout_ms),
           ms: nn(p.ms),
           text: sn(p.text),
           url_glob: sn(p.url_glob),
           load_state: sn(p.load_state),
-        });
+        }));
+      }
+      case "browser_restart": {
+        const had = Boolean(state.browser);
+        const b = await browser(state);
+        if (had) {
+          const drained = b.abortActs();
+          await drained;
+          await b.close().catch(() => undefined);
+          await b.start();
+          b.actAbort = new AbortController();
+        }
+        return {
+          ok: true,
+          data: { url: redactUrl(b.page?.url() ?? "about:blank") },
+        };
       }
       case "computer_mouse": {
-        const b = await browser(state);
-        return b.mouse({
+        return runBrowser(state, (b) => b.mouse({
           action: s(p.action),
           x: Number(p.x ?? 0),
           y: Number(p.y ?? 0),
@@ -450,15 +527,13 @@ export async function dispatch(
           button: nn(p.button),
           dx: nn(p.dx),
           dy: nn(p.dy),
-        });
+        }));
       }
       case "computer_key": {
-        const b = await browser(state);
-        return b.key({ key: s(p.key), mods: nn(p.mods) });
+        return runBrowser(state, (b) => b.key({ key: s(p.key), mods: nn(p.mods) }));
       }
       case "computer_type": {
-        const b = await browser(state);
-        return b.typeText({ text: s(p.text) });
+        return runBrowser(state, (b) => b.typeText({ text: s(p.text) }));
       }
 
       case "shell_exec": {
@@ -506,11 +581,28 @@ export async function dispatch(
         if (!transition(state.takeover, "request")) {
           return toolError("E_POLICY", "cannot request takeover");
         }
+        const requestedId = s(p.takeover_id);
+        if (requestedId) state.takeover.takeoverId = requestedId;
         state.takeover.reason = s(p.reason) || null;
         // The page, not the caller, decides whether a credential field is on
         // screen: a person answering "there is a code to type in" needs to be
         // told which box, and an ask with no field behind it is a wrong ask.
-        state.takeover.field = (await state.browser?.maskSecrets())?.[0] ?? null;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const pending = state.browser ? state.browser.maskSecrets() : Promise.resolve(null);
+        void pending.catch(() => undefined);
+        try {
+          const fields = await Promise.race([
+            pending,
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), 1_500);
+            }),
+          ]);
+          state.takeover.field = fields?.[0] ?? null;
+        } catch {
+          state.takeover.field = null;
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
         return { ok: true, data: statusPayload(state.takeover) };
       }
       case "takeover_status":
@@ -522,6 +614,13 @@ export async function dispatch(
         };
       case "connector_call":
         return toolError("E_CAPABILITY", "connector_call is host-side");
+      case "profile.signed-in": {
+        // Operator-only: daemon maps hosts to eTLD+1. Never cookie values.
+        // A missing session must not launch Chromium; listing cookies is not activity.
+        if (state.role !== "browser" || !state.browser) return { ok: true, data: { hosts: [] } };
+        const cookies = state.browser.context ? await state.browser.context.cookies() : [];
+        return { ok: true, data: { hosts: uniqueCookieHosts(cookies) } };
+      }
       // What this build can actually do. Answered before any role check so a
       // shell-only computer reports the same list a browser one does; the
       // daemon's own capability gate decides which of them a task may use.

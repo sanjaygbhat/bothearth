@@ -8,8 +8,8 @@ enabled = true
 enabled_tools = [
   "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press",
   "browser_scroll", "browser_select", "browser_upload", "browser_tabs", "browser_screenshot",
-  "browser_wait", "computer_mouse", "computer_key", "computer_type", "shell_exec",
-  "files_list", "files_read", "files_write", "files_delete", "write_file",
-  "request_takeover", "takeover_status", "connector_call", "done"
+  "browser_wait", "browser_restart", "computer_mouse", "computer_key", "computer_type",
+  "shell_exec", "files_list", "files_read", "files_write", "files_delete",
+  "write_file", "request_takeover", "takeover_status", "connector_call", "done"
 ]
 default_tools_approval_mode = "prompt"

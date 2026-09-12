@@ -42,7 +42,7 @@ async function fixture() {
   } };
 }
 
-for (const change of ["epoch", "revoke"] as const) test(`queued operator input is not authorized after ${change} changes`, async () => {
+for (const change of ["epoch", "revoke", "disconnect"] as const) test(`queued operator input is not authorized after ${change} changes`, async () => {
   const original = FakeComputer.prototype.relayInput;
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => { release = resolve; });
@@ -60,10 +60,11 @@ for (const change of ["epoch", "revoke"] as const) test(`queued operator input i
     ws.send(JSON.stringify({ v: 1, t: "text", text: "queued", epoch: 7 }));
     await sleep(50);
     if (change === "epoch") f.daemon.store.db.prepare("UPDATE takeovers SET epoch = 8 WHERE id = ?").run("authority-lease");
+    else if (change === "disconnect") { ws.close(); await until(() => ws.readyState === WebSocket.CLOSED); }
     else f.daemon.store.deleteSession(f.session.id);
     release();
     await sleep(100);
-    assert.equal(received.length, 1, "an already-entered action may finish; queued input must not run");
+    assert.equal(received.filter(msg => (msg as { kind?: string }).kind !== "reset").length, 1, "an already-entered action may finish; queued input must not run");
     assert.equal(f.daemon.store.getTakeover("authority-lease")?.state, "human", "session closure must not release the privacy gate");
     if (change === "epoch") {
       for (const epoch of [undefined, 0, 7, 9]) ws.send(JSON.stringify({ v: 1, t: "text", text: "stale", epoch }));
@@ -111,4 +112,65 @@ test("expired sessions lose live frames and events; fresh login preserves HUMAN 
     await f.close();
     FakeComputer.prototype.startLive = start;
   }
+});
+
+test("pointer bursts keep the newest position on each side of a key event", async t => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const received: Array<Record<string, unknown>> = [];
+  t.mock.method(FakeComputer.prototype, "relayInput", async (msg: Record<string, unknown>) => {
+    received.push(msg);
+    if (received.length === 1) await blocked;
+    return { ok: true, data: {} };
+  });
+  const f = await fixture();
+  try {
+    const { ws, messages } = await f.connect("/api/v1/live/authority-browser");
+    const move = (x: number) => ws.send(JSON.stringify({ v: 1, t: "pointer", epoch: 7, kind: "move", x, y: 10 }));
+    move(0); await until(() => received.length === 1);
+    for (let x = 1; x <= 100; x++) move(x);
+    ws.send(JSON.stringify({ v: 1, t: "key", epoch: 7, kind: "keyDown", key: "a", code: "KeyA" }));
+    for (let x = 101; x <= 200; x++) move(x);
+    await sleep(50); release();
+    await until(() => received.some(m => m.x === 200));
+    assert.deepEqual(received.map(m => m.t === "pointer" ? m.x : m.key), [0, 100, "a", 200]);
+    await until(() => messages.filter(m => typeof m === "string" && JSON.parse(m).t === "input_ack").length === 4);
+    const epoch = f.daemon.store.getTakeover("authority-lease")!.epoch;
+    ws.send(JSON.stringify({ v: 1, t: "ping" }));
+    await until(() => messages.some(m => typeof m === "string" && JSON.parse(m).t === "pong"));
+    assert.equal(f.daemon.store.getTakeover("authority-lease")!.epoch, epoch);
+  } finally { release(); await f.close(); }
+});
+
+test("slow viewers bound outstanding frames and receive none after the lease deadline", async t => {
+  let computer!: FakeComputer;
+  t.mock.method(FakeComputer.prototype, "startLive", function(this: FakeComputer) { computer = this; });
+  const f = await fixture();
+  try {
+    const { ws, messages } = await f.connect("/api/v1/live/authority-browser");
+    await until(() => Boolean(computer));
+    const frame = (seq: number) => computer.emit("frame", { header: { v: 1, mode: "human", epoch: 7, seq, ts: Date.now() }, payload: new Uint8Array([255, 216, 255, 217]) });
+    const count = () => messages.filter(m => typeof m !== "string").length;
+    frame(1); await until(() => count() === 1);
+    ws.send(JSON.stringify({ v: 1, t: "frame_ack", seq: 1 })); await sleep(50);
+    frame(2); frame(3); frame(4); await sleep(50);
+    assert.equal(count(), 2, "a decoding viewer holds at most one outstanding frame");
+    ws.send(JSON.stringify({ v: 1, t: "frame_ack", seq: 2 })); await sleep(50);
+    frame(5); await until(() => count() === 3);
+    f.daemon.store.setTakeoverExpiry("authority-lease", new Date(Date.now() - 1).toISOString());
+    ws.send(JSON.stringify({ v: 1, t: "frame_ack", seq: 5 })); await sleep(50);
+    frame(6); await sleep(50);
+    assert.equal(count(), 3, "an expiry RPC cannot keep private frames flowing past the deadline");
+  } finally { await f.close(); }
+});
+
+test("a negotiated heartbeat closes a silent viewer without releasing its hold", async () => {
+  const f = await fixture();
+  try {
+    const { ws, messages } = await f.connect("/api/v1/live/authority-browser");
+    ws.send(JSON.stringify({ v: 1, t: "ping" }));
+    await until(() => messages.some(m => typeof m === "string" && JSON.parse(m).t === "pong"));
+    await until(() => ws.readyState === WebSocket.CLOSED, "silent viewer stayed connected", 3000);
+    assert.equal(f.daemon.store.getTakeover("authority-lease")?.state, "human");
+  } finally { await f.close(); }
 });

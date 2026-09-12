@@ -29,6 +29,7 @@ export const TOOL_META: Record<
   browser_tabs: { sideEffect: "act", driver: "a11y" },
   browser_screenshot: { sideEffect: "read", driver: "vision" },
   browser_wait: { sideEffect: "read", driver: "a11y" },
+  browser_restart: { sideEffect: "act", driver: "a11y" },
   computer_mouse: { sideEffect: "act", driver: "vision" },
   computer_key: { sideEffect: "act", driver: "vision" },
   computer_type: { sideEffect: "act", driver: "vision" },

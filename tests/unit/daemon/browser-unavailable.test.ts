@@ -14,7 +14,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { FakeComputer } from "../../../src/computer-client/fake.ts";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { runAgentLoop, type AgentLoopEvent } from "../../../src/daemon/agent-loop.ts";
+import {
+  BROWSER_RELAUNCH_ACTIVITY,
+  BROWSER_TIMEOUT_RELAUNCH_AFTER,
+  runAgentLoop,
+  type AgentLoopEvent,
+} from "../../../src/daemon/agent-loop.ts";
 import { createA11yDriver } from "../../../src/drivers/a11y.ts";
 import {
   buildRuntimeStatus,
@@ -38,7 +43,7 @@ class BrowserDeadComputer extends FakeComputer {
   }
 }
 
-describe("a browser that will not start", () => {
+describe("a browser that will not start", { concurrency: false }, () => {
   it("pauses the task with the cause instead of leaving the model to improvise", async () => {
     const computer = new BrowserDeadComputer("browser-dead");
     let calls = 0;
@@ -191,5 +196,291 @@ describe("a browser that will not start", () => {
     const back = await probe.snapshot();
     assert.equal(back.task_start_available, true);
     assert.deepEqual(back.blockers, []);
+  });
+
+  assert.equal(BROWSER_TIMEOUT_RELAUNCH_AFTER, 2);
+
+  const SNAPSHOT_ARGS = {
+    scope: null, interactive_only: false, depth: null, max_chars: 4000,
+  };
+
+  async function until(label: string, check: () => boolean | Promise<boolean>, ms = 3000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.fail(label);
+  }
+
+  async function startHarness() {
+    process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+    const token = `browser-timeout-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const daemon = await startDaemon({
+      host: "127.0.0.1", port: 0, mcpToken: `${token}-mcp`, bootstrapToken: `${token}-boot`,
+      workspaceRoot: mkdtempSync(join(tmpdir(), "mb-browser-timeout-")),
+    });
+    const transport = new StreamableHTTPClientTransport(new URL(`${daemon.baseUrl}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${token}-mcp`,
+        Host: `127.0.0.1:${daemon.port}` } },
+    });
+    const client = new Client({ name: "browser-timeout-client", version: "0.0.1" });
+    const { headers } = await bootstrapSession(daemon, `${token}-boot`);
+    const created = await fetch(`${daemon.baseUrl}/api/v1/computers`, { method: "POST", headers,
+      body: JSON.stringify({ name: "timeout", capabilities: ["browser"] }) });
+    assert.equal(created.status, 201);
+    const computerId = ((await created.json()) as { computer: { id: string } }).computer.id;
+    const taskId = `task_timeout_${computerId}`;
+    daemon.store.insertHarnessTaskBinding({
+      task_id: taskId, computer_id: computerId, spend_cap_usd: 1, max_steps: 20,
+      proxy_usd_per_tool_call: 0.01,
+    });
+    await client.connect(transport);
+    return { daemon, headers, computerId, taskId, client, transport };
+  }
+
+  async function snapshot(client: Client) {
+    return client.callTool({ name: "browser_snapshot", arguments: SNAPSHOT_ARGS });
+  }
+
+  async function activityHasRelaunch(daemon: Awaited<ReturnType<typeof startDaemon>>, taskId: string, headers: Record<string, string>) {
+    const detail = await fetch(`${daemon.baseUrl}/api/v1/tasks/${taskId}`, { headers });
+    assert.equal(detail.status, 200);
+    const view = await detail.json() as { steps: Array<{ kind: string; body: { content?: string } }> };
+    return view.steps.some((step) => step.body.content === BROWSER_RELAUNCH_ACTIVITY);
+  }
+
+  function installTimeoutFake(control: { timeout: boolean; closes: number; dead?: boolean; crash?: boolean }) {
+    const originalCall = FakeComputer.prototype.call;
+    const originalClose = FakeComputer.prototype.close;
+    FakeComputer.prototype.call = async function (method: string, params?: unknown) {
+      if (method.startsWith("browser_") && control.dead) {
+        return { ok: false as const, error: { code: "E_SANDBOX_DEAD", message: BROWSER_DOWN } };
+      }
+      if (method.startsWith("browser_") && control.crash) {
+        return { ok: false as const, error: { code: "E_IO", message: "Target crashed" } };
+      }
+      if (method.startsWith("browser_") && control.timeout) {
+        return { ok: false as const, error: { code: "E_TIMEOUT", message: "tool exceeded 60000ms" } };
+      }
+      return originalCall.call(this, method, params);
+    };
+    FakeComputer.prototype.close = async function () {
+      control.closes += 1;
+      return originalClose.call(this);
+    };
+    return () => {
+      FakeComputer.prototype.call = originalCall;
+      FakeComputer.prototype.close = originalClose;
+    };
+  }
+
+  it("relaunches once after two consecutive browser tool timeouts", async () => {
+    const control = { timeout: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await until("browser was not relaunched after two timeouts", () => control.closes === 1);
+      await until("activity missing relaunch line", () => activityHasRelaunch(harness.daemon, harness.taskId, harness.headers));
+      const runtime = await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      assert.equal(runtime.status, 200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(control.closes, 1, "two timeouts relaunched more than once");
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("resets the timeout count when a browser tool succeeds in between", async () => {
+    const control = { timeout: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      control.timeout = false;
+      await snapshot(harness.client);
+      control.timeout = true;
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "a success between timeouts still relaunched");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("does not relaunch while a human hold or takeover request is open", async () => {
+    const control = { timeout: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      await snapshot(harness.client);
+      harness.daemon.store.insertTakeover({
+        id: "tk_hold_timeout", computer_id: harness.computerId, task_id: harness.taskId,
+        state: "takeover_requested", expires_at: null,
+      });
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "relaunched while a takeover request was open");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+      harness.daemon.store.updateTakeoverState("tk_hold_timeout", "terminated");
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await until("deferred relaunch after hold did not run", () => control.closes === 1);
+      await until("activity missing relaunch line after hold", () =>
+        activityHasRelaunch(harness.daemon, harness.taskId, harness.headers));
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("drops a pending relaunch when a browser tool succeeds before the probe", async () => {
+    const control = { timeout: true, closes: 0, dead: false };
+    const restore = installTimeoutFake(control);
+    let harness: Awaited<ReturnType<typeof startHarness>> | undefined;
+    try {
+      harness = await startHarness();
+      await snapshot(harness.client);
+      await snapshot(harness.client);
+      control.timeout = false;
+      await snapshot(harness.client);
+      control.dead = true;
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "a recovered browser was still closed after a later sandbox-dead");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+    } finally {
+      await harness?.client.close().catch(() => undefined);
+      await harness?.daemon.close();
+      restore();
+    }
+  });
+
+  it("relaunches once after one crash and one timeout", async () => {
+    const control = { timeout: false, crash: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      control.crash = false;
+      control.timeout = true;
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await until("browser was not relaunched after one crash and one timeout", () => control.closes === 1);
+      await until("activity missing relaunch line", () => activityHasRelaunch(harness.daemon, harness.taskId, harness.headers));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(control.closes, 1, "crash plus timeout relaunched more than once");
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("defers a crash relaunch while a human hold is open", async () => {
+    const control = { timeout: false, crash: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      control.crash = false;
+      control.timeout = true;
+      await snapshot(harness.client);
+      harness.daemon.store.insertTakeover({
+        id: "tk_hold_crash", computer_id: harness.computerId, task_id: harness.taskId,
+        state: "takeover_requested", expires_at: null,
+      });
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "relaunched while a takeover request was open");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+      harness.daemon.store.updateTakeoverState("tk_hold_crash", "terminated");
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await until("deferred crash relaunch after hold did not run", () => control.closes === 1);
+      await until("activity missing relaunch line after hold", () =>
+        activityHasRelaunch(harness.daemon, harness.taskId, harness.headers));
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("resets the crash count when a browser tool succeeds in between", async () => {
+    const control = { timeout: false, crash: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    const harness = await startHarness();
+    try {
+      await snapshot(harness.client);
+      control.crash = false;
+      await snapshot(harness.client);
+      control.crash = true;
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "a success between crashes still relaunched");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+    } finally {
+      await harness.client.close().catch(() => undefined);
+      await harness.daemon.close();
+      restore();
+    }
+  });
+
+  it("does not relaunch if a hold appears before the close", async () => {
+    const control = { timeout: true, closes: 0 };
+    const restore = installTimeoutFake(control);
+    let harness: Awaited<ReturnType<typeof startHarness>> | undefined;
+    try {
+      harness = await startHarness();
+      const { computerId, taskId } = harness;
+      const store = harness.daemon.store;
+      const getComputer = store.getComputer.bind(store);
+      const takeover = store.activeTakeoverForComputer.bind(store);
+      let armed = false;
+      let outerCheck = true;
+      let inserted = false;
+      store.getComputer = (id) => {
+        const row = getComputer(id);
+        if (id === computerId) armed = true;
+        return row;
+      };
+      store.activeTakeoverForComputer = (id, boundTaskId) => {
+        if (!armed || id !== computerId) return takeover(id, boundTaskId);
+        if (outerCheck) {
+          outerCheck = false;
+          return undefined;
+        }
+        if (!inserted) {
+          inserted = true;
+          store.insertTakeover({
+            id: "tk_hold_toctou", computer_id: computerId, task_id: taskId,
+            state: "takeover_requested", expires_at: null,
+          });
+        }
+        return takeover(id, boundTaskId);
+      };
+      await snapshot(harness.client);
+      await snapshot(harness.client);
+      await fetch(`${harness.daemon.baseUrl}/api/v1/runtime`, { headers: harness.headers });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(control.closes, 0, "closed Chromium after a hold appeared before close");
+      assert.equal(await activityHasRelaunch(harness.daemon, harness.taskId, harness.headers), false);
+    } finally {
+      await harness?.client.close().catch(() => undefined);
+      await harness?.daemon.close();
+      restore();
+    }
   });
 });

@@ -48,6 +48,7 @@ describe("live view copy", () => {
     assert.equal(words.size, phases.length, "each phase reads differently");
     assert.equal(phaseCopy("paused").dim, true);
     assert.match(phaseCopy("driving").note, /Frozen for your bot/);
+    assert.match(phaseCopy("paused").note, /The login is on this screen, in its browser/);
     assert.match(phaseCopy("paused").note, /Nothing happens on its computer until you answer/);
     assert.match(phaseCopy("observing").note, /Nothing you type here is sent/);
     // The frame is the one this page received; the daemon keeps no picture.
@@ -65,10 +66,19 @@ describe("live view copy", () => {
     // described in words while there is nothing worth looking at.
     assert.match(waitingCopy("connecting"), /Starting its computer/);
     assert.match(waitingCopy("paused"), /Waiting for your answer/);
-    assert.match(waitingCopy("offline"), /choose Reconnect/);
-    for (const phase of ["connecting", "paused", "offline"] as PanelPhase[]) {
+    assert.match(waitingCopy("offline"), /Reconnecting automatically/);
+    // After connect, a live surface with no picture is not still "starting".
+    assert.equal(waitingCopy("live"), "No picture yet. Take control still works.");
+    assert.equal(waitingCopy("live", "google.com/flights"), "google.com/flights");
+    assert.equal(waitingCopy("connecting", "google.com/flights"), "Starting its computer…");
+    assert.equal(
+      waitingCopy("connecting", null, 8_000),
+      "No picture yet from its computer. It may be busy loading a page.",
+    );
+    for (const phase of ["connecting", "paused", "offline", "live"] as PanelPhase[]) {
       assert.doesNotMatch(waitingCopy(phase), /frame|websocket|epoch/i);
     }
+    assert.doesNotMatch(waitingCopy("connecting", null, 8_000), /frame|websocket|epoch/i);
   });
 });
 
@@ -89,6 +99,85 @@ describe("live view panel", () => {
       assert.ok(waiting.textContent.length > 0);
       assert.ok(p.root.querySelector(".view .bar .url"), "the frame keeps its URL bar");
     } finally {
+      dom.restore();
+    }
+  });
+
+  it("keeps Take control enabled before a first frame, and drops Starting once live", () => {
+    const dom = installDom();
+    const p = new LivePanel({ computerId: "cmp_1" });
+    try {
+      const take = p.root
+        .querySelectorAll(".view-acts button")
+        .find((node) => node.textContent.includes("Take control"))!;
+      const waiting = p.root.querySelector(".waiting")!;
+      assert.equal(take.disabled, false);
+      assert.equal(take.hidden, false);
+      assert.match(waiting.textContent, /Starting its computer/);
+
+      p.setPhase("live");
+      assert.equal(take.disabled, false, "no frame is not a reason to disable Take control");
+      assert.equal(waiting.hidden, false);
+      assert.equal(waiting.textContent, "No picture yet. Take control still works.");
+      assert.doesNotMatch(waiting.textContent, /Starting its computer/);
+
+      p.setUrl("https://google.com/flights?q=1");
+      assert.equal(waiting.hidden, false);
+      assert.equal(waiting.textContent, "google.com/flights");
+    } finally {
+      p.close();
+      dom.restore();
+    }
+  });
+
+  it("after a wait with no frame, tells the truth and offers Restart the picture", () => {
+    const dom = installDom({ timers: "manual" });
+    const p = new LivePanel({ computerId: "cmp_1" });
+    try {
+      const take = p.root
+        .querySelectorAll(".view-acts button")
+        .find((node) => node.textContent.includes("Take control"))!;
+      const reconnect = p.root
+        .querySelectorAll(".view-acts button")
+        .find((node) => node.textContent === "Reconnect")!;
+      const waiting = p.root.querySelector(".waiting")!;
+      assert.match(waiting.textContent, /Starting its computer/);
+      assert.equal(take.disabled, false);
+      assert.equal(take.hidden, false);
+      assert.equal(reconnect.hidden, true);
+
+      dom.runTimers();
+      assert.equal(
+        waiting.textContent,
+        "No picture yet from its computer. It may be busy loading a page.",
+      );
+      assert.doesNotMatch(waiting.textContent, /Starting its computer/);
+      assert.equal(waiting.hidden, false);
+      assert.equal(take.disabled, false);
+      assert.equal(take.hidden, false);
+      assert.equal(reconnect.hidden, true);
+      assert.equal(reconnect.textContent, "Reconnect");
+
+      dom.runTimers();
+      assert.equal(reconnect.textContent, "Restart the picture");
+      assert.equal(reconnect.hidden, false);
+      assert.equal(take.disabled, false);
+      assert.equal(take.hidden, false);
+      assert.equal(waiting.hidden, false);
+      assert.equal(
+        waiting.textContent,
+        "No picture yet from its computer. It may be busy loading a page.",
+      );
+
+      reconnect.click();
+      const notice = p.root.querySelector(".screen .notice")!;
+      assert.equal(notice.hidden, false);
+      assert.equal(notice.textContent, "Restarting the picture…");
+      assert.match(waiting.textContent, /Starting its computer/);
+      assert.equal(reconnect.hidden, true);
+      assert.equal(take.disabled, false);
+    } finally {
+      p.close();
       dom.restore();
     }
   });
@@ -133,6 +222,84 @@ describe("live view panel", () => {
     }
   });
 
+  it("shows Give control back while a hold is paused", () => {
+    const dom = installDom();
+    try {
+      const p = panel();
+      const give = p.root.querySelector(".view-acts")!.querySelectorAll("button")
+        .find((node) => node.textContent === "Give control back");
+      assert.ok(give);
+      assert.equal(give.hidden, true);
+      p.setPhase("paused");
+      assert.equal(give.hidden, false);
+      p.setPhase("driving");
+      assert.equal(give.hidden, false);
+      p.setPhase("live");
+      assert.equal(give.hidden, true);
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("shows an expired control hold as paused after reconnecting", async () => {
+    const dom = installDom();
+    const p = new LivePanel({ computerId: "cmp_1" });
+    try {
+      p.connect();
+      const live = (p as unknown as { live: { onMessage(data: string): Promise<void> } }).live;
+      await live.onMessage(JSON.stringify({ v: 1, t: "mode", mode: "validating", epoch: 2 }));
+      assert.equal(p.getPhase(), "paused");
+      assert.equal(p.canvas.tabIndex, -1);
+    } finally { p.close(); dom.restore(); }
+  });
+
+  it("keeps Give control back when the picture producer fails while driving", async () => {
+    const dom = installDom();
+    const p = new LivePanel({ computerId: "cmp_1" });
+    try {
+      p.setDriver(true);
+      p.setPhase("driving");
+      const live = (p as unknown as { live: { onMessage(data: string): Promise<void> } }).live;
+      await live.onMessage(JSON.stringify({ v: 1, t: "producer", status: "restarting" }));
+      const notice = p.root.querySelector(".screen .notice")!;
+      assert.equal(p.getPhase(), "driving");
+      assert.equal(notice.hidden, false);
+      assert.equal(notice.textContent, "Restarting the picture…");
+      await live.onMessage(JSON.stringify({ v: 1, t: "producer", status: "failed", reason: "exit 1" }));
+      assert.equal(p.getPhase(), "driving");
+      assert.equal(notice.textContent, "The picture stopped. Give control back and take it again.");
+      assert.equal(notice.classList.contains("warn"), true);
+      const give = p.root.querySelector(".view-acts")!.querySelectorAll("button")
+        .find((node) => node.textContent === "Give control back");
+      assert.equal(give?.hidden, false);
+    } finally { p.close(); dom.restore(); }
+  });
+
+  it("keeps driving and says Reconnecting… when the socket drops while this window holds the grant", async () => {
+    const dom = installDom();
+    const p = new LivePanel({ computerId: "cmp_1" });
+    try {
+      p.setDriver(true);
+      p.setPhase("driving");
+      const live = (p as unknown as {
+        live: { cb: { onError(err: Error, recovery?: { held: boolean }): void }; onFrame(): void };
+      }).live;
+      live.cb.onError(new Error("Reconnecting…"), { held: true });
+      assert.equal(p.getPhase(), "driving");
+      const notice = p.root.querySelector(".screen .notice")!;
+      assert.equal(notice.hidden, false);
+      assert.equal(notice.textContent, "Reconnecting…");
+      const reconnect = p.root
+        .querySelectorAll(".view-acts button")
+        .find((node) => node.textContent === "Reconnect");
+      assert.equal(reconnect?.hidden, true);
+      assert.doesNotMatch(p.root.querySelector(".side-head .state")!.textContent, /Not connected/);
+      live.cb.onFrame();
+      assert.equal(p.getPhase(), "driving");
+      assert.equal(notice.hidden, true);
+    } finally { p.close(); dom.restore(); }
+  });
+
   it("names the page the canvas is showing, for anyone who cannot see it", () => {
     const dom = installDom();
     try {
@@ -152,10 +319,10 @@ describe("live view panel", () => {
     try {
       const p = panel();
       const buttons = p.root.querySelectorAll(".view-acts button");
-      assert.equal(buttons.length, 3, "take, full screen, reconnect");
+      assert.equal(buttons.length, 4, "take, give control back, full screen, reconnect");
       p.setActionsVisible(false, false);
       assert.equal(buttons[0]?.hidden, true);
-      assert.equal(buttons[1]?.hidden, true);
+      assert.equal(buttons[2]?.hidden, true);
       p.setActionsVisible(true, true);
       assert.equal(buttons[0]?.hidden, false);
       p.setTakeLabel("Take control instead", false);
@@ -198,7 +365,7 @@ describe("live view panel", () => {
     try {
       const seen: boolean[] = [];
       const p = new LivePanel({ computerId: null, onFullScreen: (v) => seen.push(v) });
-      const full = p.root.querySelectorAll(".view-acts button")[1]!;
+      const full = p.root.querySelectorAll(".view-acts button").find((node) => node.textContent === "Full screen")!;
       assert.equal(full.textContent, "Full screen");
       full.click();
       await settle();

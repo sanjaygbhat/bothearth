@@ -3,10 +3,13 @@ import { readdirSync, readFileSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
+import { guestTaskArgs, runCodexTask } from "../../../src/daemon/codex-runner.ts";
 import { FakeComputer } from "../../../src/computer-client/fake.ts";
 import { until } from "../../helpers/until.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
+
+isolateModelbotHome();
 
 async function fixture(mode: string, publicOrigin?: string, maxRuntimeSec = 0, takeoverTtlSec?: number) {
   const { home: root, binary } = fakeCli("mb-codex-runner", () => `import assert from 'node:assert/strict';
@@ -23,6 +26,7 @@ assert.equal(process.env.MODELBOT_VAULT_KEY_HEX,undefined); assert.equal(process
 assert.ok(argv.includes('--ignore-user-config')); assert.ok(argv.includes('features.shell_tool=false'));
 assert.ok(argv.includes('features.multi_agent=false')); assert.ok(argv.includes('model_reasoning_effort="medium"'));
 assert.ok(argv.includes('web_search="disabled"'));
+assert.ok(argv.includes('mcp_servers.modelbot.tool_timeout_sec=300'));
 const report={url,token,pid:process.pid,argv};
 const publish=()=>{writeFileSync('scope.tmp',JSON.stringify(report),{mode:0o600});renameSync('scope.tmp','scope.json');};
 publish();
@@ -84,6 +88,25 @@ if(mode==='hold') {
  } else if(mode==='wait-message'&&input.includes('What is blocking you?')) {
   assert.ok(input.includes('STILL pending'));
   emit({type:'item.completed',item:{type:'agent_message',text:'I am waiting for your control handoff.'}});
+ } else if((mode==='stall-timeout'||mode==='stall-queued'||mode==='stall-held')&&!argv.includes('resume')) {
+  if(mode==='stall-held') { report.chatReady=true;publish(); await new Promise(r=>setTimeout(r,800)); }
+  else {
+   const snap=await client.callTool({name:'browser_snapshot',arguments:{}});
+   assert.equal(snap.isError,true);
+   assert.ok(JSON.stringify(snap).includes('E_TIMEOUT'));
+  }
+  emit({type:'item.completed',item:{type:'mcp_tool_call',tool:'browser_snapshot',result:{isError:true,error:{code:'E_TIMEOUT',message:'tool exceeded 60000ms'}}}});
+  emit({type:'item.completed',item:{type:'todo_list'}});
+  emit({type:'item.completed',item:{type:'reasoning'}});
+  emit({type:'item.completed',item:{type:'agent_message',text:'The snapshot timed out. Please take control.'}});
+  if(mode==='stall-queued') await new Promise(r=>setTimeout(r,500));
+ } else if(mode==='stall-queued') {
+  assert.ok(input.includes('New messages from the operator'));
+  assert.ok(input.includes('Use the public website'));
+  assert.equal(input.includes('Continue the existing BotHearth task'),false);
+  assert.equal((await client.callTool({name:'done',arguments:{status:'success',summary:'Continued from queued stall reply'}})).isError,false);
+ } else if(mode==='stall-timeout') {
+  assert.equal((await client.callTool({name:'done',arguments:{status:'success',summary:'Resumed after stall'}})).isError,false);
  } else if(mode.startsWith('complete')||mode.startsWith('wait')) {
   const done=await client.callTool({name:'done',arguments:{summary:'Synthetic task completed',status:mode==='complete-fail'?'fail':mode==='complete-cancelled'?'cancelled':'success'}});
   assert.equal(done.isError,false);
@@ -417,6 +440,182 @@ for (const expired of [false, true]) test(`operator can converse during ${expire
   } finally { await f.close(); }
 });
 
+test("native Codex MCP config writes tool_timeout_sec 300", () => {
+  const args = guestTaskArgs("codex", "gpt-6-astra", {}, { command: "node", args: ["/opt/mcp"] });
+  const configs = args.flatMap((arg, i) => arg === "-c" ? [args[i + 1]] : []);
+  assert.ok(configs.includes("mcp_servers.modelbot.tool_timeout_sec=300"));
+});
+
+async function withSnapshotTimeout<T>(fn: () => Promise<T>): Promise<T> {
+  const original = FakeComputer.prototype.call;
+  FakeComputer.prototype.call = async function (method, ...rest: unknown[]) {
+    if (method === "browser_snapshot") {
+      return { ok: false, error: { code: "E_TIMEOUT", message: "tool exceeded 60000ms" } };
+    }
+    return original.call(this, method, ...rest);
+  };
+  try { return await fn(); } finally { FakeComputer.prototype.call = original; }
+}
+
+async function runJsonlTurn(script: string, opts: {
+  hasMessages?: () => boolean;
+  takeMessages?: () => string[];
+  isWaiting?: () => boolean;
+  isTerminal?: () => boolean;
+} = {}) {
+  isolateModelbotHome();
+  const cli = fakeCli("mb-stall-unit", () => script);
+  let stall: { hadDone: boolean; lastToolError?: string } | undefined;
+  let taken: string[] = [];
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 4000);
+  try {
+    await runCodexTask(
+      { binary: cli.binary, codexHome: cli.home, model: "gpt-6-astra", execution_location: "host" },
+      { id: "t", computer_id: "c", goal: "g" },
+      {
+        url: "http://127.0.0.1:1/mcp", token: "tok", signal: ac.signal, maxRuntimeSec: 0,
+        onMessage() {},
+        onTurnEnded(info) { stall = info; },
+        hasMessages: opts.hasMessages ?? (() => false),
+        takeMessages: () => {
+          taken = opts.takeMessages?.() ?? [];
+          return taken;
+        },
+        isWaiting: opts.isWaiting ?? (() => false),
+        waitGeneration: () => 0,
+        isTerminal: opts.isTerminal ?? (() => false),
+      },
+    );
+  } finally { clearTimeout(timer); }
+  return { stall, taken };
+}
+
+const STALL_JSONL = `for await (const chunk of process.stdin) {}
+const resume=process.argv.includes('resume');
+const emit=(v)=>console.log(JSON.stringify(v));
+emit({type:'thread.started',thread_id:'stall-thread'});
+if(!resume) {
+ emit({type:'item.completed',item:{type:'mcp_tool_call',tool:'browser_snapshot',result:{isError:true,error:{code:'E_TIMEOUT',message:'tool exceeded 60000ms'}}}});
+ emit({type:'item.completed',item:{type:'todo_list'}});
+ emit({type:'item.completed',item:{type:'file_change'}});
+ emit({type:'item.completed',item:{type:'reasoning'}});
+ emit({type:'item.completed',item:{type:'agent_message',text:'timed out'}});
+}
+emit({type:'turn.completed'});`;
+
+test("a timed-out last tool without done pauses the native task", async () => {
+  await withSnapshotTimeout(async () => {
+    const f = await fixture("stall-timeout");
+    try {
+      const task = await f.start();
+      await until(() => f.daemon.store.getTask(task.id)?.status === "paused", "timed-out turn did not pause");
+      const detail = await f.api(`/api/v1/tasks/${task.id}`).then((r) => r.json()) as any;
+      assert.equal(detail.task.status, "paused");
+      assert.notEqual(detail.task.awaiting_message, true);
+      const paused = [...detail.steps].reverse().find((s: any) => s.kind === "task.step" && s.body.status === "paused");
+      assert.ok(paused, "missing paused task.step");
+      assert.ok(["stalled", "waiting_for_you"].includes(paused.body.failure_kind), paused.body.failure_kind);
+      assert.equal((await f.api(`/api/v1/tasks/${task.id}/resume`, {})).status, 202);
+      await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "resume after stall did not complete");
+    } finally { await f.close(); }
+  });
+});
+
+test("a later non-tool item does not wipe a failed last tool", async () => {
+  const { stall } = await runJsonlTurn(STALL_JSONL);
+  assert.equal(stall?.hadDone, false);
+  assert.match(stall?.lastToolError ?? "", /E_TIMEOUT|tool exceeded/);
+});
+
+test("a queued operator reply skips stall pause and is injected", async () => {
+  let delivered = false;
+  const { stall, taken } = await runJsonlTurn(STALL_JSONL, {
+    hasMessages: () => !delivered,
+    takeMessages: () => { delivered = true; return ["Use the public website"]; },
+    isTerminal: () => delivered,
+  });
+  assert.equal(stall, undefined);
+  assert.deepEqual(taken, ["Use the public website"]);
+});
+
+test("MCP result.isError stalls; a bare mcp_tool_call does not", async () => {
+  const failed = await runJsonlTurn(`for await (const chunk of process.stdin) {}
+console.log(JSON.stringify({type:'thread.started',thread_id:'t'}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'mcp_tool_call',tool:'browser_snapshot',result:{isError:true,error:{code:'E_TIMEOUT'}}}}));
+console.log(JSON.stringify({type:'turn.completed'}));`);
+  assert.match(failed.stall?.lastToolError ?? "", /E_TIMEOUT|tool error/);
+  let delivered = false;
+  const bare = await runJsonlTurn(`for await (const chunk of process.stdin) {}
+console.log(JSON.stringify({type:'thread.started',thread_id:'t'}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'mcp_tool_call',tool:'browser_snapshot'}}));
+console.log(JSON.stringify({type:'turn.completed'}));`, {
+    hasMessages: () => !delivered,
+    takeMessages: () => { delivered = true; return ["continue"]; },
+    isTerminal: () => delivered,
+  });
+  assert.equal(bare.stall, undefined);
+  assert.deepEqual(bare.taken, ["continue"]);
+});
+
+test("a reply queued before a stalled turn continues instead of pausing", async () => {
+  await withSnapshotTimeout(async () => {
+    const f = await fixture("stall-queued");
+    try {
+      const task = await f.start();
+      await until(() => f.daemon.store.taskTranscript(task.id).some(message => message.content === "The snapshot timed out. Please take control."),
+        "stall message was not displayed");
+      assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Use the public website" })).status, 202);
+      await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "queued stall reply was stranded");
+      assert.equal(f.daemon.store.getTask(task.id)?.status, "completed");
+      assert.equal(f.daemon.store.pendingMessages(task.id).length, 0);
+      assert.ok(f.scopes()[0].argv.includes("resume"));
+    } finally { await f.close(); }
+  });
+});
+
+test("an audit failure after stall pause does not fail the task", async () => {
+  await withSnapshotTimeout(async () => {
+    const f = await fixture("stall-timeout");
+    const append = f.daemon.store.appendAuditRef.bind(f.daemon.store);
+    f.daemon.store.appendAuditRef = (input) => {
+      if (input.type === "task.step" && (input.body as { reason?: string }).reason === "stall") {
+        throw new Error("stall audit failed");
+      }
+      return append(input);
+    };
+    try {
+      const task = await f.start();
+      await until(() => {
+        const status = f.daemon.store.getTask(task.id)?.status;
+        return status === "paused" || status === "failed";
+      }, "stall did not settle");
+      assert.equal(f.daemon.store.getTask(task.id)?.status, "paused");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(f.daemon.store.getTask(task.id)?.status, "paused");
+    } finally { await f.close(); }
+  });
+});
+
+test("an open takeover skips stall pause and keeps the lease wait", async () => {
+  await withSnapshotTimeout(async () => {
+    const f = await fixture("stall-held");
+    try {
+      const task = await f.start();
+      await until(() => f.scopes()[0]?.chatReady, "runner not ready");
+      const requested = await f.api("/api/v1/takeover/request", { computer_id: "selected", task_id: task.id }).then((r) => r.json()) as any;
+      const id = requested.takeover.takeover_id;
+      assert.equal((await f.api(`/api/v1/takeover/${id}/acquire`, {})).status, 200);
+      await until(() => f.daemon.store.taskTranscript(task.id).some(message => message.content === "The snapshot timed out. Please take control."),
+        "stall message was not displayed");
+      await new Promise((r) => setTimeout(r, 400));
+      assert.equal(f.daemon.store.getTask(task.id)?.status, "running");
+      assert.ok(f.daemon.store.activeTakeoverForComputer("selected", task.id));
+      assert.notEqual((await f.api(`/api/v1/tasks/${task.id}`).then((r) => r.json()) as any).task.awaiting_message, true);
+    } finally { await f.close(); }
+  });
+});
+
 test("a paused native task resumes its saved provider conversation", async () => {
   const f = await fixture("complete");
   try {
@@ -445,4 +644,19 @@ test("a mid-task conversational reply waits for another message instead of faili
     assert.equal((await f.api(`/api/v1/tasks/${task.id}/messages`, { text: "Continue" })).status, 202);
     await until(() => f.daemon.store.getTask(task.id)?.status === "completed", "did not continue");
   } finally { await f.close(); }
+});
+
+test("task-run directories default under MODELBOT_HOME and are kept after the task ends", async () => {
+  const home = isolateModelbotHome();
+  const cli = fakeCli("mb-runs-home", () => `for await (const chunk of process.stdin) {}
+console.log(JSON.stringify({type:'thread.started',thread_id:'t'}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'done'}}));
+console.log(JSON.stringify({type:'turn.completed'}));`);
+  await runCodexTask({ binary: cli.binary, codexHome: cli.home, model: "gpt-6-astra", execution_location: "host" },
+    { id: "t", computer_id: "c", goal: "g" },
+    { url: "http://127.0.0.1:1/mcp", token: "tok", signal: new AbortController().signal, maxRuntimeSec: 0,
+      onMessage() {}, isWaiting: () => false, waitGeneration: () => 0, isTerminal: () => true });
+  const dirs = readdirSync(join(home, "task-runs"));
+  assert.ok(dirs.some((dir) => dir.startsWith("codex-")));
+  assert.ok(existsSync(join(home, "task-runs", dirs[0]!, "runner.log")));
 });

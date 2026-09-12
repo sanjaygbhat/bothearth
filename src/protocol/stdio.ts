@@ -74,7 +74,7 @@ export function encodeStdioBody(body: Uint8Array): Uint8Array {
 }
 
 export function encodeRpcFrame(
-  message: ComputerJsonRpcRequest | ComputerJsonRpcResponse,
+  message: ComputerJsonRpcRequest | ComputerJsonRpcResponse | { jsonrpc: "2.0"; method: string; params?: unknown },
 ): Uint8Array {
   const json = new TextEncoder().encode(JSON.stringify(message));
   if (json.byteLength > MAX_RPC_JSON_BYTES) {

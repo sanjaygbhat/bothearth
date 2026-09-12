@@ -7,7 +7,9 @@ import { claudeEnvironment, claudeTaskArgs } from "../../../src/daemon/claude-co
 import { createCodexConnection } from "../../../src/daemon/codex-connection.ts";
 import { until } from "../../helpers/until.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
+
+isolateModelbotHome();
 
 test("default native login keeps its keychain identity and model tools stay scoped", () => {
   const old = process.env.CLAUDE_CONFIG_DIR; delete process.env.CLAUDE_CONFIG_DIR;

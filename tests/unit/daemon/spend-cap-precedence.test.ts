@@ -44,8 +44,8 @@ async function budget(daemon: Awaited<ReturnType<typeof startDaemon>>, headers: 
   const res = await fetch(`${daemon.baseUrl}/api/v1/session`, { headers });
   assert.equal(res.status, 200);
   return (await res.json()) as {
-    spend_cap_usd: number;
-    budget: { default_usd: number; max_usd: number; per_call_usd: number };
+    spend_cap_usd: number | null;
+    budget: { default_usd: number | null; max_usd: number | null; per_call_usd: number };
   };
 }
 
@@ -59,12 +59,38 @@ test("the connection payload names the default, the maximum and the per-call pri
 
   await withDaemon({ agentLoop: { model: "test", adapter } }, async (daemon, headers) => {
     const info = await budget(daemon, headers);
+    assert.equal(info.spend_cap_usd, DEFAULT_SPEND_CAP_USD > 0 ? DEFAULT_SPEND_CAP_USD : null);
     assert.deepEqual(info.budget, {
-      default_usd: DEFAULT_SPEND_CAP_USD,
-      max_usd: DEFAULT_SPEND_CAP_MAX_USD,
+      default_usd: DEFAULT_SPEND_CAP_USD > 0 ? DEFAULT_SPEND_CAP_USD : null,
+      max_usd: DEFAULT_SPEND_CAP_MAX_USD > 0 ? DEFAULT_SPEND_CAP_MAX_USD : null,
       per_call_usd: 0.01,
     });
   });
+});
+
+test("a zero spend-cap maximum is no maximum, so a request may name any budget", async () => {
+  await withDaemon(
+    { agentLoop: { model: "test", spendCapUsd: 0, adapter }, spendCapMaxUsd: 0 },
+    async (daemon, headers) => {
+      const create = (body: Record<string, unknown>) =>
+        fetch(`${daemon.baseUrl}/api/v1/tasks`, { method: "POST", headers,
+          body: JSON.stringify({ computer_id: "c1", ...body }) });
+
+      const silent = await create({ goal: "no budget named" });
+      assert.equal(silent.status, 201);
+      const silentTask = (await silent.json()) as { task: { id: string; spend_cap_usd: number } };
+      assert.equal(silentTask.task.spend_cap_usd, 0);
+
+      const raised = await create({ goal: "a bigger job", spend_cap_usd: 50 });
+      assert.equal(raised.status, 201);
+      assert.equal(((await raised.json()) as { task: { spend_cap_usd: number } }).task.spend_cap_usd, 50);
+
+      const named = (await (await fetch(`${daemon.baseUrl}/api/v1/tasks/${silentTask.task.id}`, { headers })).json()) as {
+        task: { spend_cap_usd: number | null };
+      };
+      assert.equal(named.task.spend_cap_usd, null);
+    },
+  );
 });
 
 test("a request may raise the configured default, up to the maximum", async () => {

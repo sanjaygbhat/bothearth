@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  computeActionHash,
   createApproval,
   decideApproval,
   type ApprovalStore,
@@ -134,5 +135,79 @@ describe("approval binding + expiry", () => {
     if (!r.ok) {
       assert.equal(r.status, "expired");
     }
+  });
+});
+
+describe("action identity across snapshots", () => {
+  const origin = "https://httpbin.org";
+
+  it("the same resolved click hashes equal after a new snapshot_id and ref", () => {
+    const before = computeActionHash({
+      tool: "browser_click",
+      args: { snapshot_id: "snap_old", ref: "e1", button: "left", double_click: false },
+      gate: "new_domain",
+      origin,
+      snapshotYaml: '- link "Send" [ref=e1]',
+    });
+    const after = computeActionHash({
+      tool: "browser_click",
+      args: { snapshot_id: "snap_new", ref: "e2", button: "left", double_click: false },
+      gate: "new_domain",
+      origin,
+      snapshotYaml: '- generic [ref=e1]\n- link "Send" [ref=e2]',
+    });
+    assert.equal(before, after);
+  });
+
+  it("a click whose resolved target changed after a refresh does not hash equal", () => {
+    const before = computeActionHash({
+      tool: "browser_click",
+      args: { snapshot_id: "snap_old", ref: "e1", button: "left", double_click: false },
+      gate: "new_domain",
+      origin,
+      snapshotYaml: '- link "Send" [ref=e1]',
+    });
+    const after = computeActionHash({
+      tool: "browser_click",
+      args: { snapshot_id: "snap_new", ref: "e1", button: "left", double_click: false },
+      gate: "new_domain",
+      origin,
+      snapshotYaml: '- link "Cancel" [ref=e1]',
+    });
+    assert.notEqual(before, after);
+  });
+
+  it("createApproval stores the resolved target, not the snapshot id", () => {
+    const req = createApproval({
+      tool: "browser_click",
+      args: { snapshot_id: "snap_old", ref: "e1", button: "left", double_click: false },
+      gate: "new_domain",
+      task_id: "t_1",
+      control_epoch: 3,
+      origin,
+      snapshotYaml: '- link "Send" [ref=e1]',
+    });
+    assert.equal("snapshot_id" in req.args, false);
+    assert.equal("ref" in req.args, false);
+    assert.deepEqual(req.args.target, { role: "link", name: "Send", nth: 0 });
+    assert.equal(req.bind.control_epoch, 3);
+  });
+
+  it("form-submit identity includes the destination", () => {
+    const args = { snapshot_id: "s1", ref: "e1", button: "left", double_click: false };
+    const yaml = '- button "Submit" [ref=e1]';
+    const httpbin = computeActionHash({
+      tool: "browser_click", args, gate: "new_domain", origin,
+      dest: "https://httpbin.org", snapshotYaml: yaml,
+    });
+    const swapped = computeActionHash({
+      tool: "browser_click", args, gate: "new_domain", origin,
+      dest: "https://evil.example", snapshotYaml: yaml,
+    });
+    assert.notEqual(httpbin, swapped);
+    assert.equal(httpbin, computeActionHash({
+      tool: "browser_click", args, gate: "new_domain", origin,
+      dest: "https://httpbin.org", snapshotYaml: yaml,
+    }));
   });
 });

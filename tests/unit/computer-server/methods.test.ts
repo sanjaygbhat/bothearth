@@ -53,5 +53,6 @@ test("an unknown method is still refused, which is the signal the daemon learns 
 test("introspection is not refused while a human has control", () => {
   const session = { state: "human", epoch: 3, takeoverId: "t1", expiresAt: null, reason: null } as never;
   assert.equal(gateMethod(session, "methods"), null, "asking what a computer can do is not an action on the page");
+  assert.equal(gateMethod(session, "takeover.blank"), null, "clearing the tab is operator control, not a model act");
   assert.notEqual(gateMethod(session, "write_file"), null, "acting is still blocked mid-takeover");
 });

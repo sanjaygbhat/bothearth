@@ -93,8 +93,16 @@ export async function runStdioServer(role: Role): Promise<void> {
   const state: ServerState = createState(role);
   installShutdown(state, (code) => process.exit(code));
   state.onLiveFrame = (h: ScreencastFrameHeader, jpeg: Uint8Array) => {
+    if (process.stdout.writableLength > 0) return;
     try {
       writeFrame(encodeLiveStdioFrame(h, jpeg));
+    } catch {
+      /* drop */
+    }
+  };
+  state.onLiveControl = (msg) => {
+    try {
+      writeFrame(encodeRpcFrame({ jsonrpc: "2.0", method: "live.producer", params: msg }));
     } catch {
       /* drop */
     }

@@ -22,7 +22,7 @@ const DOCS_URL = "https://github.com/sanjaygbhat/bothearth";
 const TASKS_TTL_MS = 15_000;
 
 /** Command ⌘ on Apple hardware, Ctrl elsewhere — the platform’s own convention. */
-const IS_APPLE =
+export const IS_APPLE = (): boolean =>
   typeof navigator !== "undefined" &&
   /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
 
@@ -1291,7 +1291,7 @@ function onKeyDown(event: KeyboardEvent): void {
     return;
   }
 
-  const modifier = event.metaKey || (!IS_APPLE && event.ctrlKey);
+  const modifier = event.metaKey || (!IS_APPLE() && event.ctrlKey);
   if (!modifier || event.altKey) return;
 
   switch (event.key.toLowerCase()) {

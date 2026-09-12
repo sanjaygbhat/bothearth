@@ -16,3 +16,9 @@ export function fakeCli(prefix: string, script: (home: string) => string, name =
   writeFileSync(binary, `#!/usr/bin/env node\n${script(home)}`, { mode: 0o700 });
   return { home, binary, path: (entry: string) => join(home, entry) };
 }
+
+export function isolateModelbotHome(): string {
+  const home = mkdtempSync(join(tmpdir(), "mb-home-"));
+  process.env.MODELBOT_HOME = home;
+  return home;
+}

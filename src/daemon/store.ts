@@ -166,6 +166,10 @@ export function harnessSpendUsd(calls: number, perCallUsd: number): number {
  * room. Both budgets are measured in the only unit a harness run exposes — MCP
  * tool calls — so the reason a task stopped follows from the counter and never
  * needs a column of its own.
+ *
+ * `spend_cap_usd` or `max_steps` of 0 means no cap. Native Codex / Claude Code
+ * bindings store both as 0: the $0.01/call figure is a proxy estimate, not a
+ * bill, and must not stop the task.
  */
 export function harnessCapReason(binding: {
   observed_tool_calls: number;
@@ -173,9 +177,13 @@ export function harnessCapReason(binding: {
   spend_cap_usd: number;
   max_steps: number;
 }): "spend_cap" | "max_steps" | null {
-  if (harnessSpendUsd(binding.observed_tool_calls, binding.proxy_usd_per_tool_call) >= binding.spend_cap_usd)
+  if (
+    binding.spend_cap_usd > 0 &&
+    harnessSpendUsd(binding.observed_tool_calls, binding.proxy_usd_per_tool_call) >= binding.spend_cap_usd
+  ) {
     return "spend_cap";
-  return binding.observed_tool_calls >= binding.max_steps ? "max_steps" : null;
+  }
+  return binding.max_steps > 0 && binding.observed_tool_calls >= binding.max_steps ? "max_steps" : null;
 }
 
 /** Positive finite epoch from a computer-server takeover payload; else 0. */
@@ -248,6 +256,10 @@ function readNumber(body: Record<string, unknown>, key: string): number | null {
  * Build a task's receipt from its whole durable event log. This is the only
  * place the numbers on a finished task are decided, so the API, the UI and the
  * audit trail cannot disagree about how many steps it took or where it went.
+ *
+ * `steps` is the same figure the live view shows: the greater of usage.steps,
+ * an explicit task.*.steps, and the tool.call count. Heartbeat `task.step`
+ * rows are not a second counter.
  */
 export function taskSummaryFromEvents(
   events: Array<{ type: string; body_json: string }>,
@@ -256,6 +268,7 @@ export function taskSummaryFromEvents(
   const files: string[] = [];
   let steps = 0;
   let asks = 0;
+  let calls = 0;
   let costUsd: number | null = null;
   for (const event of events) {
     let body: Record<string, unknown>;
@@ -266,7 +279,8 @@ export function taskSummaryFromEvents(
     }
     const args = (body.arguments ?? {}) as Record<string, unknown>;
     if (event.type === "approval.requested") asks += 1;
-    if (event.type === "task.step") steps = Math.max(steps, readNumber(body, "step") ?? steps + 1);
+    if (event.type === "takeover.requested" && body.reason !== "ui") asks += 1;
+    if (event.type === "tool.call") calls += 1;
     if (event.type === "usage") {
       steps = Math.max(steps, readNumber(body, "steps") ?? 0);
       costUsd = readNumber(body, "usd_est") ?? costUsd;
@@ -294,7 +308,7 @@ export function taskSummaryFromEvents(
       if (typeof path === "string" && path && !files.includes(path)) files.push(path);
     }
   }
-  return { steps, sites, asks, files_saved: files, cost_usd: costUsd };
+  return { steps: Math.max(steps, calls), sites, asks, files_saved: files, cost_usd: costUsd };
 }
 
 /** Last path segment, whichever way the path was written. */
@@ -1457,6 +1471,7 @@ export class Store {
     computer_id?: string;
     body: Record<string, unknown>;
     hash: string;
+    ts?: string;
   }): AuditRefRow {
     const seqRow = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM audit_refs").get() as {
       m: number;
@@ -1465,7 +1480,7 @@ export class Store {
     const rec: AuditRefRow = {
       seq,
       type: input.type,
-      ts: now(),
+      ts: input.ts ?? now(),
       task_id: input.task_id ?? null,
       computer_id: input.computer_id ?? null,
       body_json: JSON.stringify(input.body),

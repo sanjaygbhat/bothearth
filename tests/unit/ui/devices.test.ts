@@ -101,18 +101,51 @@ test("a phone link is never made or copied without a click, and it clears itself
   }
 });
 
+/** Stand-in for the Mac shell's message handler, same as Home's `thisMachine` gate. */
+async function withNativeShell<T>(fn: () => Promise<T>): Promise<T> {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const saved = globals.webkit;
+  globals.webkit = { messageHandlers: { modelbot: { postMessage() {} } } };
+  try {
+    return await fn();
+  } finally {
+    globals.webkit = saved;
+  }
+}
+
 test("on a link only this computer can open, the button explains instead of sitting dead", async () => {
   const world: World = { origin: "http://127.0.0.1:7803", devices: [], mutations: [], copied: 0 };
   const { dom, pane, dispose } = await mountDevices(world);
   try {
     const issue = byText(pane, "Connect a phone") as FakeElement;
     assert.equal(issue.disabled, true);
-    const text = all(pane).map((n) => n.textContent).join(" ");
-    assert.match(text, /Your phone needs a private HTTPS address to reach this Mac/);
+    const text = all(pane)
+      .map((n) => n.textContent)
+      .join(" ");
+    assert.match(text, /Your phone needs a private HTTPS address to reach this computer/);
+    assert.match(text, /HTTPS/);
+    assert.doesNotMatch(text, /this Mac/);
     assert.match(text, /Nothing paired yet\./);
     const guide = all(pane).find((n) => n.tagName === "A" && !n.hidden) as FakeElement;
     assert.match(guide.href, /^https:\/\/github\.com\/.*REMOTE-DEPLOY\.md$/);
     assert.equal(guide.rel, "noopener noreferrer");
+  } finally {
+    dispose();
+    dom.restore();
+  }
+});
+
+test("the Mac shell still names the machine a Mac when Connect is disabled", async () => {
+  const world: World = { origin: "http://127.0.0.1:7803", devices: [], mutations: [], copied: 0 };
+  const { dom, pane, dispose } = await withNativeShell(() => mountDevices(world));
+  try {
+    const issue = byText(pane, "Connect a phone") as FakeElement;
+    assert.equal(issue.disabled, true);
+    const text = all(pane)
+      .map((n) => n.textContent)
+      .join(" ");
+    assert.match(text, /Your phone needs a private HTTPS address to reach this Mac/);
+    assert.match(text, /HTTPS/);
   } finally {
     dispose();
     dom.restore();
@@ -158,10 +191,12 @@ test("a link the daemon cannot make privately is refused in plain words", async 
     (byText(pane, "Connect a phone") as FakeElement).fire("click");
     await settle();
     await settle();
-    assert.match(
-      all(pane).map((n) => n.textContent).join(" "),
-      /That link cannot be made right now/,
-    );
+    const text = all(pane)
+      .map((n) => n.textContent)
+      .join(" ");
+    assert.match(text, /That link cannot be made right now/);
+    assert.match(text, /Give this computer a private HTTPS address/);
+    assert.doesNotMatch(text, /this Mac/);
     assert.equal(all(pane).some((n) => n.value.includes("bootstrap=")), false);
   } finally {
     dispose();

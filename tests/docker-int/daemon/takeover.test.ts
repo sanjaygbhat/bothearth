@@ -54,14 +54,8 @@ test("real browser-only UI takeover blocks model tools and resumes after release
         return JSON.parse(String(result.content[0]!.text));
       };
       assert.equal((await call("browser_navigate", { url: "http://127.0.0.1:8080", wait_until: "domcontentloaded" })).ok, true);
-      // Exercise the production MCP → idle-wake wrapper → ExecClient policy envelope.
-      // A raw browser call would follow this redirect without requesting consent.
       const redirect = await call("browser_navigate", { url: "http://127.0.0.1:8080/redirect", wait_until: "domcontentloaded" });
-      assert.equal(redirect.error?.code, "E_POLICY_PENDING", JSON.stringify(redirect));
-      const approval = daemon.store.getApproval(redirect.error.details.approval_id)!;
-      assert.equal(approval.gate, "new_domain");
-      await post(`/api/v1/approvals/${approval.id}`, { decision: "allow_once", bind: JSON.parse(approval.bind_json) });
-      assert.equal((await call("browser_navigate", { url: "http://127.0.0.1:8080/redirect", wait_until: "domcontentloaded" })).ok, true, "same original redirect succeeds after operator consent");
+      assert.equal(redirect.ok, true, "ordinary public navigation does not require submission consent");
       assert.equal((await call("done", { summary: "First harness task complete" })).ok, true);
       assert.equal(daemon.store.getTask(taskA)?.status, "completed");
       assert.equal((await call("browser_snapshot", { depth: null, interactive_only: false, max_chars: 1000, scope: null })).error?.code, "E_POLICY", "terminal tasks cannot keep using their grant");
@@ -70,8 +64,7 @@ test("real browser-only UI takeover blocks model tools and resumes after release
       const archive = daemon.store.db.prepare("SELECT body_json FROM steps WHERE task_id = ? AND kind = 'harness_binding'").get(taskA) as { body_json: string };
       assert.ok(JSON.parse(archive.body_json).observed_tool_calls > 0, "previous task budget history survives rebinding");
       const isolated = await call("browser_navigate", { url: "http://127.0.0.1:8080/redirect", wait_until: "domcontentloaded" });
-      assert.equal(isolated.error?.code, "E_POLICY_PENDING", "same computer's next task cannot inherit the previous domain consent");
-      assert.equal(daemon.store.getApproval(isolated.error.details.approval_id)?.task_id, taskB);
+      assert.equal(isolated.ok, true, "the next task can also open public pages without submission consent");
       await post(`/api/v1/tasks/${taskB}/cancel`);
       const reused = await fetch(`${daemon.baseUrl}/api/v1/harness-bindings`, { method: "POST", headers, body: JSON.stringify(bindingInput) });
       assert.equal(reused.status, 409, "old task IDs and their approvals cannot be recycled");
@@ -103,7 +96,7 @@ test("real browser-only UI takeover blocks model tools and resumes after release
       const type = (text: string) => { for (const char of text) key(char, char === "@" || char === "_" ? 8 : 0); };
       if (process.env.MODELBOT_TEST_BROWSER_IMAGE) {
         await until(() => frames.some(frame => frame.mode === "human" && frame.target === "desktop"), "no full desktop frame", 15000);
-        for (const kind of ["down", "up"]) ws!.send(JSON.stringify({ v: 1, t: "pointer", epoch, kind, x: 200, y: 350, button: 0 }));
+        for (const kind of ["down", "up"]) ws!.send(JSON.stringify({ v: 1, t: "pointer", epoch, kind, x: 200, y: 300, button: 0 }));
       }
       type("junk"); key("a", 2, "KeyA"); key("Backspace");
       type("replace me"); key("a", 4, "KeyA"); key("Backspace");

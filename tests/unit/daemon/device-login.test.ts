@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { deviceId } from "../../../src/daemon/auth.ts";
 import { createCodexConnection, parseDeviceChallenge } from "../../../src/daemon/codex-connection.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
+
+isolateModelbotHome();
 
 const prompt = "1. Open this URL\nhttps://auth.openai.com/codex/device\n2. Enter this one-time code (expires soon)\nABCD-12345\n";
 test("device prompt parsing exposes only the official verification URL and bounded code", () => {

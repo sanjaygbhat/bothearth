@@ -23,6 +23,13 @@ export interface FakeComputerOpts {
   ttlSec?: number;
 }
 
+const FAKE_BY_ID = new Map<string, FakeComputer>();
+
+/** The in-process fake the daemon opened for this computer, if any. */
+export function fakeComputerFor(computerId: string): FakeComputer | undefined {
+  return FAKE_BY_ID.get(computerId);
+}
+
 /**
  * In-process fake computer-server. Speaks tool RPC + live frames and enforces
  * takeover busy fail-closed.
@@ -40,11 +47,14 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
   private readonly ttlSec: number;
   private closed = false;
   private readonly quarantined = new Set(["download_0123456789abcdef01234567"]);
+  /** When set, release stays human with this field on screen. */
+  sensitiveField: { kind: "password" | "otp"; label: string } | null = null;
 
   constructor(computerId: string, opts?: FakeComputerOpts) {
     super();
     this.computerId = computerId;
     this.ttlSec = opts?.ttlSec ?? 600;
+    FAKE_BY_ID.set(computerId, this);
   }
 
   getTakeoverState(): TakeoverState {
@@ -56,6 +66,51 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
       return toolError("E_SANDBOX_DEAD");
     }
     if (method === "takeover.request") return this.requestTakeover(params);
+    if (method === "takeover.sync") {
+      const p = (params ?? {}) as { takeover_id?: unknown; expires_at?: unknown; state?: unknown; epoch?: unknown };
+      this.takeoverId = typeof p.takeover_id === "string" ? p.takeover_id : this.takeoverId;
+      if (typeof p.expires_at === "string") this.expiresAt = p.expires_at;
+      if (p.state === "human") {
+        this.state = "human";
+        const epoch = Number(p.epoch);
+        if (Number.isFinite(epoch) && epoch > 0) this.takeoverEpoch = Math.trunc(epoch);
+      } else {
+        this.state = "takeover_requested";
+        this.takeoverEpoch += 1;
+      }
+      return {
+        ok: true,
+        data: {
+          takeover_id: this.takeoverId,
+          state: toWireState(this.state),
+          expires_at: this.expiresAt,
+          epoch: this.takeoverEpoch,
+        },
+      };
+    }
+    if (method === "takeover.blank") {
+      if (this.state !== "human" && this.state !== "paused") {
+        return toolError("E_POLICY", "invalid takeover blank");
+      }
+      this.sensitiveField = null;
+      return { ok: true, data: { url: "about:blank" } };
+    }
+    if (method === "takeover.goto") {
+      if (this.state !== "human") {
+        return toolError("E_POLICY", "invalid takeover goto");
+      }
+      const url = String((params as { url?: unknown } | undefined)?.url ?? "");
+      if (url !== "https://accounts.google.com/AccountChooser") {
+        return toolError("E_POLICY", "invalid navigation URL");
+      }
+      return { ok: true, data: { url } };
+    }
+    if (method === "takeover.masked-observation") {
+      return {
+        ok: true,
+        data: { still_sensitive: Boolean(this.sensitiveField), field: this.sensitiveField },
+      };
+    }
     const tool = method as ToolName;
     if (isTakeoverBusy(this.state) && !isTakeoverExemptTool(tool)) {
       return this.busyError();
@@ -162,15 +217,16 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
   }
 
   async releaseTakeover(takeoverId: string): Promise<ToolResult> {
-    if (this.takeoverId !== takeoverId) {
+    if (this.takeoverId && this.takeoverId !== takeoverId) {
       return toolError("E_IO", "unknown takeover_id");
     }
     const next = applyTakeoverTransition(this.state, "release");
     if (!next) return toolError("E_POLICY", "invalid takeover release");
     this.state = next;
-    const validated = applyTakeoverTransition(this.state, "validated");
+    const still = Boolean(this.sensitiveField);
+    const validated = applyTakeoverTransition(this.state, still ? "still_sensitive" : "validated");
     if (validated) this.state = validated;
-    this.setMode("agent");
+    this.setMode(this.state === "human" ? "human" : "agent");
     this.emit("takeover", { takeover_id: takeoverId, state: this.state });
     return {
       ok: true,
@@ -178,13 +234,26 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
         takeover_id: takeoverId,
         state: toWireState(this.state),
         expires_at: this.expiresAt,
+        epoch: this.takeoverEpoch,
+        field: this.sensitiveField,
       },
     };
   }
 
   async declineTakeover(takeoverId: string): Promise<ToolResult> {
-    if (this.takeoverId !== takeoverId) {
+    if (this.takeoverId && this.takeoverId !== takeoverId) {
       return toolError("E_IO", "unknown takeover_id");
+    }
+    if (this.state === "agent") {
+      return {
+        ok: true,
+        data: {
+          takeover_id: takeoverId,
+          state: toWireState(this.state),
+          expires_at: this.expiresAt,
+          epoch: this.takeoverEpoch,
+        },
+      };
     }
     const next = applyTakeoverTransition(this.state, "decline");
     if (!next) return toolError("E_POLICY", "invalid takeover decline");
@@ -240,16 +309,20 @@ export class FakeComputer extends EventEmitter implements ComputerClient {
 
   async close(): Promise<void> {
     this.closed = true;
+    if (FAKE_BY_ID.get(this.computerId) === this) FAKE_BY_ID.delete(this.computerId);
     this.stopLive();
     this.removeAllListeners();
   }
 
   private requestTakeover(params: unknown): ToolResult {
-    const p = (params ?? {}) as { reason?: string };
+    const p = (params ?? {}) as { reason?: string; takeover_id?: string };
     const next = applyTakeoverTransition(this.state, "request");
     if (!next) return toolError("E_IO", "invalid takeover transition");
     this.state = next;
-    this.takeoverId = `tk_${randomBytes(8).toString("hex")}`;
+    this.takeoverId =
+      typeof p.takeover_id === "string" && p.takeover_id
+        ? p.takeover_id
+        : `tk_${randomBytes(8).toString("hex")}`;
     this.expiresAt = new Date(Date.now() + this.ttlSec * 1000).toISOString();
     this.takeoverEpoch += 1;
     this.emit("takeover", {

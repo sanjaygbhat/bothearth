@@ -1,0 +1,32 @@
+# BotHearth enterprise pilot flavour. This is not default.
+#
+# After `bothearth init`, paste `mode`, `policy.gates`, and
+# `sandbox.max_computers` from this file into `$MODELBOT_HOME/modelbot.yaml`.
+# Do not `cp` over the active file — keep the `data_dir` and `adapters` init
+# wrote. There is no `init --flavour`.
+#
+# Optional sidecar (not loaded; daemon reads `$MODELBOT_HOME/modelbot.yaml` only):
+#   cp src/config/enterprise.yaml "$MODELBOT_HOME/enterprise.yaml"
+#
+# `mode: strict` needs a non-empty `policy.strict_allowlist` of origins you
+# choose. This flavour does not invent hostnames. An empty list denies every
+# non-blank `browser_navigate`.
+#
+# Warning: native CLI shell and network tools bypass these MCP checks; their
+# boundary is the container, guest uid and egress policy.
+#
+# Six optional gates are armed. This flavour sets no spend cap.
+# `agent.spend_cap_usd` and `agent.max_steps` are omitted on purpose so the
+# daemon defaults of 0 still apply.
+version: 1
+mode: strict
+policy:
+  gates:
+    - external_send
+    - payment
+    - upload
+    - delete
+    - secret_entry
+    - new_domain
+sandbox:
+  max_computers: 5

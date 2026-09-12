@@ -23,7 +23,7 @@ const START = "2026-09-08T09:52:00.000Z";
 const at = (seconds: number) => new Date(Date.parse(START) + seconds * 1000).toISOString();
 const PAUSED_AT = at(34);
 
-const SESSION = { ok: true, csrf: "c", spend_cap_usd: 0.05, execution_mode: "claude" };
+const SESSION = { ok: true, csrf: "c", spend_cap_usd: 0.05, execution_mode: "standalone" };
 
 const PAUSE_BODY = {
   status: "paused",

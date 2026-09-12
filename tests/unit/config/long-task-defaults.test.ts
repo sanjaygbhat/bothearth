@@ -15,6 +15,7 @@ type Filled = {
     spend_cap_usd: number;
     spend_cap_max_usd: number;
   };
+  sandbox: { memory: string; shm_size: string };
 };
 
 // A 20-40 minute task must not die because nobody answered an approval card in
@@ -22,13 +23,13 @@ type Filled = {
 test("a zero-config install can run a long task", () => {
   const cfg = withDefaults({}) as Filled;
   assert.equal(cfg.policy.approval_ttl_sec, 900);
-  assert.equal(cfg.agent.max_steps, 400);
+  assert.equal(cfg.agent.max_steps, 0);
   assert.equal(cfg.agent.stall_sec, 300);
   assert.equal(cfg.agent.loop_identical, 3);
-  // At the $0.01-per-call proxy rate a browser task spends most of its calls
-  // reading: $2 bought 200 calls and died mid-job on both attempts.
-  assert.equal(cfg.agent.spend_cap_usd, 20);
-  assert.equal(cfg.agent.spend_cap_max_usd, 100);
+  assert.equal(cfg.agent.spend_cap_usd, 0);
+  assert.equal(cfg.agent.spend_cap_max_usd, 0);
+  assert.equal(cfg.sandbox.memory, "4g");
+  assert.equal(cfg.sandbox.shm_size, "2g");
 });
 
 test("modelbot.yaml still overrides every long-task default", () => {
@@ -45,8 +46,10 @@ test("modelbot.yaml still overrides every long-task default", () => {
 test("the shipped example.yaml states the same defaults", () => {
   const example = loadModelbotYamlFile(join(root, "src/config/example.yaml")) as Filled;
   assert.equal(example.policy.approval_ttl_sec, 900);
-  assert.equal(example.agent.max_steps, 400);
+  assert.equal(example.agent.max_steps, 0);
   assert.equal(example.agent.stall_sec, 300);
-  assert.equal(example.agent.spend_cap_usd, 20);
-  assert.equal(example.agent.spend_cap_max_usd, 100);
+  assert.equal(example.agent.spend_cap_usd, 0);
+  assert.equal(example.agent.spend_cap_max_usd, 0);
+  assert.equal(example.sandbox.memory, "4g");
+  assert.equal(example.sandbox.shm_size, "2g");
 });

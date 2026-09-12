@@ -347,7 +347,7 @@ function copyFor(kind: AttentionKind): { title: string; body: string } {
   return kind === "takeover"
     ? {
         title: "Your bot needs you.",
-        body: "There’s a login it can’t do safely on its own.",
+        body: "Open BotHearth and take control. The login is in the bot's browser, not in Arc.",
       }
     : {
         title: "Your bot needs you.",
@@ -432,6 +432,19 @@ class Attention {
     if (fresh.length > 0) {
       modelbotNative.requestAttention(true);
       this.remember(fresh.map((item) => pingFor(item).key));
+      const takeover = fresh.find((item) => item.kind === "takeover" && item.taskId);
+      const active = typeof document === "undefined" ? null : document.activeElement;
+      const typing =
+        active != null &&
+        active !== document.body &&
+        (active as HTMLElement).id !== "home-goal" &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          Boolean((active as HTMLElement).isContentEditable));
+      const route = takeover?.taskId ? `#/tasks/${takeover.taskId}` : null;
+      if (route && !typing && location.hash !== route) {
+        navigate(route);
+      }
     }
 
     this.scheduleExpiry(live);

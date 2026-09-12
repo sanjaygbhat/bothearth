@@ -137,11 +137,16 @@ export function describeApproval(req: PendingApproval): ApprovalCopy {
   // The verb has to agree with the destination. "Write a file on its computer"
   // beside "the first time it has sent anything out of its computer" reads as a
   // contradiction, so the destination wins over the tool's own phrasing.
+  const formSubmit = req.gate === "new_domain"
+    && req.tool !== "browser_navigate"
+    && req.tool !== "browser_tabs";
   const verb =
     kind === "site"
       ? req.tool === "browser_navigate" || req.tool === "browser_tabs"
         ? `open ${place}`
-        : `send this to ${place}`
+        : formSubmit
+          ? `submit this form to ${place}`
+          : `send this to ${place}`
       : kind === "mac"
         ? `put this on ${place}, where you can open it`
         : (TOOL_VERB[req.tool] ?? "do one thing it cannot do on its own");
@@ -151,7 +156,9 @@ export function describeApproval(req: PendingApproval): ApprovalCopy {
     title =
       req.tool === "browser_navigate" || req.tool === "browser_tabs"
         ? `Open ${place}?`
-        : `Send this to ${place}?`;
+        : formSubmit
+          ? `Submit this form to ${place}?`
+          : `Send this to ${place}?`;
   } else if (kind === "mac") {
     title = name && name.length <= 24 ? `Put “${name}” on ${place}?` : `Put a file on ${place}?`;
   } else if (req.tool === "files_write") {

@@ -20,6 +20,13 @@ test("static site builds and checks both the custom domain and a Pages project p
       run("scripts/check-site.mjs", site);
     }
     run("scripts/claim-scan.ts", config.url);
+    const home = readFileSync(new URL("../../../.site-build/index.html", import.meta.url), "utf8");
+    assert.match(home, /Run your first task/);
+    assert.doesNotMatch(home, /paid or destructive/);
+    const contactPageDefault = readFileSync(new URL("../../../.site-build/contact/index.html", import.meta.url), "utf8");
+    assert.match(contactPageDefault, /<details class="contact-box" hidden open>/);
+    assert.match(contactPageDefault, /<fieldset disabled>/);
+    assert.match(contactPageDefault, /open an issue in the <a href="https:\/\/github.com\/sanjaygbhat\/bothearth\/issues">project repository<\/a>/);
     const terms = readFileSync(new URL("../../../.site-build/terms/index.html", import.meta.url), "utf8");
     assert.match(terms, /US\$49/);
     assert.match(terms, /<del>US\$99<\/del>/);
@@ -47,6 +54,7 @@ test("static site builds and checks both the custom domain and a Pages project p
     const contactPage = readFileSync(new URL("../../../.site-build/contact/index.html", import.meta.url), "utf8");
     assert.match(contactPage, /action="https:\/\/contact.example.org\/enquiry"/);
     assert(!contactPage.includes('<fieldset disabled>'));
+    assert.doesNotMatch(contactPage, /<details class="contact-box"[^>]*\bhidden\b/);
     assert.match(readFileSync(privacyPage, "utf8"), /online certificate claims are not open yet; contact submission is enabled/);
     for (const contact of ["https://forms.example.org/owner%40example.org", "https://forms.example.org/?recipient=owner", "http://forms.example.org/send"]) {
       const invalid = spawnSync(process.execPath, ["scripts/build-site.mjs"], { cwd: root, encoding: "utf8", timeout: 30_000, env: { ...process.env, SITE_CONTACT_URL: contact } });

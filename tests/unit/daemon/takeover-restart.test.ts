@@ -42,22 +42,19 @@ test("restarted computer reports its durable busy lease without opening model ac
 });
 
 
-test("a sensitive action returns the newly created lease metadata without executing the action", async () => {
+test("a password-field signal does not mint a takeover unless request_takeover is called", async () => {
   const store = new Store(), computer = new FakeComputer("guard-contract");
   store.insertComputer({ id: computer.computerId, name: "Synthetic", capabilities: ["browser"], persistent: false, status: "running" });
   const task = store.insertTask({ computer_id: computer.computerId, goal: "synthetic guard", max_steps: 5 });
-  const dispatcher = createToolDispatcher({ store, getClient: () => computer, emit: () => {},
-    execute: async () => assert.fail("a sensitive action must never execute") });
+  const dispatcher = createToolDispatcher({ store, getClient: () => computer, emit: () => {} });
   const context = { computerId: computer.computerId, taskId: task.id, origin: "https://fixture.example",
     signals: { password_field: true }, originSets: { readable: ["fixture.example"], writable: ["fixture.example"] } };
   try {
     const result = await dispatcher.dispatch("browser_click", { ref: "synthetic-control" }, context);
-    const lease = store.activeTakeoverForComputer(computer.computerId)!;
-    assert.ok(lease);
-    assert.deepEqual(result, { ok: false, error: { code: "E_TAKEOVER_BUSY", message: "password_field",
-      details: { takeover_id: lease.id, state: "requested" } } });
-    const status = await dispatcher.dispatch("takeover_status", { takeover_id: "" }, context);
-    assert.equal(status.ok && (status.data as { takeover_id: string }).takeover_id, lease.id);
-    assert.equal((await dispatcher.dispatch("browser_snapshot", {}, context)).ok, false);
+    assert.equal(result.ok, true);
+    assert.equal(store.activeTakeoverForComputer(computer.computerId), undefined);
+    const asked = await dispatcher.dispatch("request_takeover", { reason: "login" }, context);
+    assert.equal(asked.ok, true);
+    assert.ok(store.activeTakeoverForComputer(computer.computerId));
   } finally { await computer.close(); store.close(); }
 });

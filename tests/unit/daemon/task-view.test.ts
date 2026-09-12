@@ -50,6 +50,20 @@ test("task activity is bounded and excludes arbitrary tool results", () => {
   } finally { store.close(); }
 });
 
+test("native tool activity keeps its step id so live and durable rows can share a key", () => {
+  const store = new Store();
+  try {
+    const task = store.insertTask({ computer_id: "computer", goal: "Open GitHub", max_steps: 10 });
+    store.insertStep(task.id, 0, "native_tool", {
+      id: "step_nav1", name: "browser_navigate", type: "mcp_tool_call", status: "started",
+    });
+    const body = taskActivity(store, task.id).steps.find(step => step.kind === "native_tool")!.body;
+    assert.deepEqual(body, {
+      id: "step_nav1", name: "browser_navigate", type: "mcp_tool_call", status: "started",
+    });
+  } finally { store.close(); }
+});
+
 test("handoff instructions survive replay, remain bounded and expose no raw arguments", () => {
   const store = new Store();
   try {
@@ -70,5 +84,40 @@ test("handoff instructions survive replay, remain bounded and expose no raw argu
     assert.equal(history.steps.length, 100);
     assert.equal(history.history_truncated, true);
     assert.deepEqual(history.steps.find(step => step.kind === "takeover.requested")!.body, body);
+  } finally { store.close(); }
+});
+
+test("a cancelled takeover receipt counts the ask and the same steps as the live view", () => {
+  const store = new Store();
+  try {
+    const task = store.insertTask({ computer_id: "computer", goal: "Sign in to GitHub", max_steps: 10 });
+    const append = (type: string, body: Record<string, unknown>) =>
+      store.appendAuditRef({ type, body, task_id: task.id, computer_id: "computer", hash: "takeover" });
+    append("usage", { tokens_in: 0, tokens_out: 0, usd_est: 0, steps: 0 });
+    append("task.step", { status: "running" });
+    append("tool.call", { name: "browser_navigate" });
+    append("tool.result", { name: "browser_navigate", arguments: { url: "https://github.com/login" }, result: { ok: true } });
+    append("usage", { tokens_in: 0, tokens_out: 0, usd_est: 0.01, steps: 1 });
+    append("tool.call", { name: "request_takeover" });
+    append("takeover.requested", {
+      takeover_id: "tk_sign_in",
+      reason: "GitHub’s sign-in page is open. Please sign in directly in the browser.",
+      field: { kind: "password", label: "password" },
+    });
+    append("tool.result", { name: "request_takeover" });
+    append("usage", { tokens_in: 0, tokens_out: 0, usd_est: 0.02, steps: 2 });
+    append("task.step", { status: "running" });
+    store.finishTask(task.id, "cancelled");
+    append("task.cancelled", {});
+    store.freezeTaskSummary(task.id);
+
+    const summary = store.getTask(task.id)!.summary!;
+    assert.equal(summary.asks, 1, "a takeover request is a thing it asked you");
+    assert.equal(summary.steps, 2, "heartbeat task.step rows must not inflate the count");
+    assert.equal(summary.steps, store.countToolCalls(task.id), "frozen steps equal the live tool.call count");
+    assert.deepEqual(summary.sites, ["github.com"]);
+    const replayed = taskActivity(store, task.id).steps.find((step) => step.kind === "takeover.requested")!.body;
+    assert.equal(replayed.field_kind, "password");
+    assert.equal(replayed.reason, "GitHub’s sign-in page is open. Please sign in directly in the browser.");
   } finally { store.close(); }
 });

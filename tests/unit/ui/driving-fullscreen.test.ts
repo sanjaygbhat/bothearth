@@ -10,6 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { LivePanel } from "../../../src/ui/live/panel.ts";
 import { TaskView } from "../../../src/ui/task.ts";
 import { CONTROL_TAKEN } from "../../../src/ui/takeover.ts";
 import { installDom, settle, type FakeElement } from "./fake-dom.ts";
@@ -115,13 +116,11 @@ async function mount(options: { fullscreen: "grants" | "denies" | "absent" }) {
   };
 }
 
-describe("Full screen is optional during takeover", () => {
+describe("Take control opens full screen", () => {
   it("asks the browser for full screen and confirms control in the live view", async () => {
     const t = await mount({ fullscreen: "grants" });
     try {
       t.take().click();
-      await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
       await settle(8);
 
       assert.deepEqual(t.posts, [
@@ -140,7 +139,8 @@ describe("Full screen is optional during takeover", () => {
       assert.equal(notice.getAttribute("aria-live"), "polite");
       assert.equal(notice.getAttribute("role"), "status");
 
-      // Driving full screen leaves the countdown and one button, nothing else.
+      // Driving full screen leaves the countdown and the two holds: return, and
+      // switch Google account. The ask card is off-screen (`task-left` hidden).
       const side = t.root.querySelector(".task-side")!;
       assert.equal(side.classList.contains("driving-full"), true);
       const bar = t.root.querySelector(".drive-bar")!;
@@ -148,8 +148,15 @@ describe("Full screen is optional during takeover", () => {
       assert.match(bar.querySelector(".lease")!.textContent, /Control pauses in 9:4/);
       assert.deepEqual(
         bar.querySelectorAll("button").map((node) => node.textContent),
-        ["Give control back"],
+        ["Give control back", "Use a different Google account"],
       );
+      const google = bar
+        .querySelectorAll("button")
+        .find((node) => node.textContent === "Use a different Google account")!;
+      assert.equal(google.disabled, false);
+      google.click();
+      await settle();
+      assert.equal(t.posts.includes("/api/v1/takeover/tk_1/google-account"), true);
     } finally {
       t.restore();
     }
@@ -160,13 +167,15 @@ describe("Full screen is optional during takeover", () => {
     try {
       t.take().click();
       await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
-      await settle(8);
       assert.deepEqual(t.asked, ["enter"]);
       assert.equal(t.nativeFull(), false, "a denied request must not be reported as full screen");
       assert.equal(t.grid().getAttribute("data-full"), "true", "no in-page fallback");
       assert.equal(t.root.querySelector(".task-side")!.classList.contains("driving-full"), true);
-      assert.equal(t.notice().textContent, CONTROL_TAKEN);
+      assert.equal(t.root.querySelector(".side-head .state")!.textContent, "You are driving");
+      assert.match(t.notice().textContent, /Couldn’t fill the display \(Permission denied\)/);
+      assert.match(t.notice().textContent, /You still have control/);
+      assert.equal(t.notice().classList.contains("warn"), true);
+      assert.equal(t.posts.includes("/api/v1/takeover/tk_1/release"), false);
     } finally {
       t.restore();
     }
@@ -176,8 +185,6 @@ describe("Full screen is optional during takeover", () => {
     const t = await mount({ fullscreen: "absent" });
     try {
       t.take().click();
-      await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
       await settle(8);
       assert.deepEqual(t.asked, []);
       assert.equal(t.grid().getAttribute("data-full"), "true");
@@ -196,7 +203,7 @@ describe("Full screen is optional during takeover", () => {
         shiftKey: true,
       });
       await settle(8);
-      assert.deepEqual(t.asked, []);
+      assert.deepEqual(t.asked, ["enter"]);
       assert.equal(t.notice().textContent, CONTROL_TAKEN);
     } finally {
       t.restore();
@@ -253,8 +260,6 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
-      await settle(8);
       assert.equal(t.nativeFull(), true);
 
       (document as unknown as { fire(t: string, e: Json): void }).fire("keydown", {
@@ -278,8 +283,6 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
-      await settle(8);
       t.root.querySelector(".drive-bar button")!.click();
       await settle(8);
 
@@ -299,14 +302,12 @@ describe("the two ways out of driving full screen", () => {
     try {
       t.take().click();
       await settle(8);
-      t.root.querySelectorAll(".view-acts button").find(node => node.textContent === "Full screen")!.click();
-      await settle(8);
       t.setRelease("human");
       t.root.querySelector(".drive-bar button")!.click();
       await settle(8);
 
       assert.equal(t.nativeFull(), true, "a refused release must not drop you out of full screen");
-      assert.match(t.notice().textContent, /Finish that step or move off it/);
+      assert.match(t.notice().textContent, /The page still shows a password field/);
       assert.equal(t.notice().classList.contains("warn"), true);
     } finally {
       t.restore();
@@ -315,14 +316,37 @@ describe("the two ways out of driving full screen", () => {
 });
 
 
-it("taking control preserves the conversation until full screen is explicitly requested", async () => {
+it("Full screen keeps the in-page layout when the browser refuses the API", async () => {
+  const dom = installDom();
+  try {
+    const p = new LivePanel({ computerId: null });
+    const asked: string[] = [];
+    (p.root as unknown as { requestFullscreen?: () => Promise<void> }).requestFullscreen = async () => {
+      asked.push("enter");
+      throw new Error("Permission denied");
+    };
+    const full = p.root
+      .querySelectorAll(".view-acts button")
+      .find((node) => node.textContent === "Full screen")!;
+    full.click();
+    await settle();
+    assert.deepEqual(asked, ["enter"]);
+    assert.equal(p.isFullScreen(), true);
+    assert.equal(p.fullScreenDeniedDetail(), "Permission denied");
+    assert.equal(full.textContent, "Leave full screen");
+  } finally {
+    dom.restore();
+  }
+});
+
+it("taking control opens full screen while retaining the conversation for Escape", async () => {
   const t = await mount({ fullscreen: "grants" });
   try {
     t.take().click();
     await settle(8);
-    assert.deepEqual(t.asked, []);
-    assert.equal(t.nativeFull(), false);
-    assert.notEqual(t.grid().getAttribute("data-full"), "true");
+    assert.deepEqual(t.asked, ["enter"]);
+    assert.equal(t.nativeFull(), true);
+    assert.equal(t.grid().getAttribute("data-full"), "true");
     assert.ok(t.root.querySelector(".task-composer"));
   } finally { t.restore(); }
 });

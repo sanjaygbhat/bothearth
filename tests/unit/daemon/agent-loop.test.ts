@@ -213,6 +213,71 @@ describe("standalone agent loop", () => {
     assert.ok(events.includes("usage"));
   });
 
+  it("pauses when the API-adapter loop spends its step budget", async () => {
+    const computer = new StableComputer();
+    const adapter = new ScriptedAdapter(() => ({
+      tool_calls: [
+        {
+          id: "wait",
+          name: "browser_wait",
+          arguments: {
+            timeout_ms: null,
+            ms: 1,
+            text: null,
+            url_glob: null,
+            load_state: null,
+          },
+        },
+      ],
+      usage: { tokens_in: 1, tokens_out: 1, usd_est: 0 },
+    }));
+    const result = await runAgentLoop({ ...base(computer, adapter), maxSteps: 2 });
+    assert.equal(result.status, "paused");
+    assert.equal(result.reason, "max_steps");
+    assert.equal(adapter.requests.length, 2);
+  });
+
+  it("treats maxSteps 0 as no step cap", async () => {
+    const computer = new StableComputer();
+    const adapter = new ScriptedAdapter((call) => ({
+      tool_calls:
+        call < 3
+          ? [
+              {
+                id: "wait",
+                name: "browser_wait",
+                arguments: {
+                  timeout_ms: null,
+                  ms: 1,
+                  text: null,
+                  url_glob: null,
+                  load_state: null,
+                },
+              },
+            ]
+          : [{ id: "done", name: "done", arguments: { summary: "uncapped", status: "success" } }],
+      usage: { tokens_in: 1, tokens_out: 1, usd_est: 0 },
+    }));
+    const result = await runAgentLoop({ ...base(computer, adapter), maxSteps: 0, spendCapUsd: 0 });
+    assert.equal(result.status, "completed");
+    assert.equal(result.reason, "completed");
+    assert.equal(adapter.requests.length, 3);
+  });
+
+  it("treats spendCapUsd 0 as no spend cap", async () => {
+    const computer = new StableComputer();
+    const adapter = new ScriptedAdapter(() => ({
+      tool_calls: [
+        { id: "done", name: "done", arguments: { summary: "uncapped", status: "success" } },
+      ],
+      usage: { tokens_in: 1, tokens_out: 1, usd_est: 0.6 },
+    }));
+    const result = await runAgentLoop({ ...base(computer, adapter), maxSteps: 10, spendCapUsd: 0 });
+    assert.equal(result.status, "completed");
+    assert.equal(result.reason, "completed");
+    assert.equal(adapter.requests.length, 1);
+  });
+
   it("emits policy.denied with cap, spend, and task_id when the spend cap trips", async () => {
     const computer = new StableComputer();
     const adapter = new ScriptedAdapter(() => ({

@@ -183,6 +183,28 @@ describe("takeover_id bind + grant side effects after validate", () => {
     assert.ok(!stub.calls.modes.includes("human"));
   });
 
+  it("takeover.sync restores human on browser and shell at the recorded epoch", async () => {
+    const browserRpc = new DispatchRpc(createState("browser"));
+    const shellRpc = new DispatchRpc(createState("shell"));
+    const client = new SplitExec("c_restore", browserRpc, shellRpc);
+    const expires = new Date(Date.now() + 60_000).toISOString();
+    try {
+      const synced = await client.call("takeover.sync", {
+        takeover_id: "tk_hold", expires_at: expires, state: "human", epoch: 7,
+      });
+      assert.equal(synced.ok, true);
+      assert.equal(browserRpc.state.takeover.state, "human");
+      assert.equal(shellRpc.state.takeover.state, "human");
+      assert.equal(browserRpc.state.takeover.takeoverId, "tk_hold");
+      assert.equal(shellRpc.state.takeover.takeoverId, "tk_hold");
+      assert.equal(browserRpc.state.takeover.epoch, 7);
+      assert.equal(shellRpc.state.takeover.epoch, 7);
+      assert.ok(shellRpc.methods.includes("takeover.sync"));
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exec-client stale grant does not takeover.sync the shell", async () => {
     const browserRpc = new DispatchRpc(createState("browser"));
     const shellRpc = new DispatchRpc(createState("shell"));

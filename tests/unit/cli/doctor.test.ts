@@ -7,6 +7,7 @@ import { mock, test } from "node:test";
 import { AuditLog } from "../../../src/audit/log.ts";
 import { createVault, ensureAuditHmacKey, vaultAuditKeyProvider } from "../../../src/vault/index.ts";
 import {
+  dockerMemoryHeadroomWarning,
   formatDoctorReport,
   isPublicBind,
   isTagOnlyImage,
@@ -55,6 +56,7 @@ test("the security audit report is stable against fixed input", () => {
       "proxy_denylist: PASS active",
       "vault: PASS passphrase path=/tmp/vault.enc",
       "audit_chain: PASS OK 0 records",
+      "Ask before sensitive actions: off",
       "RESULT: FAIL (2)",
       "",
     ].join("\n"),
@@ -209,4 +211,126 @@ test("doctor and audit verify use the configured vault audit key, including remo
       } else assert.match(result.stdout, /OK 1 records/);
     }
   }
+});
+
+test("doctor reports armed policy.gates as on and an empty list as off, both PASS", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mb-doctor-gates-"));
+  const configFile = join(home, "modelbot.yaml");
+  writeFileSync(
+    join(home, "tokens.json"),
+    JSON.stringify({ mcp_token: "fixture", bootstrap_token_hash: "fixture" }),
+  );
+  const gates = ["external_send", "payment", "upload", "delete", "new_domain"];
+  const expectedOn =
+    `on (policy.gates in ${configFile}: ${gates.join(", ")}) — turn off in Settings → Sensitive actions`;
+  const base: SecurityAuditInput = {
+    bind: "127.0.0.1",
+    port: 7777,
+    mcpTokenPresent: true,
+    bootstrapTokenPresent: true,
+    vaultMode: "missing",
+    images: [],
+    containers: [],
+    proxyDenylistActive: true,
+    auditChain: { ok: true, detail: "n/a" },
+  };
+  assert.deepEqual(runSecurityAudit(base).find((c) => c.id === "ask_before_sensitive"), {
+    id: "ask_before_sensitive",
+    severity: "PASS",
+    detail: "off",
+  });
+  assert.deepEqual(
+    runSecurityAudit({ ...base, policyGates: gates, configPath: configFile })
+      .find((c) => c.id === "ask_before_sensitive"),
+    { id: "ask_before_sensitive", severity: "PASS", detail: expectedOn },
+  );
+  const report = formatDoctorReport(
+    runSecurityAudit({ ...base, policyGates: gates, configPath: configFile }),
+  );
+  assert.ok(report.split("\n").includes(`Ask before sensitive actions: ${expectedOn}`));
+  assert.ok(report.split("\n").includes("RESULT: PASS"));
+
+  writeFileSync(configFile, JSON.stringify({ version: 1, data_dir: home }));
+  const off = await doctorJson({ home, configFile, containers: [] });
+  assert.equal(off.code, 0);
+  assert.equal(off.result, "PASS");
+  assert.deepEqual(off.checks.find((c) => c.id === "ask_before_sensitive"), {
+    id: "ask_before_sensitive",
+    severity: "PASS",
+    detail: "off",
+  });
+
+  writeFileSync(configFile, JSON.stringify({ data_dir: home, policy: { gates } }));
+  const on = await doctorJson({ home, configFile, containers: [] });
+  assert.equal(on.code, 0);
+  assert.equal(on.result, "PASS");
+  assert.deepEqual(on.checks.find((c) => c.id === "ask_before_sensitive"), {
+    id: "ask_before_sensitive",
+    severity: "PASS",
+    detail: expectedOn,
+  });
+});
+
+test("doctor warns when Docker MemTotal is below browser+shell limits plus 1 GiB", async () => {
+  const gib = 1024 ** 3;
+  const warn = dockerMemoryHeadroomWarning(4 * gib, "4g", "512m");
+  assert.ok(warn);
+  assert.match(warn!, /Docker total memory is 4 GiB/);
+  assert.match(warn!, /browser 4g/);
+  assert.match(warn!, /shell 512m/);
+  assert.match(warn!, /1g headroom needs 5\.5 GiB/);
+  assert.match(warn!, /Raise Docker's memory/);
+  assert.equal(dockerMemoryHeadroomWarning(6 * gib, "4g", "512m"), null);
+
+  const base: SecurityAuditInput = {
+    bind: "127.0.0.1",
+    port: 7777,
+    mcpTokenPresent: true,
+    bootstrapTokenPresent: true,
+    vaultMode: "missing",
+    images: [],
+    containers: [],
+    proxyDenylistActive: true,
+    auditChain: { ok: true, detail: "n/a" },
+  };
+  const low = runSecurityAudit({ ...base, dockerMemTotalBytes: 4 * gib });
+  const lowRow = low.find((c) => c.id === "docker_memory");
+  assert.equal(lowRow?.severity, "WARN");
+  assert.equal(lowRow?.detail, warn);
+  const report = formatDoctorReport(low);
+  assert.ok(report.split("\n").includes(`docker_memory: WARN ${warn}`));
+  assert.ok(report.split("\n").includes("RESULT: PASS"));
+
+  const ok = runSecurityAudit({ ...base, dockerMemTotalBytes: 6 * gib });
+  assert.equal(ok.find((c) => c.id === "docker_memory")?.severity, "PASS");
+  assert.equal(runSecurityAudit(base).some((c) => c.id === "docker_memory"), false);
+
+  const home = mkdtempSync(join(tmpdir(), "mb-doctor-mem-"));
+  const configFile = join(home, "modelbot.yaml");
+  writeFileSync(join(home, "tokens.json"), JSON.stringify({ mcp_token: "fixture", bootstrap_token_hash: "fixture" }));
+  writeFileSync(configFile, JSON.stringify({ sandbox: { memory: "8g" } }));
+  const yaml = await doctorJson({
+    home,
+    configFile,
+    containers: [],
+    dockerMemTotalBytes: 6 * gib,
+    cli: { run: async () => "" },
+  });
+  const yamlRow = yaml.checks.find((c) => c.id === "docker_memory");
+  assert.equal(yamlRow?.severity, "WARN");
+  assert.match(yamlRow!.detail, /browser 8g/);
+  assert.doesNotMatch(yamlRow!.detail, /browser 4g/);
+  assert.equal(yaml.code, 0);
+
+  writeFileSync(configFile, JSON.stringify({ sandbox: { runtime: "auto" } }));
+  const def = await doctorJson({
+    home,
+    configFile,
+    containers: [],
+    dockerMemTotalBytes: 6 * gib,
+    cli: { run: async () => "" },
+  });
+  const defRow = def.checks.find((c) => c.id === "docker_memory");
+  assert.equal(defRow?.severity, "PASS");
+  assert.match(defRow!.detail, /browser 4g/);
 });

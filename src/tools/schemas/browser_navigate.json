@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "modelbot://tools/browser_navigate.json",
   "title": "browser_navigate",
-  "description": "Navigate the active tab to a URL.",
+  "description": "Navigate the active tab to a URL. Default wait_until is domcontentloaded with a 15s goto timeout. If that times out after the document has committed, the tool returns ok with timed_out true, url, title, and wait_until so the model can snapshot instead of retrying.",
   "type": "object",
   "properties": {
     "url": {
@@ -14,11 +14,12 @@
         "string",
         "null"
       ],
-      "description": "Playwright waitUntil; default load. Null = default.",
+      "description": "Playwright waitUntil; default domcontentloaded. Null = default. Explicit load, networkidle, or commit are honored. A 15s goto timeout that still committed returns ok with timed_out true rather than an error.",
       "enum": [
         "load",
         "domcontentloaded",
         "networkidle",
+        "commit",
         null
       ]
     }

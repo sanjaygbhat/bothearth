@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  MAX_TABS,
   chooseLivePage,
+  chooseTabCapClose,
+  MAX_TABS,
 } from "../../../computer-server/src/browser/live-page.ts";
 import {
   BrowserSession,
@@ -23,7 +24,55 @@ describe("chooseLivePage", () => {
     assert.equal(chooseLivePage([a, b]), a);
     assert.equal(chooseLivePage([b]), undefined);
     assert.equal(chooseLivePage([]), undefined);
-    assert.equal(MAX_TABS, 5);
+    assert.equal(MAX_TABS, 20);
+  });
+});
+
+function tab(url: string) {
+  let closed = false;
+  return {
+    url: () => url,
+    isClosed: () => closed,
+    close() {
+      closed = true;
+    },
+  };
+}
+
+describe("chooseTabCapClose", () => {
+  it("closes the incoming page in agent mode and never in human mode", () => {
+    const blanks = [tab("about:blank"), tab("about:blank"), tab("about:blank")];
+    const real = [tab("https://chatgpt.com/"), tab("https://example.com/")];
+    const oauth = tab("https://accounts.google.com/");
+    const pad = Array.from({ length: MAX_TABS - 5 }, (_, i) => tab(`https://pad${i}.example/`));
+    const opened = [...blanks, ...real, ...pad, oauth];
+    assert.equal(opened.length, MAX_TABS + 1);
+    assert.equal(chooseTabCapClose(opened, oauth, false), oauth);
+    assert.equal(chooseTabCapClose(opened, oauth, true), blanks[0]);
+    assert.equal(chooseTabCapClose(opened.slice(0, MAX_TABS), oauth, true), undefined);
+    const noBlank = [
+      ...Array.from({ length: MAX_TABS }, (_, i) => tab(`https://n${i}.example/`)),
+      oauth,
+    ];
+    assert.equal(chooseTabCapClose(noBlank, oauth, true), undefined);
+    assert.equal(chooseTabCapClose(noBlank, oauth, false), oauth);
+  });
+
+  it("skips protected about:blank pages and a page without url()", () => {
+    const action = tab("about:blank");
+    const live = action;
+    const stale = tab("about:blank");
+    const real = Array.from({ length: MAX_TABS - 2 }, (_, i) => tab(`https://a${i}.example/`));
+    const oauth = tab("https://accounts.google.com/");
+    const opened = [action, stale, ...real, oauth];
+    const held = [action, live, oauth];
+    assert.equal(opened.length, MAX_TABS + 1);
+    assert.equal(chooseTabCapClose(opened, oauth, true, held), stale);
+    assert.equal(chooseTabCapClose(opened, oauth, true, [action, live, stale, oauth]), undefined);
+    const noUrl = { isClosed: () => false };
+    const missingUrl = [action, noUrl, ...real, oauth];
+    assert.equal(chooseTabCapClose(missingUrl, oauth, true, held), undefined);
+    assert.equal(chooseTabCapClose(missingUrl, oauth, false, held), oauth);
   });
 });
 
@@ -281,6 +330,183 @@ describe("livePage vs action page", () => {
     });
     assert.equal(clicked.ok, true);
     assert.deepEqual(log, ["A:click"]);
+  });
+});
+
+function capPage(id: string, href: string) {
+  let closed = false;
+  const raised: string[] = [];
+  return {
+    id,
+    href,
+    raised,
+    isClosed: () => closed,
+    url: () => href,
+    on: () => {},
+    once: () => {},
+    close: async () => {
+      closed = true;
+    },
+    bringToFront: async () => {
+      raised.push(id);
+    },
+  };
+}
+
+describe("human tab cap", () => {
+  function sessionWithPages(
+    opened: ReturnType<typeof capPage>[],
+    action: ReturnType<typeof capPage> = opened[0]!,
+  ) {
+    const session = new BrowserSession();
+    session.page = action as never;
+    session.livePage = action as never;
+    session.context = {
+      pages: () => opened.filter((p) => !p.isClosed()),
+      newCDPSession: async () => fakeCdp(),
+    } as never;
+    return session;
+  }
+
+  async function fireContextPage(session: BrowserSession, page: unknown) {
+    await (session as unknown as { onContextPage(p: unknown): Promise<void> }).onContextPage(page);
+  }
+
+  async function fireContextPageEvent(session: BrowserSession, page: unknown) {
+    await (
+      session as unknown as { onContextPageEvent(p: unknown): Promise<void> }
+    ).onContextPageEvent(page);
+  }
+
+  function extraTabs(n: number, prefix: string) {
+    return Array.from({ length: n }, (_, i) =>
+      capPage(`${prefix}${i}`, `https://${prefix}${i}.example/`),
+    );
+  }
+
+  it("does not close a blankTab action/live page; closes a stale blank instead", async () => {
+    const action = capPage("blank-action", "about:blank");
+    const stale = capPage("stale-blank", "about:blank");
+    const opened = [
+      action,
+      stale,
+      capPage("chatgpt", "https://chatgpt.com/"),
+      capPage("other", "https://example.com/"),
+      capPage("docs", "https://docs.example/"),
+      ...extraTabs(MAX_TABS - 5, "pad"),
+    ];
+    const oauth = capPage("oauth", "https://accounts.google.com/");
+    const session = sessionWithPages(opened, action);
+    session.setLiveMode("human");
+    opened.push(oauth);
+    await fireContextPage(session, oauth);
+    assert.equal(oauth.isClosed(), false);
+    assert.equal(action.isClosed(), false, "blankTab target stays");
+    assert.equal(session.page, action as never);
+    assert.equal(session.livePage, action as never);
+    assert.equal(session.relayPage, action as never);
+    assert.equal(stale.isClosed(), true, "unprotected blank is the cap victim");
+    assert.deepEqual(oauth.raised, ["oauth"]);
+    assert.equal(opened.filter((p) => !p.isClosed()).length, MAX_TABS);
+  });
+
+  it("closes nothing when every about:blank is protected", async () => {
+    const action = capPage("blank-action", "about:blank");
+    const opened = [
+      action,
+      capPage("a", "https://a.example/"),
+      capPage("b", "https://b.example/"),
+      capPage("c", "https://c.example/"),
+      capPage("d", "https://d.example/"),
+      ...extraTabs(MAX_TABS - 5, "pad"),
+    ];
+    const oauth = capPage("oauth", "https://accounts.google.com/");
+    const session = sessionWithPages(opened, action);
+    session.setLiveMode("human");
+    opened.push(oauth);
+    await fireContextPage(session, oauth);
+    assert.equal(oauth.isClosed(), false);
+    assert.equal(action.isClosed(), false);
+    assert.equal(session.page, action as never);
+    assert.equal(opened.filter((p) => !p.isClosed()).length, MAX_TABS + 1);
+    assert.deepEqual(oauth.raised, ["oauth"]);
+  });
+
+  it("does not close a human-opened page when no blank tab can be sacrificed", async () => {
+    const opened = [
+      capPage("a", "https://a.example/"),
+      capPage("b", "https://b.example/"),
+      capPage("c", "https://c.example/"),
+      capPage("d", "https://d.example/"),
+      capPage("e", "https://e.example/"),
+      ...extraTabs(MAX_TABS - 5, "pad"),
+    ];
+    const oauth = capPage("oauth", "https://accounts.google.com/");
+    const session = sessionWithPages(opened);
+    session.setLiveMode("human");
+    opened.push(oauth);
+    await fireContextPage(session, oauth);
+    assert.equal(oauth.isClosed(), false);
+    assert.equal(opened[0]!.isClosed(), false, "action/relay page stays");
+    assert.equal(session.page, opened[0] as never);
+    assert.equal(opened.filter((p) => !p.isClosed()).length, MAX_TABS + 1);
+    assert.deepEqual(oauth.raised, ["oauth"]);
+  });
+
+  it("still closes the incoming page in agent mode when over the cap", async () => {
+    const opened = [
+      capPage("a", "https://a.example/"),
+      capPage("b", "https://b.example/"),
+      capPage("c", "https://c.example/"),
+      capPage("d", "https://d.example/"),
+      capPage("e", "https://e.example/"),
+      ...extraTabs(MAX_TABS - 5, "pad"),
+    ];
+    const oauth = capPage("oauth", "https://accounts.google.com/");
+    const session = sessionWithPages(opened);
+    opened.push(oauth);
+    await fireContextPage(session, oauth);
+    assert.equal(oauth.isClosed(), true);
+    assert.equal(opened[0]!.isClosed(), false);
+    assert.deepEqual(oauth.raised, []);
+    assert.equal(opened.filter((p) => !p.isClosed()).length, MAX_TABS);
+  });
+
+  it("refuses a new tab at MAX_TABS and tells the model to close one", async () => {
+    const pages = Array.from({ length: MAX_TABS }, () => ({ isClosed: () => false }));
+    const session = new BrowserSession();
+    session.context = {
+      pages: () => pages,
+      newPage: async () => {
+        throw new Error("should not open");
+      },
+    } as never;
+    const result = await session.tabs({ action: "new", tab_id: null, url: null });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.error.code, "E_POLICY");
+    assert.equal(
+      result.error.message,
+      `max_tabs ${MAX_TABS}; close a tab that is no longer needed`,
+    );
+    assert.doesNotMatch(result.error.message, /ask the person/i);
+  });
+
+  it("keeps a HUMAN-opened page when attach fails after liveMode leaves HUMAN", async () => {
+    const opened = [capPage("a", "https://a.example/"), capPage("b", "https://b.example/")];
+    const oauth = capPage("oauth", "https://accounts.google.com/");
+    const session = sessionWithPages(opened);
+    session.setLiveMode("human");
+    const nav = Reflect.get(session, "navigation") as { attach: () => Promise<unknown> };
+    nav.attach = async () => {
+      session.setLiveMode("agent");
+      throw new Error("attach failed");
+    };
+    opened.push(oauth);
+    await fireContextPageEvent(session, oauth);
+    assert.equal(oauth.isClosed(), false);
+    assert.equal(opened[0]!.isClosed(), false);
+    assert.equal(session.liveMode, "agent");
   });
 });
 

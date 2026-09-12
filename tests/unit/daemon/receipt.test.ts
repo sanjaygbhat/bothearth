@@ -155,6 +155,39 @@ test("existence is judged in every shape a receipt records a path", () => {
   }
 });
 
+test("a takeover request is an ask, and steps match the live tool-call count", () => {
+  const events = [
+    { type: "usage", body_json: JSON.stringify({ steps: 0, usd_est: 0 }) },
+    { type: "task.step", body_json: JSON.stringify({ status: "running" }) },
+    { type: "tool.call", body_json: JSON.stringify({ name: "browser_navigate" }) },
+    { type: "tool.result", body_json: JSON.stringify({
+      name: "browser_navigate", arguments: { url: "https://github.com/login" }, result: { ok: true },
+    }) },
+    { type: "usage", body_json: JSON.stringify({ steps: 1, usd_est: 0.01 }) },
+    { type: "tool.call", body_json: JSON.stringify({ name: "request_takeover" }) },
+    { type: "takeover.requested", body_json: JSON.stringify({
+      takeover_id: "tk_1",
+      reason: "GitHub’s sign-in page is open. Please sign in directly in the browser.",
+      field: { kind: "password", label: "password" },
+    }) },
+    { type: "usage", body_json: JSON.stringify({ steps: 2, usd_est: 0.02 }) },
+    { type: "task.step", body_json: JSON.stringify({ status: "running" }) },
+    { type: "task.cancelled", body_json: JSON.stringify({}) },
+  ];
+  const summary = taskSummaryFromEvents(events);
+  assert.equal(summary.asks, 1, "request_takeover is a thing it asked you");
+  assert.equal(summary.steps, 2, "two tool.call records, not three heartbeat rows");
+  assert.deepEqual(summary.sites, ["github.com"]);
+  assert.equal(
+    taskSummaryFromEvents([
+      ...events,
+      { type: "takeover.requested", body_json: JSON.stringify({ reason: "ui" }) },
+    ]).asks,
+    1,
+    "taking the keyboard yourself is not an ask",
+  );
+});
+
 test("the task API drops a file that has since been deleted and says it did", () => {
   const ws = workspaceWithFile();
   try {

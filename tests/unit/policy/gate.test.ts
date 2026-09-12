@@ -36,6 +36,7 @@ function ctx(
     typed_tos_override: partial.typed_tos_override,
     categories: partial.categories,
     tos: partial.tos,
+    enabled_gates: partial.enabled_gates,
   };
 }
 
@@ -73,11 +74,14 @@ const cases: Case[] = [
   { name: "request_takeover allow", input: { tool: "request_takeover" }, expect: "allow" },
 
   {
-    name: "payment_field → approval",
+    name: "payment_field → allow (no product hold)",
     input: { signals: { payment_field: true } },
-    expect: "require_approval",
-    gate: "payment",
-    reasonIncludes: "payment",
+    expect: "allow",
+  },
+  {
+    name: "payment_field empty gates still allow",
+    input: { signals: { payment_field: true }, enabled_gates: [] },
+    expect: "allow",
   },
   {
     name: "checkout_path → approval",
@@ -86,58 +90,51 @@ const cases: Case[] = [
     gate: "payment",
   },
   {
-    name: "password_field → force_human",
+    name: "password_field → allow (signal observed, no hold)",
     input: { signals: { password_field: true } },
-    expect: "force_human",
-    reasonIncludes: "password",
+    expect: "allow",
   },
   {
-    name: "otp_field → force_human",
+    name: "otp_field → allow (signal observed, no hold)",
     input: { signals: { otp_field: true } },
-    expect: "force_human",
-    reasonIncludes: "otp",
+    expect: "allow",
   },
   {
-    name: "webauthn → force_human",
+    name: "webauthn → allow (signal observed, no hold)",
     input: { signals: { webauthn_prompt: true } },
-    expect: "force_human",
-    reasonIncludes: "webauthn",
+    expect: "allow",
   },
   {
-    name: "recaptcha iframe → force_human",
+    name: "recaptcha iframe → allow (signal observed, no hold)",
     input: {
       signals: {
         captcha_iframes: ["https://www.google.com/recaptcha/api2/bframe"],
       },
     },
-    expect: "force_human",
-    reasonIncludes: "captcha",
+    expect: "allow",
   },
   {
-    name: "hcaptcha iframe → force_human",
+    name: "hcaptcha iframe → allow (signal observed, no hold)",
     input: {
       signals: { captcha_iframes: ["https://js.hcaptcha.com/1/api.js"] },
     },
-    expect: "force_human",
-    reasonIncludes: "captcha",
+    expect: "allow",
   },
   {
-    name: "turnstile iframe → force_human",
+    name: "turnstile iframe → allow (signal observed, no hold)",
     input: {
       signals: {
         captcha_iframes: ["https://challenges.cloudflare.com/turnstile"],
       },
     },
-    expect: "force_human",
-    reasonIncludes: "captcha",
+    expect: "allow",
   },
   {
-    name: "arkose iframe → force_human",
+    name: "arkose iframe → allow (signal observed, no hold)",
     input: {
       signals: { captcha_iframes: ["https://client-api.arkoselabs.com/v2"] },
     },
-    expect: "force_human",
-    reasonIncludes: "captcha",
+    expect: "allow",
   },
   {
     name: "browser_upload → approval",
@@ -245,21 +242,20 @@ const cases: Case[] = [
     reasonIncludes: "strict",
   },
   {
-    name: "chase.com → force_human banking",
+    name: "chase.com → tos deny (no force_human category hold)",
     input: { origin: "https://secure.chase.com/transfer" },
-    expect: "force_human",
-    reasonIncludes: "banking",
+    expect: "deny",
+    reasonIncludes: "tos_block",
   },
   {
-    name: "1password → force_human",
+    name: "1password → allow (category does not mint a hold)",
     input: { origin: "https://my.1password.com/vault" },
-    expect: "force_human",
-    reasonIncludes: "password",
+    expect: "allow",
   },
   {
-    name: "irs.gov → force_human",
+    name: "irs.gov → allow (category does not mint a hold)",
     input: { origin: "https://www.irs.gov/payments" },
-    expect: "force_human",
+    expect: "allow",
   },
   {
     name: "linkedin tos block",
@@ -278,7 +274,7 @@ const cases: Case[] = [
     input: {
       origin: "https://www.linkedin.com/feed",
       typed_tos_override: true,
-      // still force_human? linkedin not in force_human categories — allow after override
+      // linkedin is not a force-human category; typed ToS override allows the act
     },
     expect: "allow",
   },
@@ -317,14 +313,14 @@ const cases: Case[] = [
     expect: "allow",
   },
   {
-    name: "coinbase force_human",
+    name: "coinbase category does not mint a hold",
     input: { origin: "https://www.coinbase.com/trade" },
-    expect: "force_human",
+    expect: "allow",
   },
   {
-    name: "godaddy force_human",
+    name: "godaddy category does not mint a hold",
     input: { origin: "https://dcc.godaddy.com/domains" },
-    expect: "force_human",
+    expect: "allow",
   },
   {
     name: "connector delete → delete gate",
@@ -367,12 +363,11 @@ describe("equivalent primitives share gate", () => {
     });
     assert.equal(decisions.length, EQUIV.length);
     for (const d of decisions) {
-      assert.equal(d.decision, "require_approval");
-      if (d.decision === "require_approval") assert.equal(d.gate, "payment");
+      assert.equal(d.decision, "allow");
     }
   });
 
-  it("password signal force_human across equivalent tools", () => {
+  it("password signal does not force a hold across equivalent tools", () => {
     const decisions = evaluateEquivalent(EQUIV, {
       signals: { password_field: true },
       origin: ORIGIN,
@@ -380,11 +375,11 @@ describe("equivalent primitives share gate", () => {
       origin_sets: sets,
     });
     for (const d of decisions) {
-      assert.equal(d.decision, "force_human");
+      assert.equal(d.decision, "allow");
     }
   });
 
-  it("bypass attempt: computer_mouse on payment still gated", () => {
+  it("computer_mouse on payment does not mint a hold", () => {
     const d = evaluateGate(
       ctx({
         tool: "computer_mouse",
@@ -392,7 +387,7 @@ describe("equivalent primitives share gate", () => {
         signals: { payment_field: true },
       }),
     );
-    assert.equal(d.decision, "require_approval");
+    assert.equal(d.decision, "allow");
   });
 
   it("bypass attempt: computer_type newline submit new origin", () => {
@@ -407,7 +402,7 @@ describe("equivalent primitives share gate", () => {
     if (d.decision === "require_approval") assert.equal(d.gate, "new_domain");
   });
 
-  it("bypass attempt: browser_press Enter on captcha still force_human", () => {
+  it("browser_press Enter on captcha does not mint a hold", () => {
     const d = evaluateGate(
       ctx({
         tool: "browser_press",
@@ -417,11 +412,11 @@ describe("equivalent primitives share gate", () => {
         },
       }),
     );
-    assert.equal(d.decision, "force_human");
+    assert.equal(d.decision, "allow");
   });
 });
 
-describe("force-human categories and exact-host patterns", () => {
+describe("force-human categories do not mint a hold", () => {
   const categories: CategoriesFile = {
     version: 1,
     force_human: [{ id: "banking", label: "Banking", example_origins: ["bank.com/"] }],
@@ -446,7 +441,7 @@ describe("force-human categories and exact-host patterns", () => {
     assert.equal(originMatchesPattern("https://bank.com/log/a", "bank.com/log"), true);
   });
 
-  it("allows navigation away from a force-human origin while keeping acts gated", () => {
+  it("allows acts and navigation on a listed force-human origin", () => {
     const base = {
       signals: {},
       origin: "https://bank.com/account",
@@ -457,11 +452,11 @@ describe("force-human categories and exact-host patterns", () => {
 
     assert.equal(
       evaluateGate({ ...base, call: { tool: "browser_click", args: {} } }).decision,
-      "force_human",
+      "allow",
     );
     assert.equal(
       evaluateGate({ ...base, call: { tool: "browser_upload", args: { paths: ["x"] } } }).decision,
-      "force_human",
+      "require_approval",
     );
     assert.equal(
       evaluateGate({
@@ -470,5 +465,87 @@ describe("force-human categories and exact-host patterns", () => {
       }).decision,
       "allow",
     );
+  });
+});
+
+describe("optional approval gates", () => {
+  it("does not ask for a form submit when the optional list is empty", () => {
+    const d = evaluateGate(
+      ctx({
+        tool: "browser_type",
+        args: { text: "hi", submit: true },
+        signals: { form_submit_origin: "https://httpbin.org" },
+        enabled_gates: [],
+      }),
+    );
+    assert.equal(d.decision, "allow");
+  });
+
+  it("does not force a hold for a password field when the optional list is empty", () => {
+    const d = evaluateGate(
+      ctx({
+        signals: { password_field: true },
+        enabled_gates: [],
+      }),
+    );
+    assert.equal(d.decision, "allow");
+  });
+
+  it("does not take over for a card field when a new-origin submit is not armed", () => {
+    const d = evaluateGate(
+      ctx({
+        signals: { form_submit_origin: "https://pay.other.com", payment_field: true },
+        enabled_gates: [],
+      }),
+    );
+    assert.equal(d.decision, "allow");
+  });
+
+  it("still asks for checkout when a new-origin submit is not armed", () => {
+    const d = evaluateGate(
+      ctx({
+        signals: { form_submit_origin: "https://pay.other.com", checkout_path: true },
+        enabled_gates: ["payment"],
+      }),
+    );
+    assert.equal(d.decision, "require_approval");
+    if (d.decision === "require_approval") assert.equal(d.gate, "payment");
+  });
+
+  it("strict denies a foreign form action even when new_domain is unarmed", () => {
+    const d = evaluateGate(
+      ctx({
+        mode: "strict",
+        origin: ORIGIN,
+        origin_sets: sets,
+        signals: { form_submit_origin: "https://pay.other.com" },
+        enabled_gates: [],
+      }),
+    );
+    assert.equal(d.decision, "deny");
+    if (d.decision === "deny") assert.match(d.reason, /form_submit_new_origin:https:\/\/pay\.other\.com/);
+  });
+
+  it("does not treat a disabled delete as allow when upload is still armed", () => {
+    const d = evaluateGate(
+      ctx({
+        signals: { delete: true, file_upload: true },
+        enabled_gates: ["upload"],
+      }),
+    );
+    assert.equal(d.decision, "require_approval");
+    if (d.decision === "require_approval") assert.equal(d.gate, "upload");
+  });
+
+  it("falls through a disabled secret_entry shell pattern to an armed external_send check", () => {
+    const d = evaluateGate(
+      ctx({
+        tool: "shell_exec",
+        args: { command: "passwd alice" },
+        enabled_gates: ["external_send"],
+      }),
+    );
+    assert.equal(d.decision, "require_approval");
+    if (d.decision === "require_approval") assert.equal(d.gate, "external_send");
   });
 });

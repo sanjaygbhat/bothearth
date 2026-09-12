@@ -19,7 +19,7 @@ const TARGETS = [
     .map((page: { file: string }) => `website/${page.file}`),
 ];
 
-const PATTERNS: Array<{ name: string; re: RegExp }> = [
+const PATTERNS: Array<{ name: string; re: RegExp; allow?: RegExp[] }> = [
   { name: "unlimited", re: /\bunlimited\b/i },
   { name: "any subscription", re: /\bany subscription\b/i },
   { name: "already pay for", re: /\balready pay for\b/i },
@@ -27,11 +27,31 @@ const PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "obsolete budget input", re: /Budget for one task|ceiling[^.]*configurable under Settings/i },
   { name: "unqualified screenshot claim", re: /\bunretouched\b/i },
   { name: "retired featured screenshot", re: /screenshots\/reading-(?:completed|summary)/i },
+  {
+    name: "open source",
+    re: /\bopen source\b/i,
+    allow: [/\bnot (?:OSI )?open source\b/gi, /\bisn't open source\b/gi],
+  },
+  { name: "entirely local", re: /\bentirely local\b/i },
+  {
+    name: "guaranteed",
+    re: /\bguaranteed\b/i,
+    allow: [
+      /\bno guaranteed \S+/gi,
+      /\bnever guaranteed\b/gi,
+      /\bnot guaranteed\b/gi,
+      /\bwithout guaranteed\b/gi,
+      /\bno security certification or guaranteed \S+/gi,
+    ],
+  },
+  { name: "immune", re: /\bimmune\b/i },
 ];
 
 function main(): void {
+  const extra = process.argv.slice(2).filter((arg) => !arg.startsWith("-"));
+  const files = extra.length > 0 ? extra : TARGETS;
   const hits: string[] = [];
-  for (const rel of TARGETS) {
+  for (const rel of files) {
     const path = join(ROOT, rel);
     if (!existsSync(path)) {
       hits.push(`MISSING ${rel}`);
@@ -40,8 +60,17 @@ function main(): void {
     const lines = readFileSync(path, "utf8").split(/\r?\n/);
     lines.forEach((line, i) => {
       for (const p of PATTERNS) {
-        if (p.re.test(line)) {
+        let text = line.replaceAll(/\*{1,2}/g, "");
+        for (const allow of p.allow ?? []) {
+          text = text.replace(new RegExp(allow.source, `${allow.flags.replaceAll("g", "")}g`), "");
+        }
+        const global = new RegExp(p.re.source, `${p.re.flags.replaceAll("g", "")}g`);
+        for (const m of text.matchAll(global)) {
+          const at = m.index ?? 0;
+          const after = text.slice(at + m[0].length, at + m[0].length + 16);
+          if (/^(?:\s|<\/?[a-zA-Z][^>]*>)*\?/.test(after)) continue;
           hits.push(`${rel}:${i + 1}: ${p.name}: ${line.trim()}`);
+          break;
         }
       }
     });
@@ -52,7 +81,7 @@ function main(): void {
     for (const h of hits) console.error(`  ${h}`);
     process.exit(1);
   }
-  console.log(`claim-scan OK (${TARGETS.length} files)`);
+  console.log(`claim-scan OK (${files.length} files)`);
 }
 
 main();

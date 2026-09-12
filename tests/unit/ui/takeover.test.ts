@@ -14,13 +14,25 @@ import {
   renderDriving,
   renderNeedsYou,
   renderObserving,
+  renderPausedHold,
   requestControl,
+  blockedHoldCopy,
+  CLEAR_AND_RETURN,
+  PASSWORD_STILL_ON_SCREEN,
   STILL_SENSITIVE,
   takeoverReason,
   type TakeoverRow,
 } from "../../../src/ui/takeover.ts";
 import { getCsrfToken, setCsrfToken } from "../../../src/ui/api.ts";
-import { actionable, installDom } from "./fake-dom.ts";
+import { actionable, installDom, settle } from "./fake-dom.ts";
+
+function setPlatform(platform: string): void {
+  Object.defineProperty(globalThis.navigator, "platform", {
+    configurable: true,
+    writable: true,
+    value: platform,
+  });
+}
 
 async function withFetch<T>(
   handler: (path: string, init: RequestInit) => unknown,
@@ -34,7 +46,8 @@ async function withFetch<T>(
     calls.push(String(path));
     assert.equal(init.credentials, "same-origin");
     assert.equal(new Headers(init.headers).get("X-CSRF-Token"), "task-csrf");
-    return Response.json(handler(String(path), init));
+    const payload = handler(String(path), init);
+    return payload instanceof Response ? payload : Response.json(payload);
   }) as typeof fetch;
   try {
     return await run(calls);
@@ -42,6 +55,19 @@ async function withFetch<T>(
     globalThis.fetch = original;
     setCsrfToken(csrf);
   }
+}
+
+function toastSpy(): { texts: () => string[]; restore: () => void } {
+  const doc = globalThis.document as unknown as { getElementById(id: string): unknown };
+  const original = doc.getElementById.bind(doc);
+  const region = document.createElement("div");
+  doc.getElementById = (id: string) => (id.startsWith("toast-") ? region : original(id));
+  return {
+    texts: () => [...region.children].map((node) => String(node.textContent)),
+    restore: () => {
+      doc.getElementById = original;
+    },
+  };
 }
 
 describe("takeover wire (contracts unchanged)", () => {
@@ -78,18 +104,22 @@ describe("takeover wire (contracts unchanged)", () => {
   });
 
   it("reports a still-sensitive page as control NOT returned", async () => {
-    const outcome: boolean[] = [];
+    const outcome: Array<{ ok: boolean; kind?: string }> = [];
     await withFetch(
       (path) =>
         path.endsWith("/release")
-          ? { takeover: { state: outcome.length === 0 ? "human" : "agent" } }
+          ? outcome.length === 0
+            ? { takeover: { state: "human" }, blocked_by: { kind: "password" } }
+            : { takeover: { state: "agent" } }
           : {},
       async () => {
-        outcome.push(await releaseControl("tk_1"));
-        outcome.push(await releaseControl("tk_1"));
+        const first = await releaseControl("tk_1");
+        outcome.push(first.ok ? { ok: true } : { ok: false, kind: first.blocked_by?.kind });
+        const second = await releaseControl("tk_1");
+        outcome.push(second.ok ? { ok: true } : { ok: false, kind: second.blocked_by?.kind });
       },
     );
-    assert.deepEqual(outcome, [false, true]);
+    assert.deepEqual(outcome, [{ ok: false, kind: "password" }, { ok: true }]);
   });
 
   it("declines through the daemon’s own endpoint", async () => {
@@ -113,6 +143,22 @@ describe("takeover wire (contracts unchanged)", () => {
 });
 
 describe("takeover copy", () => {
+  it("offers Give control back on a paused hold, not an unvalidated decline", () => {
+    const dom = installDom();
+    try {
+      const clicks: string[] = [];
+      const surface = renderPausedHold({ onReturn: () => clicks.push("return"), onTake: () => clicks.push("take") });
+      assert.match(surface.root.textContent!, /Control has paused/);
+      assert.match(surface.root.textContent!, /no private input/);
+      const labels = surface.root.querySelectorAll("button").map((node) => node.textContent);
+      assert.ok(labels.includes("Give control back"));
+      assert.ok(labels.some((text) => text.startsWith("Take control")));
+      assert.ok(!labels.some((text) => /Not needed|continue/i.test(text ?? "")));
+      surface.root.querySelectorAll("button").find((node) => node.textContent === "Give control back")!.click();
+      assert.deepEqual(clicks, ["return"]);
+    } finally { dom.restore(); }
+  });
+
   it("shows a bounded review instruction as plain text", () => {
     const dom = installDom();
     try {
@@ -150,6 +196,11 @@ describe("takeover copy", () => {
   it("states the STILL-sensitive hold without blaming the person", () => {
     assert.match(STILL_SENSITIVE, /Finish that step or move off it/);
     assert.doesNotMatch(STILL_SENSITIVE, /you (failed|must|cannot)/i);
+    assert.equal(
+      blockedHoldCopy("password"),
+      "The page still shows a password field. Navigate the bot's browser away from it (for example to about:blank), then give control back.",
+    );
+    assert.equal(blockedHoldCopy("password"), PASSWORD_STILL_ON_SCREEN);
   });
 });
 
@@ -246,12 +297,32 @@ describe("takeover cards", () => {
       assert.match(card.root.textContent, /Your bot needs you/);
       assert.match(card.root.textContent, /one-time-code field/);
       const buttons = actionable(card.root);
-      assert.equal(buttons.length, 1);
+      assert.equal(
+        buttons.filter((button) => /\bprimary\b/.test(button.className)).length,
+        1,
+      );
       assert.match(buttons[0]!.className, /primary/);
+      assert.ok(
+        buttons.some((button) => button.textContent === "Use a different Google account"),
+      );
       buttons[0]!.click();
       assert.equal(taken, 1);
       card.focus();
       assert.equal(dom.document.activeElement, buttons[0]);
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("says the sign-in is in the bot’s own browser, not Arc or Chrome", () => {
+    const dom = installDom();
+    try {
+      const card = renderNeedsYou({ reason: "sign_in", onTake() {} });
+      assert.match(
+        card.root.textContent!,
+        /Sign in in the picture on the right — that is your bot's own browser, not Arc or Chrome/,
+      );
+      assert.match(card.root.textContent!, /The bot does not use your everyday cookies/);
     } finally {
       dom.restore();
     }
@@ -274,10 +345,16 @@ describe("takeover cards", () => {
       const buttons = actionable(card.root);
       assert.deepEqual(
         buttons.map((b) => b.textContent.replace(/\s+/g, " ").trim()),
-        ["Give control back ⌘↩", "Stop the task instead"],
+        [
+          "Give control back ⌘↩",
+          CLEAR_AND_RETURN,
+          "Stop the task instead",
+          "Use a different Google account",
+        ],
       );
+      assert.equal(buttons[1]!.hidden, true);
       buttons[0]!.click();
-      buttons[1]!.click();
+      buttons[2]!.click();
       assert.deepEqual(events, ["return", "stop"]);
 
       const lease = card.root.querySelectorAll("p.q")[1]!;
@@ -295,9 +372,187 @@ describe("takeover cards", () => {
       card.setHold(STILL_SENSITIVE);
       assert.equal(hold.hidden, false);
       assert.equal(hold.textContent, STILL_SENSITIVE);
+      assert.equal(buttons[1]!.hidden, true, "no onClear: the secondary clear stays hidden");
+      assert.match(buttons[0]!.className, /primary/);
       card.setHold(null);
       assert.equal(hold.hidden, true);
     } finally {
+      dom.restore();
+    }
+  });
+
+  it("makes clear-and-return the primary action while a password or code is still on screen", () => {
+    const dom = installDom();
+    try {
+      const events: string[] = [];
+      const card = renderDriving({
+        onReturn: () => events.push("return"),
+        onClear: () => events.push("clear"),
+        onStop: () => events.push("stop"),
+      });
+      const primary = () =>
+        actionable(card.root).find((button) => /\bprimary\b/.test(button.className));
+
+      assert.match(primary()!.textContent.replace(/\s+/g, " ").trim(), /^Give control back /);
+      primary()!.click();
+      assert.deepEqual(events, ["return"]);
+      events.length = 0;
+
+      card.setHold(PASSWORD_STILL_ON_SCREEN);
+      const held = primary()!;
+      assert.equal(held.hidden, false);
+      assert.equal(held.textContent, CLEAR_AND_RETURN);
+      assert.match(held.className, /primary/);
+      const give = actionable(card.root).find((button) =>
+        button.textContent.replace(/\s+/g, " ").trim().startsWith("Give control back"),
+      )!;
+      assert.equal(/\bprimary\b/.test(give.className), false);
+      held.click();
+      assert.deepEqual(events, ["clear"], "primary click blanks and returns, not a plain release");
+      events.length = 0;
+
+      card.setHold(null);
+      assert.equal(
+        primary()!.textContent.replace(/\s+/g, " ").trim().startsWith("Give control back"),
+        true,
+      );
+      primary()!.click();
+      assert.deepEqual(events, ["return"]);
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("keeps Give control back as the paused-hold primary, not clear-and-return", () => {
+    const dom = installDom();
+    try {
+      const surface = renderPausedHold({ onReturn() {}, onTake() {} });
+      const primary = actionable(surface.root).find((button) =>
+        /\bprimary\b/.test(button.className),
+      );
+      assert.equal(primary?.textContent, "Give control back");
+      assert.ok(
+        !actionable(surface.root).some((button) => button.textContent === CLEAR_AND_RETURN),
+      );
+    } finally {
+      dom.restore();
+    }
+  });
+});
+
+describe("takeover keycaps follow the platform", () => {
+  it("uses Ctrl on Linux, and leaves Not needed, continue without its own kbd", () => {
+    const dom = installDom();
+    try {
+      setPlatform("Linux x86_64");
+      const card = renderNeedsYou({
+        reason: "password_field",
+        onTake() {},
+        onDecline() {},
+      });
+      const kbds = card.root.querySelectorAll("kbd").map((node) => node.textContent);
+      assert.deepEqual(kbds, ["Ctrl", "⇧T"]);
+      const decline = actionable(card.root).find((button) =>
+        /Not needed, continue/.test(button.textContent ?? ""),
+      );
+      assert.ok(decline, "Not needed, continue stays on the ask card");
+      assert.equal(decline!.querySelector("kbd"), null);
+      assert.match(card.root.textContent!, /bot's own browser, not Arc or Chrome/);
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("uses ⌘ on Apple hardware", () => {
+    const dom = installDom();
+    try {
+      setPlatform("MacIntel");
+      const card = renderDriving({ onReturn() {} });
+      const kbds = card.root.querySelectorAll("kbd").map((node) => node.textContent);
+      assert.deepEqual(kbds, ["⌘", "↩"]);
+    } finally {
+      dom.restore();
+    }
+  });
+});
+
+describe("Use a different Google account", () => {
+  it("renders on both hold cards and is absent when this window is not driving", () => {
+    const dom = installDom();
+    try {
+      const asking = renderNeedsYou({ onTake() {} });
+      const driving = renderDriving({ onReturn() {} });
+      const label = "Use a different Google account";
+      assert.ok(actionable(asking.root).some((button) => button.textContent === label));
+      assert.ok(actionable(driving.root).some((button) => button.textContent === label));
+      assert.ok(
+        !actionable(renderPausedHold({ onReturn() {}, onTake() {} }).root).some(
+          (button) => button.textContent === label,
+        ),
+      );
+      assert.ok(
+        !actionable(renderObserving().root).some((button) => button.textContent === label),
+      );
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("keeps the needs-you chooser visible but does not post until driving", async () => {
+    const dom = installDom();
+    try {
+      await withFetch(
+        () => ({}),
+        async (calls) => {
+          const asking = renderNeedsYou({ onTake() {} });
+          asking.root.dataset.takeoverId = "tk_ask";
+          const askBtn = actionable(asking.root).find(
+            (button) => button.textContent === "Use a different Google account",
+          )!;
+          assert.equal(askBtn.disabled, true);
+          assert.equal(
+            askBtn.getAttribute("title"),
+            "Take control first, then choose a different Google account.",
+          );
+          askBtn.click();
+          await settle();
+          assert.deepEqual(calls, []);
+
+          const driving = renderDriving({ onReturn() {} });
+          driving.root.dataset.takeoverId = "tk_drive";
+          const driveBtn = actionable(driving.root).find(
+            (button) => button.textContent === "Use a different Google account",
+          )!;
+          assert.equal(driveBtn.disabled, false);
+          driveBtn.click();
+          await settle();
+          assert.deepEqual(calls, ["/api/v1/takeover/tk_drive/google-account"]);
+        },
+      );
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("toasts when the driving chooser post fails", async () => {
+    const dom = installDom();
+    const toasts = toastSpy();
+    try {
+      await withFetch(
+        () => Response.json({ error: "E_IO", message: "E_IO" }, { status: 500 }),
+        async (calls) => {
+          const driving = renderDriving({ onReturn() {} });
+          driving.root.dataset.takeoverId = "tk_drive";
+          actionable(driving.root)
+            .find((button) => button.textContent === "Use a different Google account")!
+            .click();
+          await settle();
+          assert.deepEqual(calls, ["/api/v1/takeover/tk_drive/google-account"]);
+          assert.deepEqual(toasts.texts(), ["Couldn’t open Google’s account chooser."]);
+        },
+      );
+    } finally {
+      toasts.restore();
       dom.restore();
     }
   });

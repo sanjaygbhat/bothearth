@@ -178,6 +178,14 @@
       "load_state": null
     }
   },
+  "browser_restart": {
+    "sideEffect": "act",
+    "driver": "a11y",
+    "example": {},
+    "bad": {
+      "extra": true
+    }
+  },
   "computer_mouse": {
     "sideEffect": "act",
     "driver": "vision",
@@ -308,12 +316,10 @@
     "sideEffect": "gated",
     "driver": "system",
     "example": {
-      "reason": "login form",
-      "category": "password"
+      "reason": "login form"
     },
     "bad": {
-      "reason": 1,
-      "category": null
+      "reason": 1
     }
   },
   "takeover_status": {

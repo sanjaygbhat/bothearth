@@ -4,9 +4,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { Store } from "../../../src/daemon/store.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
 import { until } from "../../helpers/until.ts";
+
+isolateModelbotHome();
 
 test("native task choices reach the selected CLI and survive changed defaults and reopening", async () => {
   const cli = fakeCli("native-task-settings", root => `

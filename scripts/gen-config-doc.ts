@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCHEMA = join(ROOT, "modelbot.schema.json");
-const OUT = join(ROOT, "docs", "CONFIG.md");
+const OUT = process.argv[2] ?? join(ROOT, "docs", "CONFIG.md");
 
 type JsonSchema = {
   title?: string;
@@ -137,7 +137,7 @@ ${schema.description ? `\n${schema.description}\n` : ""}
 
 Every section is optional. \`src/config/load.ts\` fills unset keys from its defaults
 (\`withDefaults()\`) and the schema validates the result, so an empty \`modelbot.yaml\` is valid and
-\`modelbot init\` writes only what the install decided:
+\`bothearth init\` writes only what the install decided:
 
 \`\`\`yaml
 version: 1
@@ -148,20 +148,71 @@ adapters:
     base_url: https://api.openai.com/v1
     model: gpt-5.5
     api_key_vault: providers/openai
-agent:
-  spend_cap_usd: 20
 \`\`\`
 
 Set only what you want to change; a section merges key by key, so
 \`agent: { spend_cap_usd: 5 }\` keeps every other \`agent\` default. Arrays replace wholesale —
-a shorter \`policy.gates\` list is a weaker policy and has to be written out in full.
+an explicit \`policy.gates\` list is a deliberate choice and has to be written out in full.
 \`sandbox.workspace_root\`, \`audit.path\` and \`vault.path\` derive from \`data_dir\` unless set.
-Security defaults (\`bind: 127.0.0.1\`, \`mode: supervised\`, all six \`policy.gates\`,
-\`policy.kill_switch: true\`) apply when the config is silent; weakening one is an explicit edit.
+Security defaults (\`bind: 127.0.0.1\`, \`mode: supervised\`, \`policy.gates: []\`,
+\`policy.kill_switch: false\`) apply when the config is silent. Absent \`policy.kill_switch\`
+is off; \`true\` denies every tool call through \`evaluateGate\`, including
+\`browser_snapshot\`, \`done\`, and \`request_takeover\`. \`bothearth doctor\` and
+\`bothearth start\` warn when an existing yaml still has \`true\`. Yaml from an older
+template that still pins \`policy.kill_switch: true\`, \`sandbox.memory: 2g\`,
+\`sandbox.shm_size: 1g\`, or \`sandbox.image_browser: modelbot/browser:dev\` and has
+no \`config_version\` is treated as unset: those keys take the current defaults and
+doctor prints one line per ignored key. \`bothearth init\` writes \`config_version\`
+so a value you set later is kept. Native Codex and Claude Code
+tasks have no BotHearth spend cap or call cap: a task runs until done, until you stop it,
+or until the model provider’s usage limit pauses it. API-adapter
+\`agent.max_steps\`, \`agent.spend_cap_usd\` and \`agent.spend_cap_max_usd\` default to \`0\`
+(no cap); Settings → Sensitive actions can fine-tune the gate subset and those limits.
+An explicit \`policy.gates\` list or a positive cap in yaml still applies exactly as written.
+Optional review prompts are off by default.
+Settings → Sensitive actions → **Ask before sensitive actions** writes \`policy.gates\` in
+\`modelbot.yaml\` (the six optional classes, or empty). A yaml that still lists
+\`policy.gates\` from an earlier install keeps asking until you turn the checkbox off or
+empty the list. Password, OTP, passkey, CAPTCHA, payment-card entry and force-human
+categories always pause for Take control; they are not gates. Checkout without a card
+field is the optional \`payment\` class.
 The annotated full reference is \`src/config/example.yaml\`, copied into \`$MODELBOT_HOME\` by init.
 
-Standalone adapter settings are separate from the native Codex and Claude Code choices
-in the task interface. Check [provider requirements](PROVIDERS.md) for model compatibility.
+## Enterprise pilot flavour
+
+\`src/config/enterprise.yaml\` is an opt-in pilot flavour, not default.
+\`bothearth init\` omits \`policy.gates\` and spend-cap keys.
+There is no \`init --flavour\`. After init, paste \`mode\`, \`policy.gates\`, and
+\`sandbox.max_computers\` into \`$MODELBOT_HOME/modelbot.yaml\` so the \`data_dir\`
+and \`adapters\` init wrote stay. Do not \`cp\` over the active file.
+A copy at \`$MODELBOT_HOME/enterprise.yaml\` is a non-loaded reference; the
+daemon reads \`$MODELBOT_HOME/modelbot.yaml\` only.
+
+\`\`\`yaml
+mode: strict
+policy:
+  gates:
+    - external_send
+    - payment
+    - upload
+    - delete
+    - secret_entry
+    - new_domain
+sandbox:
+  max_computers: 5
+\`\`\`
+
+\`mode: strict\` needs a non-empty \`policy.strict_allowlist\` of origins you
+choose; this flavour does not invent hostnames. An empty list denies every
+non-blank \`browser_navigate\`. The pilot sets \`mode: strict\`,
+\`sandbox.max_computers: 5\`, and the six optional gates (\`external_send\`,
+\`payment\`, \`upload\`, \`delete\`, \`secret_entry\`, \`new_domain\`). It omits
+\`agent.spend_cap_usd\` and \`agent.max_steps\`, so the daemon defaults of 0
+remain. Native CLI shell and network tools bypass those MCP checks.
+
+Standalone adapter settings are a separate YAML path from the native Codex (verified live)
+and Claude Code (listed; not yet verified live) choices in the task interface.
+Check [provider requirements](PROVIDERS.md) for model compatibility.
 
 ## Fields
 

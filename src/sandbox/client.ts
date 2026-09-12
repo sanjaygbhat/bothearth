@@ -12,7 +12,6 @@ import {
 } from "../protocol/stdio.ts";
 import type {
   ComputerJsonRpcRequest,
-  ComputerJsonRpcResponse,
   ScreencastFrameHeader,
 } from "../types/contracts.ts";
 
@@ -95,6 +94,7 @@ export function createJsonRpcClient(
   stdout: Readable,
   child: ChildProcess | null = null,
   onLiveFrame?: (header: ScreencastFrameHeader, payload: Uint8Array) => void,
+  onNotification?: (method: string, params: unknown) => void,
 ): JsonRpcClient {
   const reader = new FrameReader(stdout);
   let nextId = 1;
@@ -164,8 +164,18 @@ export function createJsonRpcClient(
           onLiveFrame?.(decoded.header, decoded.payload);
           continue;
         }
-        const msg = decoded.message as ComputerJsonRpcResponse;
-        if (msg && typeof msg === "object" && "id" in msg) {
+        const msg = decoded.message as {
+          id?: string | number;
+          method?: string;
+          params?: unknown;
+          result?: unknown;
+          error?: { code: number; message: string };
+        };
+        if (msg && typeof msg === "object" && typeof msg.method === "string" && !("id" in msg)) {
+          onNotification?.(msg.method, msg.params);
+          continue;
+        }
+        if (msg && typeof msg === "object" && (typeof msg.id === "string" || typeof msg.id === "number")) {
           const p = pending.get(msg.id);
           if (!p) continue;
           pending.delete(msg.id);

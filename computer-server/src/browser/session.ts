@@ -18,8 +18,9 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, BrowserContext, CDPSession, LaunchOptions, Page } from "playwright";
+import type { Browser, BrowserContext, CDPSession, Frame, LaunchOptions, Page } from "playwright";
 import { chromium } from "playwright";
+import type { LiveProducer } from "../../../src/protocol/live.ts";
 import type {
   BrowserScreenshotOutput,
   BrowserSnapshotOutput,
@@ -45,9 +46,9 @@ import {
 import { KeyboardRelay, keyChord, type RelayKey } from "./live-key.ts";
 import { Desktop, DESKTOP } from "./desktop.ts";
 import { NavigationGuard } from "./navigation-guard.ts";
-import { MAX_TABS, chooseLivePage } from "./live-page.ts";
+import { chooseLivePage, chooseTabCapClose, MAX_TABS } from "./live-page.ts";
 
-export { MAX_TABS, chooseLivePage } from "./live-page.ts";
+export { chooseLivePage, chooseTabCapClose, MAX_TABS } from "./live-page.ts";
 
 const VIEWPORT = { width: 1280, height: 720 };
 /** Normal Chromium, with only container privacy and transport settings. */
@@ -59,6 +60,9 @@ export const LAUNCH_ARGS = [
   "--no-default-browser-check",
   // No OS keyring in the container, and nothing may be written to one anyway.
   "--password-store=basic",
+  // A human at the keyboard must be able to sign in to Google. Playwright's
+  // automation override otherwise reports navigator.webdriver true; not a user-agent spoof.
+  "--disable-blink-features=AutomationControlled",
 ];
 
 /**
@@ -225,6 +229,82 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const TARGET_CRASHED = /Target crashed/i;
+const TARGET_CLOSED = /Target closed/i;
+
+export const BROWSER_RESTARTED_MESSAGE = "The browser was restarted; take a new snapshot.";
+
+function restartedError(): Error {
+  return Object.assign(new Error(BROWSER_RESTARTED_MESSAGE), { code: "E_IO" as const });
+}
+
+/** Live action page closed/dead, or Playwright `Target crashed`. Snapshot-handle `Target closed` is not a crash. */
+export function isCrashedTarget(err: unknown, livePage?: { isClosed(): boolean } | null): boolean {
+  try {
+    if (livePage?.isClosed()) return true;
+  } catch {
+    return true;
+  }
+  return TARGET_CRASHED.test(errorText(err));
+}
+
+function contextAlive(ctx: BrowserContext | null): boolean {
+  if (!ctx) return false;
+  try {
+    ctx.pages();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function withCrashedTargetRetry<T>(
+  session: BrowserSession,
+  act: () => Promise<T>,
+  retry = true,
+): Promise<T> {
+  try {
+    return await act();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    if (!isCrashedTarget(err, session.page)) throw err;
+    const kind = await session.recoverCrashedPage();
+    if (kind === "browser" || !retry) throw restartedError();
+    try {
+      return await act();
+    } catch (retryErr) {
+      if (retryErr instanceof Error && retryErr.name === "AbortError") throw retryErr;
+      if (isCrashedTarget(retryErr, session.page)) throw restartedError();
+      throw retryErr;
+    }
+  }
+}
+
+async function recoverActResult(
+  session: BrowserSession,
+  act: () => Promise<ToolResult>,
+): Promise<ToolResult> {
+  try {
+    return await withCrashedTargetRetry(session, act, false);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    if (err instanceof Error && err.message === BROWSER_RESTARTED_MESSAGE) {
+      return toolError("E_IO", BROWSER_RESTARTED_MESSAGE);
+    }
+    throw err;
+  }
+}
+
+/** Resolve-time aria-ref miss only. Act-path Playwright teardown stays E_IO. */
+const STALE_LOCATOR = /no longer matched|not found in the current page snapshot/i;
+/** count() while click's noWaitAfter navigation is still tearing down. Resolve-only. */
+const RESOLVE_TEARDOWN = /execution context was destroyed|not attached/i;
+
+function isStaleLocatorError(err: unknown): boolean {
+  if (err instanceof Error && err.name === "AbortError") return false;
+  return STALE_LOCATOR.test(errorText(err));
+}
+
 function removeSingletons(dir: string): void {
   for (const name of SINGLETON_FILES) {
     try {
@@ -297,6 +377,18 @@ export async function launchWithLockRecovery<T>(
   }
 }
 
+/** Playwright 1.59 screenshot options have no `fonts: "hide"`; retry the one flake. */
+const FONT_LOAD_WAIT = /waiting for fonts to load/i;
+
+export async function withFontLoadRetry<T>(take: () => Promise<T>): Promise<T> {
+  try {
+    return await take();
+  } catch (error) {
+    if (!FONT_LOAD_WAIT.test(errorText(error))) throw error;
+    return await take();
+  }
+}
+
 export class BrowserSession {
   private readonly navigation = new NavigationGuard(() => this.liveMode === "human");
   setNavigationPolicy(origins: string[], allowPublicNavigation = false): void { this.navigation.setPolicy(origins, allowPublicNavigation); }
@@ -323,6 +415,7 @@ export class BrowserSession {
   epoch = 1;
   snaps = new Map<string, Snap>();
   onLiveFrame: ((h: ScreencastFrameHeader, jpeg: Uint8Array) => void) | null = null;
+  onLiveControl: ((msg: LiveProducer) => void) | null = null;
   actAbort = new AbortController();
   private inFlightActs = new Set<Promise<unknown>>();
   private wiredPages = new WeakSet<Page>();
@@ -370,6 +463,8 @@ export class BrowserSession {
       // Chrome for Testing writes Crashpad settings outside user-data-dir.
       // Keep those files private and ephemeral under the writable container tmpfs.
       env: { ...process.env, ...this.desktop?.env, XDG_CONFIG_HOME: this.configHome },
+      // true drops Playwright's --enable-automation and the rest of its
+      // test-browser defaults. Do not spoof the user agent.
       ignoreDefaultArgs: true,
       // Playwright's own signal handlers kill Chromium and exit the process
       // before it can unlink its profile lock. The rpc loop closes the context
@@ -400,7 +495,7 @@ export class BrowserSession {
     ).catch(launchFailed);
     await this.navigation.install(this.context);
     this.context.on("page", (p) => {
-      void this.onContextPage(p).catch(() => p.close().catch(() => undefined));
+      void this.onContextPageEvent(p);
     });
     for (const p of this.context.pages()) this.wirePage(p);
     this.page =
@@ -431,6 +526,15 @@ export class BrowserSession {
     return tracked;
   }
 
+  /** HUMAN at open: a later agent/validating switch must not close this page. */
+  private onContextPageEvent(page: Page): Promise<void> {
+    const human = this.liveMode === "human";
+    return this.onContextPage(page).catch(() => {
+      if (human) return;
+      void page.close().catch(() => undefined);
+    });
+  }
+
   private async onContextPage(page: Page): Promise<void> {
     if (this.navigation.blocksInitialPopups() && await page.opener()) {
       this.navigation.denyInitialPopup(page.url());
@@ -440,10 +544,15 @@ export class BrowserSession {
     this.wirePage(page);
     await this.navigation.attach(this.context!, page);
     const open = (this.context?.pages() ?? []).filter((p) => !p.isClosed());
-    if (open.length > MAX_TABS) {
-      await page.close().catch(() => undefined);
-      return;
-    }
+    const excess = chooseTabCapClose(open, page, this.liveMode === "human", [
+      this.page,
+      this.relayPage,
+      this.livePage,
+      page,
+    ]);
+    if (excess) await excess.close().catch(() => undefined);
+    if (page.isClosed()) return;
+    if (this.liveMode === "human") await page.bringToFront().catch(() => undefined);
     await this.followLivePage();
   }
 
@@ -720,6 +829,9 @@ export class BrowserSession {
         if (!this.casting || this.liveMode !== "human" || epoch !== this.epoch) return;
         this.onLiveFrame?.({ v: 1, seq: ++this.seq, ts: Date.now(), mime: "image/jpeg", mode: "human", epoch, target: "desktop",
           viewport: { w: DESKTOP.width, h: DESKTOP.height, dpr: 1 }, meta: { offsetTop: 0, pageScaleFactor: 1, deviceWidth: DESKTOP.width, deviceHeight: DESKTOP.height, scrollOffsetX: 0, scrollOffsetY: 0 } }, jpeg);
+      }, (status, reason) => {
+        if (!this.casting || this.liveMode !== "human" || epoch !== this.epoch) return;
+        this.onLiveControl?.({ v: 1, t: "producer", status, reason });
       });
       return;
     }
@@ -753,11 +865,71 @@ export class BrowserSession {
     return this.page;
   }
 
+  async recoverCrashedPage(): Promise<"page" | "browser"> {
+    const crashed = this.page;
+    let url = "";
+    try {
+      if (crashed) url = crashed.url();
+    } catch {
+      /* Target closed — URL may still have been read, or not. */
+    }
+    if (!contextAlive(this.context)) {
+      await this.close().catch(() => undefined);
+      await this.start();
+      return "browser";
+    }
+    const ctx = this.context!;
+    try {
+      if (crashed && !crashed.isClosed()) await crashed.close().catch(() => undefined);
+    } catch {
+      /* already gone */
+    }
+    let next: Page;
+    try {
+      next = await ctx.newPage();
+    } catch {
+      await this.close().catch(() => undefined);
+      await this.start();
+      return "browser";
+    }
+    this.page = next;
+    this.livePage = next;
+    this.wirePage(next);
+    if (url) {
+      try {
+        await next.goto(url, { waitUntil: "domcontentloaded" });
+      } catch {
+        await this.close().catch(() => undefined);
+        await this.start();
+        return "browser";
+      }
+    }
+    await this.navigation.attach(ctx, next).catch(() => undefined);
+    await this.attachCdp(next).catch(() => undefined);
+    return "page";
+  }
+
   /** HUMAN relay target is request-bound; a closed target never falls back. */
   liveTarget(): Page | null {
     const relay = this.relayPage;
     if (relay && !relay.isClosed()) return relay;
     return null;
+  }
+
+  /** Operator-only: leave a credential page without exposing it to the model. */
+  async blankTab(): Promise<ToolResult> {
+    let page = this.livePage ?? this.page;
+    if (!page || page.isClosed()) {
+      page = null;
+      for (const tab of this.context?.pages() ?? []) {
+        if (!tab.isClosed()) { page = tab; break; }
+      }
+    }
+    if (!page) return toolError("E_IO", "no tab to clear");
+    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    this.livePage = page;
+    this.page = page;
+    return { ok: true, data: { url: "about:blank" } };
   }
 
   async navigate(url: string, waitUntil: string | null): Promise<ToolResult> {
@@ -772,17 +944,72 @@ export class BrowserSession {
       return toolError("E_POLICY", `navigation scheme not allowed: ${parsed.protocol}`);
     }
     const wu =
-      waitUntil === "domcontentloaded" || waitUntil === "networkidle"
+      waitUntil === "load" ||
+      waitUntil === "domcontentloaded" ||
+      waitUntil === "networkidle" ||
+      waitUntil === "commit"
         ? waitUntil
-        : "load";
-    await page.goto(url, { waitUntil: wu });
+        : "domcontentloaded";
+    let timedOut = false;
+    // Host match is not a commit: a same-host goto that never commits leaves
+    // page.url() at the previous document. Count only main-frame commits that
+    // start after this goto.
+    let committed = false;
+    const onFrameNavigated = (frame: Frame) => {
+      if (frame === page.mainFrame()) committed = true;
+    };
+    page.on("framenavigated", onFrameNavigated);
+    try {
+      await page.goto(url, { waitUntil: wu, timeout: 15_000 });
+    } catch (err) {
+      if (!(err instanceof Error) || err.name !== "TimeoutError") throw err;
+      // Abort leftover subresource waits so a later snapshot is not stuck on
+      // Playwright's in-flight navigation from the timed-out goto.
+      await Promise.race([
+        (async () => {
+          let cdp = this.cdp;
+          let created = false;
+          if (!cdp) {
+            try {
+              cdp = await this.context!.newCDPSession(page);
+              created = true;
+            } catch {
+              cdp = null;
+            }
+          }
+          if (cdp) {
+            await cdp.send("Page.stopLoading");
+            if (created) await cdp.detach().catch(() => undefined);
+            return;
+          }
+          await page.evaluate(() => window.stop());
+        })().catch(() => undefined),
+        sleep(1_500),
+      ]);
+      if (!committed) return toolError("E_IO", err.message);
+      timedOut = true;
+    } finally {
+      page.off("framenavigated", onFrameNavigated);
+    }
+    if (!timedOut) {
+      await page.waitForLoadState("load", { timeout: 5_000 }).catch(() => undefined);
+    }
     if (this.livePage === page || this.livePage == null) {
       this.livePage = page;
       await this.attachCdp(page);
     }
     return {
       ok: true,
-      data: { url: redactUrl(page.url()), title: await page.title() },
+      data: {
+        url: redactUrl(page.url()),
+        title: timedOut
+          ? await Promise.race([
+              page.title().catch(() => ""),
+              sleep(1_500).then(() => ""),
+            ])
+          : await page.title(),
+        ...(timedOut ? { timed_out: true, wait_until: wu } : {}),
+      },
     };
   }
 
@@ -792,6 +1019,7 @@ export class BrowserSession {
     depth: number | null;
     max_chars: number | null;
   }): Promise<ToolResult<BrowserSnapshotOutput>> {
+    return withCrashedTargetRetry(this, async () => {
     const page = this.requirePage();
     const interactive = params.interactive_only !== false;
     const maxChars = params.max_chars ?? SNAP_MAX;
@@ -844,7 +1072,12 @@ export class BrowserSession {
     // 2-step verification screen.
     if (secrets.length > 0) {
       const kinds = [...new Set(secrets.map((field) => field.kind))].join(",");
-      yaml = `modelbot_sensitive_fields: ${secrets.length} ${kinds}\n${yaml}`;
+      let prefix = `modelbot_sensitive_fields: ${secrets.length} ${kinds}\n`;
+      const detail = await page.evaluate(() =>
+        document.getElementById("modelbot-secret-mask")?.getAttribute("data-modelbot-detail") ?? "",
+      ).catch(() => "");
+      if (detail) prefix += `modelbot_sensitive_detail: ${detail}\n`;
+      yaml = `${prefix}${yaml}`;
     }
     let omittedChars = 0;
     if (yaml.length > maxChars) {
@@ -882,6 +1115,44 @@ export class BrowserSession {
         ...(truncated ? { omitted: { nodes: omittedNodes, chars: omittedChars } } : {}),
       },
     };
+    });
+  }
+
+  private async staleRefError(): Promise<ToolResult> {
+    const details: Record<string, unknown> = { retry: "browser_snapshot", url: "", title: "" };
+    const page = this.page;
+    if (page && !page.isClosed()) {
+      try {
+        const snap = await this.snapshot({
+          scope: null,
+          interactive_only: true,
+          depth: null,
+          max_chars: null,
+        });
+        if (snap.ok) Object.assign(details, snap.data);
+      } catch {
+        /* url/title fallback below */
+      }
+      if (typeof details.url !== "string" || details.url === "") {
+        try {
+          details.url = redactUrl(page.url());
+        } catch {
+          details.url = "";
+        }
+      }
+      if (typeof details.title !== "string" || details.title === "") {
+        try {
+          details.title = redactUrl(await page.title());
+        } catch {
+          details.title = "";
+        }
+      }
+    }
+    return toolError(
+      "E_STALE_REF",
+      "The page changed — take a new snapshot and continue.",
+      details,
+    );
   }
 
   private async resolveRef(
@@ -890,7 +1161,22 @@ export class BrowserSession {
   ): Promise<{ ok: true; locator: ReturnType<Page["locator"]> } | ToolResult> {
     const snap = this.snaps.get(snapshotId);
     const target = snap?.page ?? this.requirePage();
-    return resolveSnapRef(this.snaps, target, snapshotId, ref);
+    const r = await resolveSnapRef(this.snaps, target, snapshotId, ref);
+    if (!("locator" in r)) return this.staleRefError();
+    try {
+      if ((await r.locator.count()) === 0) return this.staleRefError();
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      if (
+        isStaleLocatorError(err) ||
+        RESOLVE_TEARDOWN.test(errorText(err)) ||
+        TARGET_CLOSED.test(errorText(err))
+      ) {
+        return this.staleRefError();
+      }
+      throw err;
+    }
+    return r;
   }
 
   async click(p: {
@@ -899,6 +1185,7 @@ export class BrowserSession {
     button: string | null;
     double_click: boolean | null;
   }): Promise<ToolResult> {
+    return recoverActResult(this, async () => {
     const r = await this.resolveRef(p.snapshot_id, p.ref);
     if (!("locator" in r)) return r;
     const button = (p.button as "left") ?? "left";
@@ -907,26 +1194,35 @@ export class BrowserSession {
     // Race a short download window so ordinary clicks stay fast.
     // Waiter must be armed before click. Short race keeps ordinary clicks fast;
     // page.on("download") still quarantines if the attachment is slow.
-    const dlWait = page
-      .waitForEvent("download", { timeout: 8_000 })
-      .then((dl) => this.quarantineDownloadOnce(dl))
-      .catch(() => null);
-    const act = { button, noWaitAfter: true };
-    if (p.double_click) {
-      await this.runAct(() => r.locator.dblclick(act));
-    } else {
-      await this.runAct(() => r.locator.click(act));
+    // Resolve already decided stale. Act-path throws stay E_IO (action may have run).
+    try {
+      const dlWait = page
+        .waitForEvent("download", { timeout: 8_000 })
+        .then((dl) => this.quarantineDownloadOnce(dl))
+        .catch(() => null);
+      const act = { button, noWaitAfter: true };
+      if (p.double_click) {
+        await this.runAct(() => r.locator.dblclick(act));
+      } else {
+        await this.runAct(() => r.locator.click(act));
+      }
+      const downloaded = await Promise.race([
+        dlWait,
+        sleep(2_500).then(() => null),
+      ]);
+      return {
+        ok: true,
+        data: downloaded
+          ? { clicked: p.ref, download: downloaded }
+          : { clicked: p.ref },
+      };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      if (isCrashedTarget(err, this.page)) throw err;
+      if (TARGET_CLOSED.test(errorText(err))) return this.staleRefError();
+      return toolError("E_IO", err instanceof Error ? err.message : String(err));
     }
-    const downloaded = await Promise.race([
-      dlWait,
-      sleep(2_500).then(() => null),
-    ]);
-    return {
-      ok: true,
-      data: downloaded
-        ? { clicked: p.ref, download: downloaded }
-        : { clicked: p.ref },
-    };
+    });
   }
 
   async type(p: {
@@ -936,17 +1232,26 @@ export class BrowserSession {
     submit: boolean | null;
     slowly: boolean | null;
   }): Promise<ToolResult> {
+    return recoverActResult(this, async () => {
     const r = await this.resolveRef(p.snapshot_id, p.ref);
     if (!("locator" in r)) return r;
-    if (p.slowly) {
-      await this.runAct(() => r.locator.pressSequentially(p.text, { delay: 20 }));
-    } else {
-      await this.runAct(() => r.locator.fill(p.text));
+    try {
+      if (p.slowly) {
+        await this.runAct(() => r.locator.pressSequentially(p.text, { delay: 20 }));
+      } else {
+        await this.runAct(() => r.locator.fill(p.text));
+      }
+      if (p.submit) {
+        await this.runAct(() => r.locator.press("Enter"));
+      }
+      return { ok: true, data: { typed: p.text.length, ref: p.ref } };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      if (isCrashedTarget(err, this.page)) throw err;
+      if (TARGET_CLOSED.test(errorText(err))) return this.staleRefError();
+      return toolError("E_IO", err instanceof Error ? err.message : String(err));
     }
-    if (p.submit) {
-      await this.runAct(() => r.locator.press("Enter"));
-    }
-    return { ok: true, data: { typed: p.text.length, ref: p.ref } };
+    });
   }
 
   async press(p: {
@@ -1037,7 +1342,10 @@ export class BrowserSession {
     if (p.action === "new") {
       const open = ctx.pages().filter((pg) => !pg.isClosed()).length;
       if (open >= MAX_TABS) {
-        return toolError("E_POLICY", `max_tabs ${MAX_TABS}`);
+        return toolError(
+          "E_POLICY",
+          `max_tabs ${MAX_TABS}; close a tab that is no longer needed`,
+        );
       }
       if (p.url) {
         let parsed: URL;
@@ -1101,22 +1409,22 @@ export class BrowserSession {
       const r = await this.resolveRef(p.snapshot_id, p.ref);
       if (!("locator" in r)) return r as ToolResult<BrowserScreenshotOutput>;
       const maskCount = await masks.count();
-      buf = await r.locator.screenshot({
+      buf = await withFontLoadRetry(() => r.locator.screenshot({
         type: "jpeg",
         quality: JPEG_Q,
         style,
         mask: maskCount > 0 ? [masks] : undefined,
-      });
+      }));
     } else {
       const maskCount = await masks.count();
-      buf = await page.screenshot({
+      buf = await withFontLoadRetry(() => page.screenshot({
         type: "jpeg",
         quality: JPEG_Q,
         fullPage: !!p.full_page,
         scale: "css",
         style,
         mask: maskCount > 0 ? [masks] : undefined,
-      });
+      }));
     }
     const vp = page.viewportSize() ?? VIEWPORT;
     const scroll = await page.evaluate(() => ({

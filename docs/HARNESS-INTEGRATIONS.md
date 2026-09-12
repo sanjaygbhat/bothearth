@@ -43,7 +43,7 @@ export MODELBOT_TOKEN="$(node -e 'process.stdout.write(JSON.parse(require("node:
 
 Adjust the path if you initialized with `--home`. Never put a bootstrap URL or UI cookie in harness configuration.
 
-Create a browser under **Advanced → Computers**. The manual `/mcp` connection requires exactly one running computer. Before using its tools, create a task through the authenticated operator API: POST `/api/v1/harness-bindings` with `task_id`, `computer_id`, `execution: "harness"`, non-negative `spend_cap_usd`, and positive `max_steps`. Operator requests require the UI session cookie and CSRF token; the MCP token cannot create this binding. The task-workspace composer runs its configured agent and is not a manual harness selector.
+Create a browser under **Advanced → Computers**. The manual `/mcp` connection requires exactly one running computer. Before using its tools, create a task through the authenticated operator API: POST `/api/v1/harness-bindings` with `task_id`, `computer_id`, `execution: "harness"`, non-negative `spend_cap_usd`, and non-negative `max_steps` (0 = no cap). Operator requests require the UI session cookie and CSRF token; the MCP token cannot create this binding. The task-workspace composer runs its configured agent and is not a manual harness selector.
 
 ## Stdio bridge
 

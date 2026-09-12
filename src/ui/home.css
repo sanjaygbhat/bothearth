@@ -163,7 +163,8 @@
 
 .home-model-custom,
 .home-model-hint,
-.home-executor-options { grid-column: 1 / -1; }
+.home-executor-options,
+.home-computer-picker { grid-column: 1 / -1; }
 
 .home-orchestrator {
   display: inline-flex;
@@ -176,6 +177,7 @@
 
 .home-orchestrator input { accent-color: var(--color-accent); }
 .home-model-hint { margin: 0; font-size: var(--text-caption); color: var(--color-muted); }
+.home-computer-note a { color: inherit; }
 .home-model-retry { grid-column: 1 / -1; justify-self: start; }
 .home-executor-options summary { min-height: var(--tap-target); padding-top: 10px; cursor: pointer; font-size: var(--text-caption); overflow-wrap: anywhere; }
 
@@ -195,6 +197,47 @@
   line-height: var(--leading-caption);
   color: var(--color-text);
   max-width: 56ch;
+}
+
+.taskbox-message-link {
+  color: inherit;
+}
+
+.taskbox-message-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  vertical-align: baseline;
+}
+
+.taskbox-message-actions .btn {
+  min-height: var(--tap-target);
+}
+
+/* The live or last task, under the box so Home always has a one-click route. */
+.home-now-slot:empty {
+  display: none;
+}
+
+.home-now {
+  display: block;
+  margin-top: var(--space-md);
+  padding: var(--space-sm);
+  border: var(--hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.home-now > .caps {
+  display: block;
+  margin-bottom: var(--space-2xs);
+}
+
+.home-now:hover .recent-title,
+.home-now:focus-visible .recent-title {
+  color: var(--color-accent);
 }
 
 /* ---------------------------------------------------------------------------

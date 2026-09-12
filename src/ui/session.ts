@@ -13,6 +13,12 @@ export type SessionInfo = {
   ok: boolean;
   csrf: string;
   mode?: "supervised" | "strict";
+  /** Optional MCP-tool approval gates are armed. Off by default. */
+  ask_before_sensitive?: boolean;
+  /** The optional gates currently armed. Empty when the master toggle is off. */
+  policy_gates?: string[];
+  /** API-adapter defaults for new tasks. 0 = no cap. Native tasks ignore these. */
+  limits?: { max_steps?: number; spend_cap_usd?: number } | null;
   spend_cap_usd?: number | null;
   standalone_available?: boolean;
   task_start_available?: boolean;
@@ -115,7 +121,7 @@ async function readDeviceId(): Promise<string | null> {
  * reopen — the daemon mints a fresh link from the command line.
  */
 export const PAIR_AGAIN =
-  "Your sign-in link expired. Run `modelbot pair` in Terminal for a fresh one.";
+  "Your sign-in link expired. Run `bothearth pair` in Terminal for a fresh one.";
 
 /** A new startup link replaces the session; the next caller starts a new one. */
 export function resetSession(): void {

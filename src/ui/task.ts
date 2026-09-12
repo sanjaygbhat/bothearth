@@ -31,19 +31,25 @@ import {
 } from "./approval.ts";
 import {
   acquiredControl,
+  blockedHoldCopy,
+  clearAndReleaseControl,
   CONTROL_TAKEN,
   declineControl,
   isActiveTakeover,
   isDriver,
   releaseControl,
+  releaseReasonFrom,
+  releaseReturnedCopy,
   rememberAcquired,
   renderDriving,
   renderNeedsYou,
   renderObserving,
+  renderPausedHold,
   requestControl,
-  STILL_SENSITIVE,
+  switchGoogleAccount,
   TAKE_FAILED,
   takeoverReason,
+  type ReleaseResult,
   type TakeoverRow,
 } from "./takeover.ts";
 import { LivePanel, shortUrl } from "./live/panel.ts";
@@ -94,6 +100,11 @@ export type TaskRecord = {
    * — either way the app is never navigated to the file.
    */
   results_dir?: string | null;
+  /**
+   * Host directory of this task's computer workspace. Omitted when the daemon
+   * is reached through a non-loopback public_origin — that path is not on this PC.
+   */
+  workspace_dir?: string | null;
 };
 
 /**
@@ -324,7 +335,7 @@ const STOP_REASON: Record<string, string> = {
     "It used every step this task was given and stopped rather than keep going on its own.",
   loop_detected:
     "It kept arriving back at the same step, so it stopped rather than go round again.",
-  stall: "The page it was working on stopped responding, so it stopped rather than guess.",
+  stall: "It made no progress for a while, so it paused rather than keep guessing. Resume to continue.",
   model_response:
     "The AI answered in a way it could not act on, so it stopped rather than guess.",
   runner_error: "Something on this Mac got in its way, so it stopped rather than guess.",
@@ -389,7 +400,7 @@ function limitReached(
  */
 const FAILURE_KIND_WHY: Partial<Record<FailureKind, string>> = {
   machine: "Something on this machine got in its way, so it stopped rather than guess.",
-  stalled: "The page it was working on stopped responding, so it stopped rather than guess.",
+  stalled: "It made no progress for a while, so it paused rather than keep guessing. Resume to continue.",
   loop: "It kept arriving back at the same step, so it stopped rather than go round again.",
   max_steps: "It reached its step limit.",
   // A clock the owner set is not this machine getting in the way: nothing here
@@ -423,7 +434,7 @@ export function raisedCap(
   const from = cap !== null && Number.isFinite(cap) && cap > 0 ? cap : null;
   const want = Math.max(preferred ?? 0, from === null ? 0 : from * 2);
   if (want <= 0) return null;
-  const limited = max !== null && Number.isFinite(max) ? Math.min(want, max) : want;
+  const limited = max !== null && Number.isFinite(max) && max > 0 ? Math.min(want, max) : want;
   const rounded = Math.round(limited * 100) / 100;
   return from !== null && rounded <= from ? null : rounded;
 }
@@ -463,12 +474,68 @@ export function planLimit(
   return null;
 }
 
-function limitLede(limit: PlanLimit): string {
+function limitLede(limit: PlanLimit, paused = false): string {
   const plan = `Your ${limit.provider ?? "AI"} plan`;
+  if (paused) {
+    const reset = limit.resetAt ? `; resets at ${limit.resetAt}` : "";
+    return limit.reason === "quota_exhausted"
+      ? `${plan}’s usage limit is reached${reset}.`
+      : `${plan} is rate-limited${reset}.`;
+  }
   const back = limit.resetAt ? ` It comes back at ${limit.resetAt}.` : "";
   return limit.reason === "quota_exhausted"
     ? `${plan} hit its limit, so it stopped.${back} Switch model connections, or wait for the limit to reset.`
     : `${plan} turned this task down for too many requests, so it stopped.${back} Switch model connections, or try again later.`;
+}
+
+function isNativeAdapter(adapter: string | null | undefined): boolean {
+  return adapter === "codex" || adapter === "claude";
+}
+
+function costTerm(adapter: string | null | undefined): string {
+  return isNativeAdapter(adapter) ? "Estimated tool use" : "Total cost";
+}
+
+function siteAskLabel(host: string): string {
+  const name = host.replace(/^www\./i, "").split(".")[0] ?? host;
+  if (!name) return host;
+  if (name.toLowerCase() === "github") return "GitHub";
+  return `${name.charAt(0)!.toUpperCase()}${name.slice(1)}`;
+}
+
+function fieldKindOf(body: Record<string, unknown>): string | null {
+  const direct = readString(body, "field_kind");
+  if (direct) return direct;
+  const field = body.field;
+  if (field && typeof field === "object") {
+    const kind = (field as { kind?: unknown }).kind;
+    if (typeof kind === "string") return kind;
+  }
+  return null;
+}
+
+/** Compact receipt line for one takeover ask. */
+export function receiptAskLine(
+  reason: string | null | undefined,
+  fieldKind: string | null | undefined,
+  site: string | null | undefined,
+): string | null {
+  const why = reason?.trim() ?? "";
+  if (why === "ui") return null;
+  const kind = fieldKind?.trim() ?? "";
+  const signIn = kind === "password" || why === "password_field" || why === "sign_in"
+    || /sign[- ]?in/i.test(why);
+  const code = kind === "otp" || why === "otp_field"
+    || /\b(otp|one-time|verification code)\b/i.test(why);
+  const captcha = why === "captcha_iframe" || /captcha|prove you/i.test(why);
+  const passkey = why === "webauthn_prompt" || /passkey|security[ -]?key/i.test(why);
+  const what = signIn ? "Asked you to sign in"
+    : code ? "Asked you to enter a code"
+    : captcha ? "Asked you to prove you’re human"
+    : passkey ? "Asked you to use a passkey"
+    : "Asked for your help";
+  const host = site?.trim();
+  return host ? `${what} (${siteAskLabel(host)})` : what;
 }
 
 export interface TerminalCopy {
@@ -496,6 +563,10 @@ export function terminalCopy(input: {
   adapter?: string | null;
   /** Tool calls the run made, so a budget stop can say what it bought. */
   calls?: number | null;
+  /** Cancelled while a takeover hold was still human or paused. */
+  held?: boolean;
+  /** Who asked the daemon to stop: UI session, API, or an internal stop. */
+  cancelledBy?: "ui" | "api" | "system" | null;
 }): TerminalCopy {
   const kind = terminalKind(input.status);
   const fk = failureKind(input.terminal);
@@ -529,26 +600,40 @@ export function terminalCopy(input: {
       kind,
       heading: "It’s waiting for you",
       lede:
+        limit ? limitLede(limit, true) :
         waited ??
         why ??
         "It stopped part-way and is waiting for you before it goes on. Nothing it had already done is lost.",
       barVerb: "Paused",
       againLabel: "Run again",
       diagnostics: true,
-      planLimit: null,
+      // Pause keeps Resume as the offer (including a provider-limit pause).
+      // planLimit still names the lede; the actions treat paused + planLimit
+      // as Resume, not "Switch model connection".
+      planLimit: limit,
       // A budget or step cap now stops a run `paused`, not `failed`. Offering a
       // plain Resume there asks the daemon for something it refuses (409
-      // E_SPEND_CAP / E_LIMIT); the offer has to carry the raise.
-      limitReached: limitReached(fk, input.reason),
+      // E_SPEND_CAP / E_LIMIT); the offer has to carry the raise. Native tasks
+      // have no BotHearth cap, so this stays null for a provider-limit pause.
+      limitReached: isNativeAdapter(input.adapter) ? null : limitReached(fk, input.reason),
     };
   }
   if (kind === "stopped") {
+    const viaUi = input.cancelledBy == null || input.cancelledBy === "ui";
+    const heading =
+      input.cancelledBy === "api"
+        ? "Stopped through the API"
+        : input.cancelledBy === "system"
+          ? "BotHearth stopped it"
+          : "You stopped it";
     return {
       kind,
-      heading: "You stopped it",
+      heading,
       lede:
-        why ??
-        "It stopped where it was. Anything it had already done stays done.",
+        input.held
+          ? "Stopped while you had control"
+          : (viaUi ? why : null) ??
+            "It stopped where it was. Anything it had already done stays done.",
       // It did not finish, so it may not say it finished.
       barVerb: "Stopped",
       againLabel: "Run again",
@@ -597,6 +682,28 @@ function readString(body: Record<string, unknown>, ...names: string[]): string |
   return null;
 }
 
+/** Strip `mcp__modelbot__browser_type` down to the catalog name. */
+function callToolName(body: Record<string, unknown>): string | null {
+  const raw = readString(body, "name", "tool") ?? "";
+  const tool = raw.split("__").pop() || raw;
+  return tool || null;
+}
+
+/** Live socket and durable replay share this; timestamps are not identities. */
+function feedItemKey(kind: string, body: Record<string, unknown>, at: string): string {
+  const id = readString(body, "id");
+  if (id && (kind === "native_tool" || kind === "tool.call")) return `tool|${id}`;
+  if (kind === "native_tool") {
+    const name = readString(body, "name") ?? "";
+    const status = typeof body.status === "string" ? body.status : "";
+    return `${kind}|${name}|${status}|${at}`;
+  }
+  const takeoverId = readString(body, "takeover_id");
+  if (kind.startsWith("takeover.") && takeoverId) return `${kind}|${takeoverId}`;
+  if (kind === "task.cancelled" || kind === "task.completed" || kind === "task.failed") return kind;
+  return `${kind}|${at}`;
+}
+
 function args(body: Record<string, unknown>): Record<string, unknown> {
   const value = body.arguments;
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -632,6 +739,14 @@ export interface FeedLine {
    * `collapseFeed` folds them together on this key.
    */
   artifact?: string;
+  /** Native started, not yet finished — the working marker in the feed. */
+  pending?: boolean;
+  /**
+   * Identity of one tool invocation. Distinct calls with the same generic
+   * verb stay on their own rows; only leftovers that share this id, or
+   * standalone repeats with no id, collapse to ×n.
+   */
+  callId?: string;
 }
 
 /**
@@ -786,22 +901,50 @@ export function feedLine(
       const name = readString(body, "name");
       const type = readString(body, "type") ?? name;
       const finished = body.status === "completed";
-      let text: string;
-      if (type === "command_execution" || name === "Bash") text = finished ? "Command finished" : "Running a command";
-      else if (type === "file_change" || ["Edit", "Write", "MultiEdit"].includes(name ?? "")) text = finished ? "File edit finished" : "Editing files";
-      else if (type === "web_search" || name === "WebSearch") text = finished ? "Web search finished" : "Searching the web";
-      else if (name && /^[a-zA-Z0-9_.:-]{1,120}$/.test(name)) {
-        const label = name.replaceAll("_", " ");
-        text = finished ? `${label} finished` : `Using ${label}`;
-      } else text = finished ? "Tool step finished" : "Using a tool";
-      return { text, voice: "do" };
+      if (type === "command_execution" || name === "Bash") {
+        return { text: finished ? "Command finished" : "Running a command", voice: "do" };
+      }
+      if (type === "file_change" || ["Edit", "Write", "MultiEdit"].includes(name ?? "")) {
+        return { text: finished ? "File edit finished" : "Editing files", voice: "do" };
+      }
+      if (type === "web_search" || name === "WebSearch") {
+        return { text: finished ? "Web search finished" : "Searching the web", voice: "do" };
+      }
+      const raw = name ?? type ?? "";
+      const tool = raw.split("__").pop() || raw;
+      if (
+        /^(browser|computer|files|shell)_/.test(tool) ||
+        tool === "write_file" ||
+        tool === "request_takeover" ||
+        tool === "done" ||
+        tool === "connector_call" ||
+        tool === "takeover_status"
+      ) {
+        const mapped = toolLine(tool, args(body), ctx);
+        if (!mapped) return null;
+        if (isSaveTool(tool)) {
+          const path = typeof args(body).path === "string" ? baseName(args(body).path as string) : "";
+          return { text: mapped, voice: "do", artifact: path };
+        }
+        return { text: mapped, voice: "do" };
+      }
+      if (tool && /^[a-zA-Z0-9_.:-]{1,120}$/.test(tool)) {
+        const label = tool.replaceAll(/[_.]/g, " ").replace(/\s+/g, " ").trim();
+        return { text: `${label} · ${finished ? "finished" : "started"}`, voice: "do" };
+      }
+      return { text: finished ? "Tool step finished" : "Using a tool", voice: "do" };
     }
     case "task.completed":
     case "task.failed":
     case "task.cancelled": {
       const summary = readString(body, "summary");
       if (summary) return { text: summary, voice: "say", rich: true };
-      if (kind === "task.cancelled") return { text: "You stopped the task", voice: "do" };
+      if (kind === "task.cancelled") {
+        const by = readString(body, "cancelled_by");
+        if (by === "api") return { text: "Stopped through the API", voice: "do" };
+        if (by === "system") return { text: "BotHearth stopped it", voice: "do" };
+        return { text: "You stopped the task", voice: "do" };
+      }
       if (kind === "task.failed") return { text: "It couldn’t finish", voice: "stumble" };
       return { text: "Finished", voice: "do" };
     }
@@ -825,9 +968,22 @@ export function feedLine(
         artifact: path ? baseName(path) : "",
       };
     }
-    case "tool.error":
+    case "tool.error": {
+      const result = body.result;
+      const message =
+        result && typeof result === "object"
+          ? ((result as { error?: { message?: unknown } }).error?.message)
+          : undefined;
+      if (message === "kill_switch") return null;
       return { text: "That step didn’t work, so it tried another way", voice: "stumble" };
+    }
     case "policy.denied": {
+      if (readString(body, "reason") === "kill_switch") {
+        return {
+          text: "The kill switch is on, so the bot will refuse every action. Turn it off in Settings → Sensitive actions.",
+          voice: "stumble",
+        };
+      }
       const url = readString(body, "url");
       const host = url ? shortUrl(url) : null;
       return {
@@ -838,7 +994,12 @@ export function feedLine(
     case "approval.requested": {
       const name = readString(body, "tool", "name");
       const gate = readString(body, "gate");
-      if (gate === "new_domain") return { text: "Asked you about opening a new site", voice: "do" };
+      if (gate === "new_domain") {
+        if (name === "browser_navigate" || name === "browser_tabs") {
+          return { text: "Asked you about opening a new site", voice: "do" };
+        }
+        return { text: "Asked you about submitting a form", voice: "do" };
+      }
       if (name === "files_write") return { text: "Asked you about saving a file", voice: "do" };
       return { text: "Asked you a question", voice: "do" };
     }
@@ -874,8 +1035,27 @@ export function feedLine(
     case "sandbox.oom":
     case "sandbox.error":
       return { text: "Its computer ran into trouble", voice: "stumble" };
-    default:
+    case "task.resumed":
+      return { text: "Picked up where it left off", voice: "do" };
+    case "error":
+      return { text: "Something went wrong, so it tried another way", voice: "stumble" };
+    case "takeover.gap":
+    case "sandbox.started":
+    case "sandbox.stopped":
+    case "notify.sent":
       return null;
+    default: {
+      if (!kind || kind.length > 120) return null;
+      const dot = kind.lastIndexOf(".");
+      if (dot > 0 && dot < kind.length - 1) {
+        return { text: `${kind.slice(0, dot)} · ${kind.slice(dot + 1)}`, voice: "do" };
+      }
+      const under = kind.indexOf("_");
+      if (under > 0 && under < kind.length - 1) {
+        return { text: `${kind.slice(0, under)} · ${kind.slice(under + 1).replaceAll("_", " ")}`, voice: "do" };
+      }
+      return null;
+    }
   }
 }
 
@@ -926,9 +1106,13 @@ export function collapseFeed(items: Array<FeedLine & { at: string }>): FeedRow[]
     }
     const last = rows[rows.length - 1];
     if (last && last.text === item.text && last.voice === item.voice && !item.rich) {
-      last.repeat += 1;
-      last.at = item.at;
-      continue;
+      const distinctCalls = Boolean(last.callId && item.callId && last.callId !== item.callId);
+      if (!distinctCalls) {
+        last.repeat += 1;
+        last.at = item.at;
+        if (item.pending) last.pending = true;
+        continue;
+      }
     }
     rows.push({ ...item, repeat: 1 });
   }
@@ -1077,6 +1261,8 @@ export function renderRich(host: HTMLElement, text: string): void {
   }
 }
 
+type FileFact = { name: string; bytes: number | null };
+
 type Facts = {
   /** The durable record was truncated, so every count below is a floor. */
   partial: boolean;
@@ -1088,7 +1274,7 @@ type Facts = {
   calls: number | null;
   usageSteps: number;
   asks: number;
-  files: Map<string, string>;
+  files: Map<string, FileFact>;
   sites: Set<string>;
 };
 
@@ -1106,9 +1292,18 @@ function emptyFacts(): Facts {
   };
 }
 
-type Item = FeedLine & { at: string; kind: string };
+type Item = FeedLine & {
+  at: string;
+  kind: string;
+  key: string;
+  tool?: string;
+  hasCall?: boolean;
+  hasNative?: boolean;
+};
 
 const MODEL_MESSAGES_KEY = "modelbot.show-model-messages";
+/** How long the post-release reason line stays up unless the next ask arrives. */
+const RELEASE_NOTE_MS = 10_000;
 
 /** Task identity comes from its saved settings, never today's connection. */
 export function taskModelLabel(task: Pick<TaskRecord, "adapter" | "model">): string {
@@ -1116,7 +1311,7 @@ export function taskModelLabel(task: Pick<TaskRecord, "adapter" | "model">): str
   return [provider, task.model?.trim() || "Model not recorded"].filter(Boolean).join(" · ");
 }
 
-type SurfaceKind = "none" | "approval" | "driving" | "observing" | "needs-you";
+type SurfaceKind = "none" | "approval" | "driving" | "observing" | "needs-you" | "paused-hold";
 
 /**
  * Home sets this immediately before it navigates to a task it just created, and
@@ -1165,9 +1360,12 @@ class TaskView {
   private currentUrl: string | null = null;
   private renderedRows: string[] = [];
   private feed!: HTMLElement;
+  private filesEl!: HTMLElement;
   private composer!: HTMLFormElement;
   private announce!: HTMLElement;
   private surface!: HTMLElement;
+  private releaseLine!: HTMLElement;
+  private releaseNoteTimer = 0;
   private grid!: HTMLElement;
   private left!: HTMLElement;
   private goalEl!: HTMLElement;
@@ -1180,6 +1378,8 @@ class TaskView {
   private receiptCost: HTMLElement | null = null;
   private stopBtn!: HTMLButtonElement;
   private tabs!: HTMLElement;
+  /** Tab the person picked. Null means the view still owns the default. */
+  private userTab: "task" | "computer" | null = null;
   private panel: LivePanel | null = null;
   private factsEl: HTMLElement | null = null;
   private approval: ApprovalSurface | null = null;
@@ -1196,6 +1396,7 @@ class TaskView {
   private lastWord = "";
   private driving: ReturnType<typeof renderDriving> | null = null;
   private needsYou: ReturnType<typeof renderNeedsYou> | null = null;
+  private pausedHold: ReturnType<typeof renderPausedHold> | null = null;
   private events: WebSocket | null = null;
   /**
    * The pause the daemon has just announced. `emit` broadcasts before it
@@ -1224,10 +1425,15 @@ class TaskView {
 
   /** The keyboard is handed to one client, not to every window watching. */
   private drivingNow(): boolean {
-    return isDriver(this.takeover, this.holder(), {
+    if (isDriver(this.takeover, this.holder(), {
       device: this.deviceId,
       acquired: this.acquired,
-    });
+    })) return true;
+    const row = this.takeover;
+    if (!row || !this.liveLeaseOpen()) return false;
+    if (this.acquired === row.id) return true;
+    const holder = this.holder();
+    return holder !== null && holder === this.deviceId;
   }
 
   /** Someone else is driving: this window watches and offers nothing to press. */
@@ -1239,6 +1445,7 @@ class TaskView {
     this.alive = true;
     this.host = el;
     this.taskId = id;
+    setTitle("Task", { back: "#/", backLabel: "All tasks" });
     this.buildFrame(el);
     document.addEventListener("keydown", this.onKey);
     this.commands = [
@@ -1248,7 +1455,7 @@ class TaskView {
         run: () => void this.takeControl(),
       }),
       bindCommand("give-control-back", {
-        available: () => this.drivingNow(),
+        available: () => this.drivingNow() || this.takeover?.state === "paused",
         run: () => void this.returnControl(),
       }),
     ];
@@ -1261,8 +1468,10 @@ class TaskView {
     });
     const info = await session();
     if (!this.alive) return;
-    this.facts.capUsd = info?.spend_cap_usd ?? null;
-    this.facts.maxUsd = info?.budget?.max_usd ?? null;
+    const sessionCap = number(info?.spend_cap_usd);
+    this.facts.capUsd = sessionCap !== null && sessionCap > 0 ? sessionCap : null;
+    const sessionMax = number(info?.budget?.max_usd);
+    this.facts.maxUsd = sessionMax !== null && sessionMax > 0 ? sessionMax : null;
     await this.load();
     if (!this.alive) return;
     this.connectEvents();
@@ -1281,10 +1490,12 @@ class TaskView {
     this.loadRevision++;
     this.detail = null;
     this.loadError = null;
+    setTitle("Task", { back: "#/", backLabel: "All tasks" });
     this.items.clear();
     this.takeoverReasons.clear();
     this.takeoverActors.clear();
     this.acquired = acquiredControl();
+    this.hideReleaseReturned();
     this.stopLeaseTick();
     this.renderedRows = [];
     this.approval?.destroy();
@@ -1294,6 +1505,7 @@ class TaskView {
     this.pausedStep = null;
     this.surfaceKind = "none";
     this.lastWord = "";
+    this.userTab = null;
     this.panel?.close();
     this.panel = null;
     this.factsEl = null;
@@ -1311,6 +1523,7 @@ class TaskView {
     this.commands = [];
     document.removeEventListener("keydown", this.onKey);
     window.clearTimeout(this.reconnectTimer);
+    this.hideReleaseReturned();
     this.stopLeaseTick();
     this.approval?.destroy();
     this.approval = null;
@@ -1355,6 +1568,10 @@ class TaskView {
     this.tabs = appendTextChild(this.root, "div", "", "task-tabs");
     this.tabs.setAttribute("role", "tablist");
     this.tabs.setAttribute("aria-label", "Task or its computer");
+
+    this.releaseLine = appendTextChild(this.root, "p", "", "release-reason");
+    this.releaseLine.hidden = true;
+    this.releaseLine.setAttribute("role", "status");
 
     this.grid = appendTextChild(this.root, "div", "", "task-grid");
     this.left = appendTextChild(this.grid, "div", "", "task-left");
@@ -1423,6 +1640,8 @@ class TaskView {
     this.feed.setAttribute("aria-live", "polite");
     this.feed.setAttribute("aria-label", "What your bot is doing");
     this.feed.tabIndex = 0;
+    this.filesEl = appendTextChild(this.left, "section", "", "artifacts");
+    this.filesEl.hidden = true;
 
     // The status word lives in the titlebar, which a view may not write into
     // as a live region — so the change is announced once from here (§7).
@@ -1435,7 +1654,10 @@ class TaskView {
       tab.setAttribute("role", "tab");
       tab.dataset.tab = key;
       tab.textContent = label;
-      tab.addEventListener("click", () => this.setTab(key));
+      tab.addEventListener("click", () => {
+        this.userTab = key;
+        this.setTab(key);
+      });
       this.tabs.append(tab);
     }
     this.setTab("task");
@@ -1446,6 +1668,14 @@ class TaskView {
     for (const node of this.tabs.querySelectorAll<HTMLElement>("[data-tab]")) {
       node.setAttribute("aria-selected", node.dataset.tab === which ? "true" : "false");
     }
+  }
+
+  /** Live picture first; Task first when Resume is on `.task-left`. A click sticks. */
+  private applyDefaultTab(status: string): void {
+    if (this.userTab) return;
+    const livePicture =
+      status === "running" || (status === "paused" && this.pausedForTakeover());
+    this.setTab(livePicture ? "computer" : "task");
   }
 
   private async load(): Promise<void> {
@@ -1488,10 +1718,7 @@ class TaskView {
       this.noteFacts(step.kind, body);
       const line = feedLine(step.kind, body, this.feedContext());
       if (!line) continue;
-      const key = `${step.kind}|${step.created_at}`;
-      const existing = this.items.get(key);
-      if (existing && existing.text.length >= line.text.length) continue;
-      this.items.set(key, { ...line, at: step.created_at, kind: step.kind });
+      this.putFeed(step.kind, body, step.created_at, line);
     }
   }
 
@@ -1521,7 +1748,8 @@ class TaskView {
     if (kind === "policy.denied") {
       const spent = number(body.proxy_estimate_usd) ?? number(body.spend_usd);
       if (spent !== null) this.facts.usedUsd = Math.max(this.facts.usedUsd, spent);
-      this.facts.capUsd = number(body.cap_usd) ?? this.facts.capUsd;
+      const deniedCap = number(body.cap_usd);
+      if (deniedCap !== null) this.facts.capUsd = deniedCap > 0 ? deniedCap : null;
       return;
     }
     if (kind === "tool.result") {
@@ -1537,7 +1765,7 @@ class TaskView {
       }
       if (ok && name === "files_write") {
         const path = typeof callArgs.path === "string" ? callArgs.path : null;
-        if (path) this.facts.files.set(path, baseName(path));
+        if (path) this.facts.files.set(path, { name: baseName(path), bytes: number(callArgs.bytes) ?? number(body.bytes) });
       }
       // The aria snapshot is the only place the page's own words for its
       // controls appear. It is sanitized before it leaves the container
@@ -1564,8 +1792,9 @@ class TaskView {
       // `write_file` sets `item_name` to the whole workspace path, so the
       // display name is always reduced to the basename: one file, one name, on
       // every visit to this screen.
-      if (path) this.facts.files.set(path, baseName(name ?? path));
-      else if (name) this.facts.files.set(name, baseName(name));
+      const bytes = number(body.bytes);
+      if (path) this.facts.files.set(path, { name: baseName(name ?? path), bytes });
+      else if (name) this.facts.files.set(name, { name: baseName(name), bytes });
     }
     if (kind === "takeover.requested") {
       const id = readString(body, "takeover_id");
@@ -1597,14 +1826,19 @@ class TaskView {
   private noteRecordSpend(task: TaskRecord): void {
     const spent = number(task.spend_usd) ?? number(task.summary?.cost_usd);
     if (spent !== null) this.facts.usedUsd = Math.max(this.facts.usedUsd, spent);
-    this.facts.capUsd = number(task.spend_cap_usd) ?? this.facts.capUsd;
+    const taskCap = number(task.spend_cap_usd);
+    if (taskCap !== null) this.facts.capUsd = taskCap > 0 ? taskCap : null;
     const calls = number(task.calls);
     if (calls !== null) this.facts.calls = Math.max(this.facts.calls ?? 0, calls);
   }
 
   /** Tool calls made: the daemon's count when it keeps one, else this page's. */
   private callCount(): number {
-    return Math.max(this.facts.calls ?? 0, this.countKind("tool.call"));
+    let tools = 0;
+    for (const item of this.feedItems()) {
+      if (item.kind === "tool.call" || item.kind === "native_tool") tools += 1;
+    }
+    return Math.max(this.facts.calls ?? 0, tools);
   }
 
   /** Use the same recorded total for live and completed tasks. */
@@ -1617,8 +1851,84 @@ class TaskView {
 
   private countKind(kind: string): number {
     let total = 0;
-    for (const item of this.items.values()) if (item.kind === kind) total += 1;
+    for (const item of this.feedItems()) if (item.kind === kind) total += 1;
     return total;
+  }
+
+  /** Alias keys (started id, finished id, tool.call timestamp) share one object. */
+  private feedItems(): Item[] {
+    return [...new Set(this.items.values())];
+  }
+
+  /**
+   * One native invocation is three events: started, finished, and `tool.call`.
+   * Same id, or the next unmatched call of the same tool, updates one row;
+   * richer argument text wins. Alias the arriving key onto that object so a
+   * durable replay of any of the three hits the live row.
+   */
+  private putFeed(kind: string, body: Record<string, unknown>, at: string, line: FeedLine): void {
+    const natural = feedItemKey(kind, body, at);
+    const name = callToolName(body);
+    const id = readString(body, "id");
+    const started = kind === "native_tool" && body.status === "started";
+    const finished = kind === "native_tool" && body.status === "completed";
+    const isCall = kind === "tool.call";
+    let existing = this.items.get(natural);
+    if (!existing && (kind === "native_tool" || isCall) && name) {
+      const merged = this.findToolRow(name, id, { started, finished, isCall });
+      if (merged) existing = this.items.get(merged);
+    }
+    if (existing) {
+      if (line.text.length > existing.text.length) {
+        existing.text = line.text;
+        existing.voice = line.voice;
+        if (line.rich) existing.rich = true;
+      }
+      if (line.artifact !== undefined && (existing.artifact === undefined || (line.artifact && !existing.artifact))) {
+        existing.artifact = line.artifact;
+      }
+      if (finished) existing.pending = false;
+      else if (started && existing.pending !== false) existing.pending = true;
+      if (isCall) {
+        existing.hasCall = true;
+        existing.kind = "tool.call";
+      }
+      if (kind === "native_tool") existing.hasNative = true;
+      if (!existing.callId && id) existing.callId = id;
+      if (natural !== existing.key) this.items.set(natural, existing);
+      return;
+    }
+    const item: Item = {
+      ...line,
+      at,
+      kind,
+      key: natural,
+      tool: name ?? undefined,
+      callId: id ?? undefined,
+      pending: started || undefined,
+      hasCall: isCall || undefined,
+      hasNative: kind === "native_tool" || undefined,
+    };
+    this.items.set(natural, item);
+  }
+
+  private findToolRow(
+    name: string,
+    id: string | null,
+    which: { started: boolean; finished: boolean; isCall: boolean },
+  ): string | null {
+    if (id) {
+      const keyed = this.items.get(`tool|${id}`);
+      if (keyed) return keyed.key;
+    }
+    if (which.started) return null;
+    let found: string | null = null;
+    for (const item of this.feedItems()) {
+      if (item.tool !== name) continue;
+      if (which.finished && item.pending) found = item.key;
+      if (which.isCall && !item.hasCall && (item.pending || item.hasNative)) found = item.key;
+    }
+    return found;
   }
 
   private stepCount(): number {
@@ -1634,12 +1944,13 @@ class TaskView {
       computerId,
       onTakeControl: () => void this.takeControl(),
       onReturnControl: () => void this.returnControl(),
+      onSwitchGoogleAccount: () => void this.switchGoogle(),
       onFullScreen: (full) => this.grid.setAttribute("data-full", String(full)),
       onInput: () => this.onLiveInput(),
     });
     this.grid.append(this.panel.root);
     this.factsEl = appendTextChild(this.panel.root, "div", "", "facts");
-    if (!isFinished(this.detail.task.status)) this.panel.connect();
+    if (!isFinished(this.detail.task.status) || this.pausedForTakeover()) this.panel.connect();
   }
 
   private connectEvents(): void {
@@ -1682,6 +1993,15 @@ class TaskView {
     if (event.type.startsWith("approval.") || event.type.startsWith("takeover.")) {
       if (mine || forMyComputer) {
         this.noteFacts(event.type, body);
+        if (event.type === "takeover.released") {
+          this.showReleaseReturned(releaseReasonFrom(body));
+        } else if (
+          event.type === "takeover.requested" ||
+          event.type === "takeover.started" ||
+          event.type === "approval.requested"
+        ) {
+          this.hideReleaseReturned();
+        }
         void this.refreshAlerts().then(() => {
           if (this.alive) this.render();
         });
@@ -1703,14 +2023,12 @@ class TaskView {
 
     this.noteFacts(event.type, body);
     const line = feedLine(event.type, body, this.feedContext());
-    if (!line) return;
-    this.items.set(`${event.type}|${event.ts}|live`, {
-      ...line,
-      at: event.ts,
-      kind: event.type,
-    });
-    this.renderFeed();
+    if (line) {
+      this.putFeed(event.type, body, event.ts, line);
+      this.renderFeed();
+    }
     this.renderFacts();
+    this.renderFiles();
   }
 
   private async refreshAlerts(): Promise<void> {
@@ -1800,26 +2118,45 @@ class TaskView {
   private async takeControl(): Promise<void> {
     const computerId = this.detail?.task.computer_id;
     if (!computerId || this.controlBusy) return;
+    this.hideReleaseReturned();
     this.controlBusy = true;
     this.panel?.setTakeBusy(true);
     // Optimistic: the frame goes ember now, and the server’s own mode message
     // either confirms it or rolls it back (§3.2 step 4).
     this.panel?.setPhase("driving");
+    const wasFull = this.panel?.isFullScreen();
+    // Request inside the click/key gesture, before the network can consume activation.
+    const fullscreen = this.panel?.setFullScreen(true);
     try {
       const granted = await requestControl(computerId, this.taskId);
       // Proof this window is the one driving, before the daemon is asked again:
       // the server's mode message can land before the next render otherwise,
       // and this window would call its own handover someone else's.
+      // Driver/notice must not wait on the Fullscreen promise.
       if (granted) {
         rememberAcquired((this.acquired = granted.takeover_id));
         this.panel?.setDriver(true);
-        // Keep the conversation visible while the operator drives. Full screen is opt-in.
         this.panel?.setNotice(CONTROL_TAKEN);
+        await fullscreen;
+        const denied = this.panel?.fullScreenDeniedDetail();
+        if (denied != null) {
+          this.panel?.setNotice(
+            denied
+              ? `Couldn’t fill the display (${denied}). You still have control — type and click in the frame.`
+              : "Couldn’t fill the display. You still have control — type and click in the frame.",
+            "warn",
+          );
+        }
+      } else {
+        await fullscreen;
+        if (!wasFull) await this.panel?.setFullScreen(false);
       }
       this.leaseRead = Date.now();
       await this.refreshAlerts();
       this.render();
     } catch (error) {
+      await fullscreen;
+      if (!wasFull) await this.panel?.setFullScreen(false);
       this.panel?.setPhase("live");
       // Said over the picture the person was looking at, not only in a toast
       // at the edge of a screen they have just left for full screen.
@@ -1832,24 +2169,40 @@ class TaskView {
     }
   }
 
+  private async applyRelease(released: ReleaseResult): Promise<void> {
+    if (released.ok) {
+      const fromPaused = this.takeover?.state === "paused";
+      const reason = released.cleared?.reason ?? (fromPaused ? "expired" : undefined);
+      rememberAcquired((this.acquired = null));
+      this.driving?.setHold(null);
+      await this.panel?.setFullScreen(false);
+      this.panel?.setPhase("live");
+      this.showReleaseReturned(reason);
+      return;
+    }
+    const copy = blockedHoldCopy(released.blocked_by?.kind);
+    this.driving?.setHold(copy);
+    this.panel?.setNotice(copy, "warn");
+  }
+
+  private async switchGoogle(): Promise<void> {
+    const id = this.takeover?.id ?? this.acquired ?? acquiredControl();
+    if (!id) return;
+    try {
+      await switchGoogleAccount(id);
+    } catch (error: unknown) {
+      toast("warn", humanApiError(error, "Couldn’t open Google’s account chooser."));
+    }
+  }
+
   private async returnControl(): Promise<void> {
     const lease = this.takeover;
     if (!lease || this.controlBusy) return;
     this.controlBusy = true;
     this.driving?.setBusy(true);
+    this.pausedHold?.setBusy(true);
     try {
-      const released = await releaseControl(lease.id);
-      if (released) {
-        rememberAcquired((this.acquired = null));
-        this.driving?.setHold(null);
-        await this.panel?.setFullScreen(false);
-        this.panel?.setPhase("live");
-      } else {
-        this.driving?.setHold(STILL_SENSITIVE);
-        // The driving card is off screen while full screen, so the reason has
-        // to be where the person is looking.
-        if (this.panel?.isFullScreen()) this.panel.setNotice(STILL_SENSITIVE, "warn");
-      }
+      await this.applyRelease(await releaseControl(lease.id));
       await this.refreshAlerts();
       this.render();
     } catch {
@@ -1857,7 +2210,43 @@ class TaskView {
     } finally {
       this.controlBusy = false;
       this.driving?.setBusy(false);
+      this.pausedHold?.setBusy(false);
     }
+  }
+
+  private async clearAndReturn(): Promise<void> {
+    const lease = this.takeover;
+    if (!lease || this.controlBusy) return;
+    this.controlBusy = true;
+    this.driving?.setBusy(true);
+    this.pausedHold?.setBusy(true);
+    try {
+      await this.applyRelease(await clearAndReleaseControl(lease.id));
+      await this.refreshAlerts();
+      this.render();
+    } catch {
+      toast("warn", "Couldn’t clear the screen. Navigate the bot’s browser to about:blank, then give control back.");
+    } finally {
+      this.controlBusy = false;
+      this.driving?.setBusy(false);
+      this.pausedHold?.setBusy(false);
+    }
+  }
+
+  private showReleaseReturned(reason?: string): void {
+    if (!reason && !this.releaseLine.hidden) return;
+    this.releaseLine.textContent = releaseReturnedCopy(reason);
+    this.releaseLine.hidden = false;
+    window.clearTimeout(this.releaseNoteTimer);
+    this.releaseNoteTimer = window.setTimeout(() => this.hideReleaseReturned(), RELEASE_NOTE_MS);
+  }
+
+  private hideReleaseReturned(): void {
+    window.clearTimeout(this.releaseNoteTimer);
+    this.releaseNoteTimer = 0;
+    if (!this.releaseLine) return;
+    this.releaseLine.hidden = true;
+    this.releaseLine.textContent = "";
   }
 
   /**
@@ -1976,6 +2365,7 @@ class TaskView {
   private render(): void {
     const task = this.detail?.task;
     if (!task) return;
+    this.applyDefaultTab(task.status);
     this.composer.hidden = task.status !== "running";
     const driving = this.drivingNow();
     const observing = this.observingNow();
@@ -1997,17 +2387,21 @@ class TaskView {
     if (!goal.rest) this.goalFull.hidden = true;
     this.renderBar();
 
-    if (isFinished(task.status) || (task.status === "paused" && !this.pausedForTakeover())) {
+    if ((isFinished(task.status) || task.status === "paused") && !this.pausedForTakeover()) {
       this.renderOutcome(task);
       return;
     }
 
+    this.panel?.connect();
+
     // The panel goes first: it owns the phase, and the driving surface below
     // asks it for the keyboard once it is in the driving phase.
     this.renderPanelState(driving, needsControl, observing);
+    this.panel?.connect();
     this.renderSurface(driving, observing);
     this.renderFeed();
     this.renderFacts();
+    this.renderFiles();
   }
 
   /**
@@ -2016,7 +2410,8 @@ class TaskView {
    * surface and the Take-control button instead of the receipt.
    */
   private pausedForTakeover(): boolean {
-    return this.takeover?.state === "takeover_requested" || this.takeover?.state === "human";
+    return this.takeover?.state === "takeover_requested" || this.takeover?.state === "human"
+      || this.takeover?.state === "paused";
   }
 
   private renderBar(): void {
@@ -2030,8 +2425,8 @@ class TaskView {
         ...(task.execution_mode === "orchestrator" ? { sub: "· Subagents" } : {}) });
     }
     const finished = task ? isFinished(task.status) : false;
-    // A paused task has a receipt on screen too, and can still be stopped.
-    const settled = finished || (task?.status === "paused" && !this.pausedForTakeover());
+    // A paused or finished task that still holds the computer is not settled.
+    const settled = (finished || task?.status === "paused") && !this.pausedForTakeover();
 
     // The span never ends before the last thing that happened.
     const at = task ? this.span(task)?.to : undefined;
@@ -2062,19 +2457,29 @@ class TaskView {
   }
 
   private receiptFilesText(): string {
-    const files = [...this.savedFiles().values()];
+    const files = [...this.savedFiles().values()].map((file) => file.name);
     if (files.length) return files.join(", ");
     return this.facts.partial && !this.receipt() ? "Not all of this run was kept" : "None";
   }
 
   private receiptAsksText(): string {
     const frozen = this.receipt();
-    if (frozen) return frozen.asks === 0 ? "Nothing — it did it all itself" : String(frozen.asks);
-    const asks = this.countKind("approval.requested");
-    if (asks === 0) {
-      return this.facts.partial ? "Not all of this run was kept" : "Nothing — it did it all itself";
+    const site = frozen?.sites[0] ?? [...this.facts.sites][0] ?? null;
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    for (const step of this.detail?.steps ?? []) {
+      const line = step.kind === "takeover.requested"
+        ? receiptAskLine(readString(step.body, "reason"), fieldKindOf(step.body), site)
+        : step.kind === "approval.requested"
+          ? (feedLine(step.kind, step.body)?.text ?? "Asked you a question")
+          : null;
+      if (!line || seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line);
     }
-    return this.facts.partial ? `At least ${asks}` : String(asks);
+    if (lines.length) return lines.join("; ");
+    if (frozen) return frozen.asks === 0 ? "Nothing — it did it all itself" : String(frozen.asks);
+    return this.facts.partial ? "Not all of this run was kept" : "Nothing — it did it all itself";
   }
 
   private receiptCostText(): string {
@@ -2093,16 +2498,20 @@ class TaskView {
         ? "approval"
         : observing
           ? "observing"
-          : this.takeover
-            ? "needs-you"
-            : "none";
+          : this.takeover?.state === "paused"
+            ? "paused-hold"
+            : this.takeover
+              ? "needs-you"
+              : "none";
     const reason = this.takeover ? (this.takeoverReasons.get(this.takeover.id) ?? null) : null;
     const sameHandoff = want === "needs-you" && this.needsYou?.root.dataset.reason === (reason ?? "")
       && this.needsYou.root.dataset.takeoverId === this.takeover?.id;
+    const samePaused = want === "paused-hold" && this.pausedHold?.root.dataset.takeoverId === this.takeover?.id;
     const sameApproval =
       want === "approval" &&
       this.approval?.root.dataset.approvalId === this.approvalReq?.approval_id;
-    if (want === this.surfaceKind && (want !== "approval" || sameApproval) && (want !== "needs-you" || sameHandoff)) return;
+    if (want === this.surfaceKind && (want !== "approval" || sameApproval) && (want !== "needs-you" || sameHandoff)
+      && (want !== "paused-hold" || samePaused)) return;
 
     this.surfaceKind = want;
     if (want !== "approval") {
@@ -2111,6 +2520,7 @@ class TaskView {
     }
     this.driving = null;
     this.needsYou = null;
+    this.pausedHold = null;
     this.stopLeaseTick();
     this.surface.replaceChildren();
 
@@ -2125,11 +2535,24 @@ class TaskView {
       return;
     }
 
+    if (want === "paused-hold") {
+      this.pausedHold = renderPausedHold({
+        onReturn: () => void this.returnControl(),
+        onTake: () => void this.takeControl(),
+      });
+      this.pausedHold.root.dataset.takeoverId = this.takeover?.id ?? "";
+      this.surface.append(this.pausedHold.root);
+      this.pausedHold.focus();
+      return;
+    }
+
     if (want === "driving") {
       this.driving = renderDriving({
         onReturn: () => void this.returnControl(),
-        onStop: () => void this.stop(),
+        onClear: () => void this.clearAndReturn(),
+        ...(this.running() ? { onStop: () => void this.stop() } : {}),
       });
+      this.driving.root.dataset.takeoverId = this.takeover?.id ?? this.acquired ?? "";
       this.surface.append(this.driving.root);
       this.renderLease();
       this.leaseTick = window.setInterval(() => this.renderLease(), 1000);
@@ -2181,7 +2604,7 @@ class TaskView {
   }
 
   private sortedItems(): Item[] {
-    return [...this.items.values()].sort((a, b) => a.at.localeCompare(b.at));
+    return this.feedItems().sort((a, b) => a.at.localeCompare(b.at));
   }
 
   private renderFeed(): void {
@@ -2196,7 +2619,7 @@ class TaskView {
       appendTextChild(
         this.feed,
         "p",
-        !this.showModelMessages && this.items.size ? "Model messages are hidden. Steps will appear here."
+        !this.showModelMessages && this.feedItems().length ? "Model messages are hidden. Steps will appear here."
           : finished ? "Nothing was saved about this run." : "Getting its computer ready",
         "feed-empty",
       );
@@ -2227,7 +2650,15 @@ class TaskView {
       node.classList.remove("now");
     }
     if (this.detail && !isFinished(this.detail.task.status)) {
-      this.feed.lastElementChild?.classList.add("now");
+      let marked = false;
+      const children = this.feed.children;
+      for (let index = 0; index < rows.length; index += 1) {
+        if (!rows[index]?.pending) continue;
+        children[index]?.classList.add("now");
+        marked = true;
+      }
+      const last = rows[rows.length - 1];
+      if (!marked && last?.pending !== false) this.feed.lastElementChild?.classList.add("now");
     }
     this.renderedRows = signature;
 
@@ -2253,7 +2684,7 @@ class TaskView {
     this.factsEl.replaceChildren();
 
     const cost = appendTextChild(this.factsEl, "div", "", "r");
-    appendTextChild(cost, "span", "Total cost");
+    appendTextChild(cost, "span", costTerm(this.detail?.task.adapter));
     appendTextChild(cost, "b", this.receiptCostText()).title =
       "Estimated task cost, not your provider bill. Native model connections meter computer-tool calls.";
 
@@ -2266,7 +2697,7 @@ class TaskView {
     appendTextChild(
       files,
       "b",
-      this.facts.files.size ? [...this.facts.files.values()].join(", ") : "None yet",
+      this.facts.files.size ? [...this.facts.files.values()].map((file) => file.name).join(", ") : "None yet",
     );
   }
 
@@ -2294,12 +2725,29 @@ class TaskView {
 
   /** The lease line under "You’re driving", ticking once a second. */
   private renderLease(): void {
-    const at = this.takeover?.expires_at
-      ? Date.parse(this.takeover.expires_at)
-      : Number.NaN;
-    const left = Number.isFinite(at) ? at - Date.now() : null;
+    const at = this.leaseDeadline();
+    const left = at != null ? at - Date.now() : null;
     this.driving?.setLease(left);
     this.panel?.setLease(left);
+  }
+
+  /**
+   * Live `input_ack` / `mode` when that message is at least as new as the last
+   * takeover poll; otherwise the polled row. Poll is the fallback, not the clock.
+   */
+  private leaseDeadline(): number | null {
+    const live = this.panel?.leaseExpiresAt() ?? null;
+    const seen = this.panel?.leaseSeenAt() ?? 0;
+    if (live != null && seen >= this.leaseRead) return live;
+    const polled = this.takeover?.expires_at ? Date.parse(this.takeover.expires_at) : Number.NaN;
+    return Number.isFinite(polled) ? polled : live;
+  }
+
+  /** Last ack is at least as new as the poll, and that lease has not expired. */
+  private liveLeaseOpen(): boolean {
+    const live = this.panel?.leaseExpiresAt();
+    const seen = this.panel?.leaseSeenAt() ?? 0;
+    return live != null && live > Date.now() && seen >= this.leaseRead;
   }
 
   private stopLeaseTick(): void {
@@ -2308,11 +2756,13 @@ class TaskView {
   }
 
   /**
-   * Every relayed input restarts the daemon's lease, so the deadline on screen
-   * is stale the moment a person types. Re-read it rather than guess — at most
-   * once every fifteen seconds, so a burst of typing costs one request.
+   * Every relayed input restarts the daemon's lease. The live `input_ack`
+   * carries the new `expires_at`; the countdown reads it immediately. The
+   * takeover list is only a fallback, at most once every fifteen seconds.
    */
   private onLiveInput(): void {
+    this.renderLease();
+    if (this.surfaceKind === "paused-hold" && this.liveLeaseOpen()) this.render();
     const now = Date.now();
     if (!this.drivingNow() || now - this.leaseRead < 15_000) return;
     this.leaseRead = now;
@@ -2364,6 +2814,32 @@ class TaskView {
     return typeof reason === "string" && reason ? reason : null;
   }
 
+  /** Who asked the daemon to stop, when a `task.cancelled` event recorded it. */
+  private cancelledBy(): "ui" | "api" | "system" | null {
+    for (const step of this.detail?.steps ?? []) {
+      const by = step.body?.cancelled_by;
+      if (by === "ui" || by === "api" || by === "system") return by;
+    }
+    const live = this.terminalBody()?.cancelled_by;
+    if (live === "ui" || live === "api" || live === "system") return live;
+    return null;
+  }
+
+  /**
+   * A stop that landed while a person was driving is remembered by the durable
+   * record, so the receipt still says so after control has been given back.
+   */
+  private stoppedWhileHeld(): boolean {
+    if (this.detail?.task.status !== "cancelled") return false;
+    let held = false;
+    for (const step of this.detail.steps) {
+      if (step.kind === "takeover.started") held = true;
+      else if (step.kind === "takeover.released") held = false;
+      else if (step.kind === "task.cancelled") return held;
+    }
+    return held;
+  }
+
   /** One outcome object, so the bar, the heading and the actions cannot drift. */
   private outcome(task: TaskRecord): TerminalCopy {
     // The verdict rides on the terminal event, and on newer daemons on the
@@ -2373,11 +2849,13 @@ class TaskView {
     return terminalCopy({
       status: task.status,
       reason: this.stopReason(),
-      budget: this.facts.capUsd === null ? null : `${formatUsd(this.facts.capUsd)} budget`,
-      took: spanDurationText(this.span(task), this.items.size),
+      budget: this.facts.capUsd === null || this.facts.capUsd <= 0 ? null : `${formatUsd(this.facts.capUsd)} budget`,
+      took: spanDurationText(this.span(task), this.feedItems().length),
       terminal: terminal?.failure_kind ? terminal : { ...terminal, failure_kind: task.failure_kind },
       adapter: task.adapter ?? null,
       calls: this.callCount(),
+      held: this.takeover?.state === "human" || this.takeover?.state === "paused" || this.stoppedWhileHeld(),
+      cancelledBy: this.cancelledBy(),
     });
   }
 
@@ -2469,7 +2947,7 @@ class TaskView {
     let resume: HTMLButtonElement | null = null;
     let switchAi: HTMLButtonElement | null = null;
     let resumeLimit: HTMLButtonElement | null = null;
-    if (copy.planLimit) {
+    if (copy.planLimit && !paused) {
       // Running it again on the same dry plan just burns another six seconds.
       another.className = "btn";
       switchAi = document.createElement("button");
@@ -2520,7 +2998,7 @@ class TaskView {
       open.textContent = "Open result";
       open.addEventListener("click", () => {
         const shown = modelbotNative.revealFile({
-          url: this.fileUrl(task, deliverable),
+          url: this.fileUrl(task, deliverable, true),
           path: deliverable,
           resultsDir: task.results_dir ?? null,
         });
@@ -2609,67 +3087,114 @@ class TaskView {
    * verified is gone straight back on the screen, with a live Open button.
    * Without a receipt, what landed while this view was watching is all there is.
    */
-  private savedFiles(): Map<string, string> {
+  private savedFiles(): Map<string, FileFact> {
     const receipt = this.receipt();
-    const files = new Map<string, string>();
+    const files = new Map<string, FileFact>();
     for (const path of receipt?.files_saved ?? []) {
-      if (typeof path === "string" && path) files.set(path, baseName(path));
+      if (typeof path === "string" && path) {
+        const known = this.facts.files.get(path);
+        files.set(path, { name: baseName(path), bytes: known?.bytes ?? this.fileBytes(path) });
+      }
     }
-    if (!receipt) for (const [path, name] of this.facts.files) files.set(path, name);
+    if (!receipt) for (const [path, file] of this.facts.files) files.set(path, file);
     return files;
   }
 
-  /** Where the daemon serves one of this task's files. Never navigated to. */
-  private fileUrl(task: TaskRecord, path: string): string {
-    return `/api/v1/computers/${encodeURIComponent(task.computer_id)}/files?path=${encodeURIComponent(path)}`;
+  private fileBytes(path: string): number | null {
+    const direct = this.facts.files.get(path)?.bytes;
+    if (direct != null) return direct;
+    const base = baseName(path);
+    for (const [known, file] of this.facts.files) {
+      if (baseName(known) === base && file.bytes != null) return file.bytes;
+    }
+    return null;
+  }
+
+  /** Same-origin URL the daemon serves this file at. Cookie session; no token. */
+  private fileUrl(task: TaskRecord, path: string, inline = false): string {
+    const href = `/api/v1/computers/${encodeURIComponent(task.computer_id)}/files?path=${encodeURIComponent(path)}`;
+    return inline ? `${href}&inline=1` : href;
+  }
+
+  private zipUrl(task: TaskRecord): string {
+    return `/api/v1/tasks/${encodeURIComponent(task.id)}/files.zip`;
+  }
+
+  /** Live Files list under the feed. The finished screen draws the same rows into the result. */
+  private renderFiles(): void {
+    const task = this.detail?.task;
+    if (!this.filesEl || !task) return;
+    if (isFinished(task.status) || (task.status === "paused" && !this.pausedForTakeover())) return;
+    this.filesEl.replaceChildren();
+    this.fillArtifacts(task, this.filesEl);
+    this.filesEl.hidden = this.filesEl.childElementCount === 0;
   }
 
   private renderArtifacts(task: TaskRecord, scroll: HTMLElement): void {
-    const files = this.savedFiles();
-    if (files.size === 0) return;
-
     const block = appendTextChild(scroll, "section", "", "artifacts");
-    appendTextChild(block, "span", "Files it saved", "caps");
-    for (const [path, name] of files) {
+    this.fillArtifacts(task, block);
+    if (block.childElementCount === 0) block.remove();
+  }
+
+  private fillArtifacts(task: TaskRecord, block: HTMLElement): void {
+    const files = this.savedFiles();
+    if (files.size === 0 && !task.workspace_dir) return;
+
+    if (files.size > 0) {
+      const head = appendTextChild(block, "div", "", "artifacts-head");
+      appendTextChild(head, "span", "Files it saved", "caps");
+      const all = document.createElement("a");
+      all.className = "btn sm";
+      all.href = this.zipUrl(task);
+      all.download = `${task.id}-files.zip`;
+      all.textContent = "Download all";
+      head.append(all);
+    }
+
+    for (const [path, file] of files) {
       const row = appendTextChild(block, "div", "", "file");
       appendTextChild(row, "span", "", "g").append(icon("file"));
       const who = appendTextChild(row, "span", "", "who");
-      appendTextChild(who, "span", name, "n");
-      appendTextChild(who, "span", "On its computer, ready to open", "w");
+      appendTextChild(who, "span", file.name, "n");
+      appendTextChild(who, "span", byteSize(file.bytes ?? 0) ?? "On its computer, ready to open", "w");
 
       const href = this.fileUrl(task, path);
       const acts = appendTextChild(row, "span", "", "file-acts");
-      // The shell reveals the file in Finder, or downloads it; the browser
-      // opens a tab. Nothing here ever navigates the app to an API URL.
+      const download = document.createElement("a");
+      download.className = "btn sm";
+      download.href = href;
+      download.download = file.name;
+      download.textContent = "Download";
+      download.addEventListener("click", () => {
+        void this.confirmArtifact(href, row);
+      });
       const open = document.createElement("button");
       open.type = "button";
       open.className = "btn sm";
       open.textContent = "Open";
       open.addEventListener("click", () => {
         const shown = modelbotNative.revealFile({
-          url: href,
+          url: this.fileUrl(task, path, true),
           path,
           resultsDir: task.results_dir ?? null,
         });
-        if (!shown) toast("warn", "Couldn’t open that file. Copy link still works.");
-        // In the Mac shell a file that is gone reveals nothing, downloads
-        // nothing and says nothing. Ask the daemon whether it is still there
-        // (a HEAD, so no bytes move); if it is not, say so and stop offering it.
-        void this.confirmArtifact(href, open, who);
+        if (!shown) toast("warn", "Couldn’t open that file.");
+        void this.confirmArtifact(href, row);
       });
-      acts.append(open);
+      acts.append(download, open);
+    }
 
-      // Reveal-in-Finder would be a lie: the file is inside its computer, not
-      // on the Mac's own disk. A link you can paste anywhere is the honest
-      // second action, and it is the one thing this surface can truthfully do.
-      const copyLink = document.createElement("button");
-      copyLink.type = "button";
-      copyLink.className = "btn sm";
-      copyLink.textContent = "Copy link";
-      copyLink.addEventListener("click", () => {
-        void this.toClipboard(new URL(href, location.href).href, copyLink, "Copy link");
+    if (task.workspace_dir) {
+      const note = appendTextChild(block, "p", "", "workspace-path");
+      appendTextChild(note, "span", `On this computer: ${task.workspace_dir}`);
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "btn sm";
+      copy.textContent = "Copy path";
+      copy.addEventListener("click", () => {
+        void this.toClipboard(task.workspace_dir!, copy, "Copy path");
       });
-      acts.append(copyLink);
+      note.append(copy);
     }
   }
 
@@ -2682,19 +3207,23 @@ class TaskView {
    * no network, is not evidence that a file is gone, and a wrong "it's gone"
    * on this screen would be the same lie in the other direction.
    */
-  private async confirmArtifact(
-    href: string,
-    open: HTMLButtonElement,
-    caption: HTMLElement,
-  ): Promise<void> {
+  private async confirmArtifact(href: string, row: HTMLElement): Promise<void> {
     try {
       await apiFetch(href, { method: "HEAD" });
     } catch (error) {
       if (!this.alive || !(error instanceof ApiError) || error.status !== 404) return;
       toast("warn", "This file isn’t here any more.");
-      open.disabled = true;
-      open.title = "This file isn’t on its computer any more.";
-      const where = caption.querySelector<HTMLElement>(".w");
+      for (const btn of row.querySelectorAll("button")) {
+        btn.disabled = true;
+        btn.title = "This file isn’t on its computer any more.";
+      }
+      for (const link of row.querySelectorAll("a")) {
+        link.removeAttribute("href");
+        link.removeAttribute("download");
+        link.setAttribute("aria-disabled", "true");
+        link.title = "This file isn’t on its computer any more.";
+      }
+      const where = row.querySelector<HTMLElement>(".w");
       if (where) where.textContent = "Not on its computer any more";
     }
   }
@@ -2730,7 +3259,7 @@ class TaskView {
       `steps: ${receipt?.steps ?? this.stepCount()}`,
       `cost_usd: ${receipt?.cost_usd ?? this.facts.usedUsd}`,
       `sites: ${(receipt?.sites ?? [...this.facts.sites]).join(", ") || "none"}`,
-      `asks: ${receipt?.asks ?? this.countKind("approval.requested")}`,
+      `asks: ${receipt?.asks ?? this.countKind("approval.requested") + this.countKind("takeover.requested")}`,
     ];
     await this.toClipboard(lines.join("\n"), button, "Copy diagnostics");
   }
@@ -2768,8 +3297,7 @@ class TaskView {
     const state = head?.querySelector<HTMLElement>(".state");
     if (state) state.hidden = true;
 
-    const frozen = this.receipt();
-    const total = frozen?.steps ?? collapseFeed(this.sortedItems()).length;
+    const total = this.stepCount();
     const stepsBtn = document.createElement("button");
     stepsBtn.type = "button";
     stepsBtn.className = "btn sm ghost";
@@ -2802,11 +3330,11 @@ class TaskView {
     const rows: Array<[string, string]> = [
       [
         kind === "done" ? "Time" : "Time before it stopped",
-        spanPreciseText(this.span(task), this.items.size)
+        spanPreciseText(this.span(task), this.feedItems().length)
           ?? "Not recorded for this task",
       ],
       [
-        "Total cost",
+        costTerm(task.adapter),
         this.receiptCostText(),
       ],
       ["Sites it visited", this.receiptSitesText()],
@@ -2829,7 +3357,7 @@ class TaskView {
       const row = appendTextChild(list, "div", "");
       appendTextChild(row, "dt", term);
       const dd = appendTextChild(row, "dd", value);
-      if (term === "Total cost") {
+      if (term === "Total cost" || term === "Estimated tool use") {
         this.receiptCost = dd;
         dd.title = "Estimated task cost, not your provider bill. Native model connections meter computer-tool calls.";
       }

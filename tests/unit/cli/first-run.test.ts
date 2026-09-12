@@ -47,7 +47,7 @@ describe("modelbot start first-run link", () => {
     );
     assert.deepEqual(lines, [
       `Open ${URL_}`,
-      "This link works for 10 minutes. Lost it? Run: modelbot pair",
+      "This link works for 10 minutes. Lost it? Run: bothearth pair",
     ]);
     assert.deepEqual(opened, [URL_]);
   });
@@ -155,7 +155,7 @@ describe("modelbot image", () => {
       assert.equal(call.args.at(-1), ".");
       assert.equal(call.args.filter((a) => a.startsWith("org.modelbot.build-stamp=")).length, 1);
     }
-    assert.equal(lines.at(-1), "Workspaces built. Run: modelbot start");
+    assert.equal(lines.at(-1), "Workspaces built. Restart the daemon to apply, or run: modelbot start");
   });
 
   it("build stops on the first failure and exits non-zero", async () => {

@@ -9,6 +9,40 @@ import type { JsonRpcClient } from "../../../src/sandbox/client.ts";
 import { Store } from "../../../src/daemon/store.ts";
 import { createApproval } from "../../../src/policy/approvals.ts";
 
+test("empty optional gates let a form submit through without an approval", async () => {
+  const store = new Store();
+  const computer = new FakeComputer("autonomy");
+  store.insertComputer({ id: computer.computerId, name: "research", capabilities: ["browser"], persistent: false, status: "running" });
+  const task = store.insertTask({ computer_id: computer.computerId, goal: "post a form", max_steps: 20 });
+  const dispatcher = createToolDispatcher({
+    store, getClient: () => computer, emit: async () => {}, enabledGates: [],
+  });
+  const context = { taskId: task.id, computerId: computer.computerId, origin: "https://httpbin.org",
+    originSets: { readable: [], writable: [] } };
+  try {
+    const submit = await dispatcher.dispatch("browser_type", { text: "send this", submit: true }, context);
+    assert.equal(submit.ok, true);
+    assert.equal(store.listApprovals().length, 0);
+  } finally { await computer.close(); store.close(); }
+});
+
+test("an explicit new_domain gate still asks before a form submit", async () => {
+  const store = new Store();
+  const computer = new FakeComputer("gated");
+  store.insertComputer({ id: computer.computerId, name: "research", capabilities: ["browser"], persistent: false, status: "running" });
+  const task = store.insertTask({ computer_id: computer.computerId, goal: "post a form", max_steps: 20 });
+  const dispatcher = createToolDispatcher({
+    store, getClient: () => computer, emit: async () => {}, enabledGates: ["new_domain"],
+  });
+  const context = { taskId: task.id, computerId: computer.computerId, origin: "https://httpbin.org",
+    originSets: { readable: [], writable: [] } };
+  try {
+    const submit = await dispatcher.dispatch("browser_type", { text: "send this", submit: true }, context);
+    assert.equal(!submit.ok && submit.error.code, "E_POLICY_PENDING");
+    assert.equal(store.listApprovals()[0]?.gate, "new_domain");
+  } finally { await computer.close(); store.close(); }
+});
+
 test("normal browser research opens pages and tabs without granting form submissions", async () => {
   const store = new Store();
   const scopes: ComputerCallContext[] = [];

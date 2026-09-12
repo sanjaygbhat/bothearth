@@ -89,8 +89,9 @@ Secrets stay in the vault, never in the connector config.
 
 Data files, no code. `policy/categories.json` (force-human categories, example origins) and
 `policy/tos-risk.json`, pointed at by `policy.categories_path` / `policy.tos_risk_path`.
-`policy.gates` = gate classes armed. `policy.strict_allowlist` = origins allowed in `mode: strict`.
-Removing a gate weakens the product — do it in your own config, never in the defaults.
+`policy.gates` = optional approval classes for BotHearth browser/file tools. Empty by default;
+an explicit list is a deliberate choice. `policy.strict_allowlist` = origins allowed in `mode: strict`.
+Password, OTP, passkey, CAPTCHA and force-human categories still stop the task when the list is empty.
 
 ## Config keys
 

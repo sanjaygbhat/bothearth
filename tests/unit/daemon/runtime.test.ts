@@ -386,6 +386,35 @@ describe("runtime probe", () => {
     assert.equal(s.images.shell.present, false);
     assert.equal(s.ai.cli_found, false);
   });
+
+  it("dockerLive probes docker only — no image inspect, no provider", async () => {
+    let providerCalls = 0;
+    const { p, runs } = probe({
+      providerStatus: async () => {
+        providerCalls += 1;
+        return "signed_in";
+      },
+    });
+    assert.equal(await p.dockerLive(), true);
+    assert.equal(providerCalls, 0);
+    assert.ok(runs.some((r) => r[1] === "version"));
+    assert.equal(
+      runs.some((r) => r[1] === "image"),
+      false,
+    );
+    assert.ok(runs.every((r) => r[0] === "docker"));
+  });
+
+  it("dockerLive is false when docker version fails", async () => {
+    const { p, runs } = probe({
+      run: async () => ({ stdout: "", stderr: "Cannot connect", code: 1 }),
+    });
+    assert.equal(await p.dockerLive(), false);
+    assert.equal(
+      runs.some((r) => r[1] === "image"),
+      false,
+    );
+  });
 });
 
 test("a probe or build child never inherits the daemon's secrets", () => {

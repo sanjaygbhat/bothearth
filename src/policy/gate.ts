@@ -1,16 +1,7 @@
-import type { Mode, PolicyGate, ToolName } from "../types/contracts.ts";
 import { originMatchesPattern } from "../protocol/origin.ts";
-import {
-  loadCategories,
-  matchForceHumanCategory,
-  type CategoriesFile,
-} from "./categories.ts";
-import {
-  hasCaptchaSignal,
-  hasPaymentSignal,
-  hasSecretEntrySignal,
-  type EffectSignals,
-} from "./signals.ts";
+import type { Mode, PolicyGate, ToolName } from "../types/contracts.ts";
+import type { CategoriesFile } from "./categories.ts";
+import type { EffectSignals } from "./signals.ts";
 import { loadTosRisk, matchTosRisk, type TosRiskFile } from "./tos.ts";
 
 export type GateDecision =
@@ -28,7 +19,6 @@ export type GateDecision =
        */
       origin?: string;
     }
-  | { decision: "force_human"; reason: string }
   | { decision: "deny"; reason: string };
 
 export interface OriginSets {
@@ -53,6 +43,12 @@ export interface GateContext {
   kill_switch?: boolean;
   /** Typed override for tos-risk `block` entries. */
   typed_tos_override?: boolean;
+  /**
+   * Optional approval classes that may return `require_approval`. Omitted = all
+   * armed (matching tests). Empty = none of them fire. kill_switch / ToS deny
+   * are not in this list and always evaluate.
+   */
+  enabled_gates?: readonly PolicyGate[];
 }
 
 /** Tools that can produce the same user-visible effect as each other. */
@@ -163,7 +159,6 @@ export function evaluateGate(ctx: GateContext): GateDecision {
     return { decision: "deny", reason: "kill_switch" };
   }
 
-  const categories = ctx.categories ?? loadCategories();
   const tos = ctx.tos ?? loadTosRisk();
   const signals = inferSignalsFromCall(ctx.call, ctx.signals);
   const origin = normalizeOrigin(ctx.origin);
@@ -174,36 +169,6 @@ export function evaluateGate(ctx: GateContext): GateDecision {
     (ctx.call.args.action === "list" || ctx.call.args.action === "select")
   ) {
     return { decision: "allow" };
-  }
-
-  // Force-human category list (versioned data)
-  const cat = matchForceHumanCategory(origin, categories);
-  if (cat && tool !== "browser_navigate" && isActLike(tool) && !READ_TOOLS.has(tool)) {
-    return {
-      decision: "force_human",
-      reason: `force_human_category:${cat.id}`,
-    };
-  }
-
-  // Observed secret / captcha / WebAuthn → force human on *interaction*
-  // tools only. Navigation to a login page must remain allowed so the agent
-  // can surface takeover; typing/clicking into the secret field is what blocks.
-  if (
-    EQUIVALENT_ACT_TOOLS.has(tool) &&
-    (hasSecretEntrySignal(signals) || hasCaptchaSignal(signals))
-  ) {
-    if (hasCaptchaSignal(signals)) {
-      return { decision: "force_human", reason: "captcha_iframe" };
-    }
-    if (signals.webauthn_prompt) {
-      return { decision: "force_human", reason: "webauthn_prompt" };
-    }
-    if (signals.password_field) {
-      return { decision: "force_human", reason: "password_field" };
-    }
-    if (signals.otp_field) {
-      return { decision: "force_human", reason: "otp_field" };
-    }
   }
 
   // ToS block — needs typed override
@@ -243,34 +208,40 @@ export function evaluateGate(ctx: GateContext): GateDecision {
 
   // Delete patterns
   if (signals.delete || tool === "files_delete") {
-    return approveOrDeny(ctx.mode, "delete", "delete_pattern");
+    const hit = approveOrDeny(ctx, "delete", "delete_pattern");
+    if (hit) return hit;
   }
 
   // Upload
   if (signals.file_upload || tool === "browser_upload") {
-    return approveOrDeny(ctx.mode, "upload", "file_upload");
+    const hit = approveOrDeny(ctx, "upload", "file_upload");
+    if (hit) return hit;
   }
 
   // External send
   if (signals.external_send) {
-    return approveOrDeny(ctx.mode, "external_send", "external_send");
+    const hit = approveOrDeny(ctx, "external_send", "external_send");
+    if (hit) return hit;
   }
 
-  // Payment / checkout
-  if (hasPaymentSignal(signals)) {
-    return approveOrDeny(ctx.mode, "payment", "payment_field");
+  // Checkout path: extra confirm if `payment` is armed. Card-field signals
+  // still reach the observation; they do not mint a hold.
+  if (signals.checkout_path) {
+    const hit = approveOrDeny(ctx, "payment", "checkout_path");
+    if (hit) return hit;
   }
 
   // Form submit / Enter to origin outside writable set
   if (signals.form_submit_origin !== undefined) {
     const dest = normalizeOrigin(signals.form_submit_origin ?? origin);
     if (!originInSet(dest, ctx.origin_sets.writable)) {
-      return approveOrDeny(
-        ctx.mode,
+      const hit = approveOrDeny(
+        ctx,
         "new_domain",
         `form_submit_new_origin:${dest}`,
         dest,
       );
+      if (hit) return hit;
     }
   }
 
@@ -287,13 +258,18 @@ export function evaluateGate(ctx: GateContext): GateDecision {
   if (tool === "shell_exec") {
     const cmd = String(ctx.call.args.command ?? "");
     if (/\b(passwd|ssh-keygen|openssl|security\s+add)\b/i.test(cmd)) {
-      return approveOrDeny(ctx.mode, "secret_entry", "shell_secret_pattern");
+      const hit = approveOrDeny(ctx, "secret_entry", "shell_secret_pattern");
+      if (hit) return hit;
     }
-    return approveOrDeny(ctx.mode, "external_send", "arbitrary_shell_command");
+    const send = approveOrDeny(ctx, "external_send", "arbitrary_shell_command");
+    if (send) return send;
+    return { decision: "allow" };
   }
 
   if (tool === "connector_call") {
-    return approveOrDeny(ctx.mode, "external_send", "unclassified_connector_effect");
+    const hit = approveOrDeny(ctx, "external_send", "unclassified_connector_effect");
+    if (hit) return hit;
+    return { decision: "allow" };
   }
 
   // Equivalent act primitives share the signal-based gates above. A plain
@@ -302,15 +278,20 @@ export function evaluateGate(ctx: GateContext): GateDecision {
   return { decision: "allow" };
 }
 
+function gateArmed(ctx: GateContext, gate: PolicyGate): boolean {
+  return ctx.enabled_gates === undefined || ctx.enabled_gates.includes(gate);
+}
+
 function approveOrDeny(
-  mode: Mode,
+  ctx: GateContext,
   gate: PolicyGate,
   reason: string,
   origin?: string,
-): GateDecision {
-  if (mode === "strict" && gate === "new_domain") {
+): GateDecision | null {
+  if (ctx.mode === "strict" && gate === "new_domain") {
     return { decision: "deny", reason };
   }
+  if (!gateArmed(ctx, gate)) return null;
   return { decision: "require_approval", reason, gate, ...(origin ? { origin } : {}) };
 }
 

@@ -6,9 +6,15 @@ import {
   createHomeView,
   EMPTY_RECENT,
   EXAMPLES,
+  featuredTask,
+  needsYouTitle,
   recentStatus,
   relativeTime,
+  taskNeedsYou,
+  taskTitle,
+  waitingForLabel,
 } from "../../../src/ui/home.ts";
+import type { TaskRow } from "../../../src/ui/task-view.ts";
 import type { RuntimeStatus } from "../../../src/ui/runtime.ts";
 import type { Connection } from "../../../src/ui/connection.ts";
 import { attention } from "../../../src/ui/native.ts";
@@ -65,17 +71,26 @@ const NO_AI = runtime({
   ],
 });
 
+interface ComputerChoice {
+  id: string;
+  name: string;
+  state: string;
+}
+
 interface Server {
   runtime: RuntimeStatus;
   tasks: Array<Record<string, unknown>>;
   takeovers?: Array<Record<string, unknown>>;
+  defaultComputerId?: string;
   failTakeovers?: boolean;
   posts: Array<{ url: string; body: unknown }>;
   fail?: "network" | number;
   session?: Record<string, unknown>;
   failModels?: number;
+  holdModels?: Promise<void>;
   modelChecks?: number;
   connections?: Partial<Record<"codex" | "claude", Connection>>;
+  computers?: { default_computer_id?: string | null; max_computers?: number; computers?: ComputerChoice[] };
   models?: { providers: Array<{ id: string; label: string; default_model: string; start_available?: boolean; connected?: boolean;
     connection_status?: Connection["status"]; limit?: Connection["limit"]; models: Array<{ id: string; label: string }> }> };
 }
@@ -98,6 +113,7 @@ function serve(server: Server) {
     }
     if (url === "/api/v1/models") {
       server.modelChecks = (server.modelChecks ?? 0) + 1;
+      if (server.holdModels) await server.holdModels;
       if (server.failModels) return Response.json({ message: "Model check unavailable" }, { status: server.failModels });
       if (server.models) return Response.json(server.models);
     }
@@ -108,9 +124,38 @@ function serve(server: Server) {
     if (url === "/api/v1/tasks" && method === "GET") {
       return Response.json({ tasks: server.tasks });
     }
+    const taskGet = /^\/api\/v1\/tasks\/([^/?]+)$/.exec(url);
+    if (taskGet && method === "GET") {
+      const task = server.tasks.find((row) => row.id === taskGet[1]);
+      if (!task) return Response.json({ error: "not_found" }, { status: 404 });
+      return Response.json({ task, steps: [] });
+    }
     if (url === "/api/v1/takeovers") {
       if (server.failTakeovers) return Response.json({ error: "unavailable" }, { status: 503 });
       return Response.json({ takeovers: server.takeovers ?? [] });
+    }
+    if (url === "/api/v1/computers" && method === "GET") {
+      return Response.json({
+        default_computer_id: server.computers?.default_computer_id ?? server.defaultComputerId ?? null,
+        will_create_default: !(server.computers?.default_computer_id ?? server.defaultComputerId),
+        max_computers: server.computers?.max_computers ?? 2,
+        computers: server.computers?.computers ?? [],
+      });
+    }
+    if (url === "/api/v1/computers" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "null"));
+      server.posts.push({ url, body });
+      const created = { id: "cmp_new", name: "New computer", state: "idle" };
+      server.computers = {
+        default_computer_id: created.id,
+        max_computers: server.computers?.max_computers ?? 2,
+        computers: [...(server.computers?.computers ?? []), created],
+      };
+      return Response.json({ computer: created }, { status: 201 });
+    }
+    if (url.endsWith("/default") && method === "POST" && url.includes("/api/v1/computers/")) {
+      server.posts.push({ url, body: null });
+      return Response.json({ default_computer_id: decodeURIComponent(url.split("/")[4] ?? "") });
     }
     if (url === "/api/v1/tasks" && method === "POST") {
       server.posts.push({ url, body: JSON.parse(String(init?.body ?? "null")) });
@@ -206,7 +251,7 @@ describe("task model choices", () => {
     } finally { t.teardown(); }
   });
 
-  it("keeps exact choices and the draft across a failed model check, then retries before posting", async () => {
+  it("keeps exact choices and the draft across a failed model check, then starts with that last known model", async () => {
     const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG };
     const t = await mount(server);
     try {
@@ -222,21 +267,114 @@ describe("task model choices", () => {
       server.failModels = 503;
       window.dispatchEvent(new Event("focus"));
       await settle(8);
-      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
-      startButton(t.dom).click();
-      await settle(2);
-      assert.equal(server.posts.length, 0);
+      assert.match(t.dom.root.querySelector(".home-model-hint")!.textContent, /Couldn’t load model choices.*last known model/);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
       assert.equal(custom.value, exactId);
       assert.equal(textarea(t.dom).value, "Read the documentation");
-      assert.match(t.dom.root.textContent, /Retry before starting/);
-      server.failModels = undefined;
-      t.dom.root.querySelector(".home-model-retry")!.click();
-      await settle(6);
-      assert.equal(model.value, "__custom__");
-      assert.equal(custom.value, exactId);
+      startButton(t.dom).click();
       startButton(t.dom).click();
       await settle(4);
+      assert.equal(server.posts.length, 1, "a second click while starting must not post twice");
       assert.equal((server.posts[0]!.body as Record<string, unknown>).model, exactId);
+    } finally { t.teardown(); }
+  });
+
+  it("queues a Start task click while model choices load and starts once they settle", async () => {
+    let release!: () => void;
+    const holdModels = new Promise<void>((resolve) => { release = resolve; });
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG, holdModels };
+    const t = await mount(server);
+    try {
+      textarea(t.dom).value = "Read the public documentation";
+      textarea(t.dom).fire("input");
+      const start = startButton(t.dom);
+      assert.equal(start.getAttribute("aria-disabled"), "true");
+      assert.equal(start.className.includes("primary"), false, "loading must not wear the live primary fill");
+      assert.match(t.dom.root.textContent, /Loading model choices…/);
+      start.click();
+      start.click();
+      await settle(4);
+      assert.equal(server.posts.length, 0, "the click must queue, not swallow, while choices are still loading");
+      assert.equal(start.textContent, "Waiting to start");
+      release();
+      await settle(8);
+      assert.equal(server.posts.length, 1, "queued clicks start once after choices settle");
+      assert.equal((server.posts[0]!.body as { goal: string }).goal, "Read the public documentation");
+    } finally {
+      release();
+      t.teardown();
+    }
+  });
+
+  it("does not post a Start queued while models load when a licence blocker later clears", async () => {
+    let release!: () => void;
+    const holdModels = new Promise<void>((resolve) => { release = resolve; });
+    const server: Server = { runtime: runtime({ task_start_available: false, blockers: [{
+      id: "licence_required", title: "Add your licence key", detail: "Get your key from your account.",
+      action: { kind: "open_settings", url: "#/settings/licence" },
+    }] }), tasks: [], posts: [], models: MODEL_CATALOG, holdModels };
+    const t = await mount(server);
+    try {
+      textarea(t.dom).value = "Read the public documentation";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal(server.posts.length, 0);
+      release();
+      await settle(8);
+      assert.equal(t.dom.hash(), "#/settings/licence");
+      assert.notEqual(startButton(t.dom).textContent, "Waiting to start");
+      assert.deepEqual(server.posts, []);
+      server.runtime = runtime();
+      window.dispatchEvent(new Event("bothearth:licence-changed"));
+      await settle(8);
+      assert.deepEqual(server.posts, [], "clearing a licence queued during model load must not post");
+    } finally {
+      release();
+      t.teardown();
+    }
+  });
+
+  it("does not post a Start queued while models load when a signed-out provider later connects", async () => {
+    let release!: () => void;
+    const holdModels = new Promise<void>((resolve) => { release = resolve; });
+    const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
+    Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "signed_out" });
+    const server: Server = { runtime: NO_AI, tasks: [], posts: [], models, holdModels,
+      session: { execution_mode: "codex", model: "gpt-6-astra" } };
+    const t = await mount(server);
+    try {
+      textarea(t.dom).value = "Read this public site";
+      textarea(t.dom).fire("input");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.equal(server.posts.length, 0);
+      release();
+      await settle(8);
+      assert.equal(t.dom.hash(), "#/settings/ai?pick=codex");
+      assert.deepEqual(server.posts, []);
+      Object.assign(models.providers[0]!, { connected: true, start_available: true, connection_status: "connected" });
+      server.runtime = runtime();
+      location.hash = "#/";
+      await settle(8);
+      assert.deepEqual(server.posts, [], "finishing sign-in after a first-load Start must not post");
+    } finally {
+      release();
+      t.teardown();
+    }
+  });
+
+  it("shows why model choices failed on first load and still starts with the default model", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], failModels: 503 };
+    const t = await mount(server);
+    try {
+      assert.match(t.dom.root.querySelector(".home-model-hint")!.textContent, /Couldn’t load model choices.*default model/);
+      textarea(t.dom).value = "Read a public page";
+      textarea(t.dom).fire("input");
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
+      startButton(t.dom).click();
+      await settle(4);
+      assert.deepEqual(server.posts[0]!.body, { goal: "Read a public page", capabilities: ["browser"] });
     } finally { t.teardown(); }
   });
 
@@ -414,6 +552,33 @@ describe("task model choices", () => {
     } finally { t.teardown(); }
   });
 
+  it("does not ask for sign-in when the selected provider cannot be checked during human control", async () => {
+    const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
+    Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "unknown" });
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models,
+      session: { execution_mode: "codex", model: "gpt-6-astra" } };
+    const t = await mount(server, { pill: true });
+    try {
+      const pill = t.dom.document.getElementById("tb-pill")!;
+      assert.match(t.dom.root.textContent, /Can’t check while you have control/);
+      assert.doesNotMatch(t.dom.root.textContent, /Sign in to Codex/);
+      assert.match(pill.getAttribute("aria-label") ?? "", /can’t check while you have control/i);
+      assert.doesNotMatch(pill.getAttribute("aria-label") ?? "", /sign-in required/);
+      textarea(t.dom).value = "Read a public page";
+      textarea(t.dom).fire("input");
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "true");
+      const action = t.dom.root.querySelector(".blocker-actions")!.querySelector("button")!;
+      assert.notEqual(action.textContent, "Sign in");
+
+      Object.assign(models.providers[0]!, { connected: true, start_available: true, connection_status: "connected" });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await settle(8);
+      assert.equal(startButton(t.dom).getAttribute("aria-disabled"), "false");
+      assert.doesNotMatch(pill.getAttribute("aria-label") ?? "", /can’t check while you have control|sign-in required/i);
+      assert.match(pill.getAttribute("aria-label") ?? "", /on your own plan|Model connection: Codex/);
+    } finally { t.teardown(); }
+  });
+
   it("refreshes selected-provider authentication automatically even while the global provider is ready", async () => {
     const models = structuredClone(MODEL_CATALOG) as NonNullable<Server["models"]>;
     Object.assign(models.providers[0]!, { connected: false, start_available: false, connection_status: "signed_out" });
@@ -479,9 +644,16 @@ function startButton(dom: Dom): FakeElement {
   return button;
 }
 
-async function mount(server: Server, options: { hash?: string; pill?: boolean } = {}) {
+async function mount(server: Server, options: { hash?: string; pill?: boolean; platform?: string } = {}) {
   resetSession();
   const dom = installDom(options);
+  if (options.platform) {
+    Object.defineProperty(globalThis.navigator, "platform", {
+      configurable: true,
+      writable: true,
+      value: options.platform,
+    });
+  }
   if (options.pill) {
     const pill = dom.document.createElement("button");
     pill.id = "tb-pill";
@@ -525,6 +697,13 @@ describe("home — the words on the screen", () => {
     assert.deepEqual(recentStatus("running", "resume_validating"), { word: "Returning control", tone: "run" });
     assert.deepEqual(recentStatus("running", "takeover_requested"), { word: "Waiting for you", tone: "warn" });
     assert.deepEqual(recentStatus("completed", "human"), { word: "Done", tone: "ok" });
+    assert.deepEqual(recentStatus("running", undefined, true), { word: "Waiting for you", tone: "warn" });
+    assert.equal(taskNeedsYou({ status: "running", awaiting_message: true }), true);
+    assert.equal(taskNeedsYou({ status: "running" }), false);
+    assert.equal(taskNeedsYou({ status: "running" }, "takeover_requested"), true);
+    assert.equal(taskNeedsYou({ status: "completed", awaiting_message: true }), false);
+    assert.equal(needsYouTitle("x".repeat(90)).length <= 81, true);
+    assert.equal(waitingForLabel("2026-09-07T11:55:00Z", Date.parse("2026-09-07T12:00:00Z")), "waiting for 5 min");
   });
 
   it("carries no jargon anywhere a person can read it", () => {
@@ -555,12 +734,44 @@ describe("home — the words on the screen", () => {
     }
   });
 
+  it("uses work-shaped chips without square-bracket placeholders", () => {
+    assert.equal(EXAMPLES.length, 3);
+    for (const text of EXAMPLES) assert.doesNotMatch(text, /\[[^\]]+\]/, text);
+    assert.match(EXAMPLES[0]!, /inbox/i);
+    assert.match(EXAMPLES[1]!, /invoice/i);
+    assert.match(EXAMPLES[2]!, /staging logs/i);
+  });
+
   it("says the shortest true thing about when a task ran", () => {
     const now = new Date("2026-09-07T12:00:00Z").getTime();
     assert.equal(relativeTime("2026-09-07T11:58:00Z", now), "2 min");
     assert.equal(relativeTime("2026-09-07T11:59:50Z", now), "just now");
     assert.equal(relativeTime("2026-09-07T09:00:00Z", now), "3 hr");
     assert.equal(relativeTime("not a date", now), "");
+  });
+
+  it("titles a row from the first line of the prompt", () => {
+    assert.equal(taskTitle("Find the flights\nThen book the cheapest"), "Find the flights");
+    assert.equal(taskTitle("   "), "Untitled task");
+    assert.equal(taskTitle(""), "Untitled task");
+  });
+
+  it("picks the live task, else the newest finished one", () => {
+    const row = (over: Partial<TaskRow> & Pick<TaskRow, "id" | "status">): TaskRow => ({
+      computer_id: "c",
+      goal: "Goal",
+      created_at: "2026-09-01T10:00:00.000Z",
+      max_steps: 60,
+      ...over,
+    });
+    assert.equal(featuredTask([]), null);
+    const running = row({ id: "live", status: "running" });
+    const done = row({ id: "old", status: "completed" });
+    assert.equal(featuredTask([done, running])?.task.id, "live");
+    assert.equal(featuredTask([done, running])?.label, "Current task");
+    assert.equal(featuredTask([row({ id: "paused", status: "paused" })])?.label, "Current task");
+    assert.equal(featuredTask([done])?.task.id, "old");
+    assert.equal(featuredTask([done])?.label, "Last task");
   });
 });
 
@@ -572,6 +783,14 @@ describe("home — what the blocker card says", () => {
       ai: NO_AI.ai,
     });
     assert.equal(blockerCard(both)?.key, "ai_not_connected");
+  });
+
+  it("offers Codex first when no model is connected", () => {
+    const card = blockerCard(NO_AI)!;
+    assert.equal(card.actions[0]?.label, "Use Codex");
+    assert.equal(card.actions[0]?.kind, "primary");
+    assert.equal(card.actions[1]?.label, "Use Claude");
+    assert.equal(card.actions[1]?.kind, "secondary");
   });
 
   it("names the engine the person actually installed", () => {
@@ -709,6 +928,8 @@ describe("home — on arrival", () => {
       const examples = m.dom.findAll(".example");
       assert.equal(examples.length, 3);
       assert.equal(examples[0]!.textContent, EXAMPLES[0]);
+      assert.match(m.dom.root.textContent, /keeps its logins/);
+      assert.doesNotMatch(m.dom.root.textContent, /Firecracker/i);
     } finally {
       m.teardown();
     }
@@ -726,32 +947,45 @@ describe("home — on arrival", () => {
       m.teardown();
     }
   });
+
+  it("shows Ctrl on the Start keycap on Linux", async () => {
+    const m = await mount({ runtime: runtime(), tasks: [], posts: [] }, { platform: "Linux x86_64" });
+    try {
+      const keys = m.dom.find(".taskbox-hint")!.querySelectorAll("kbd").map((node) => node.textContent);
+      assert.deepEqual(keys, ["Ctrl", "⏎"]);
+    } finally { m.teardown(); }
+  });
+
+  it("shows ⌘ on the Start keycap on Apple hardware", async () => {
+    const m = await mount({ runtime: runtime(), tasks: [], posts: [] }, { platform: "MacIntel" });
+    try {
+      const keys = m.dom.find(".taskbox-hint")!.querySelectorAll("kbd").map((node) => node.textContent);
+      assert.deepEqual(keys, ["⌘", "⏎"]);
+    } finally { m.teardown(); }
+  });
 });
 
 describe("home — starting a task", () => {
-  it("requires a real link for a starter and preserves a draft while choosing one", async () => {
-    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+  it("fills a work chip without auto-running and starts with subagents unchecked", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [], models: MODEL_CATALOG };
     const m = await mount(server);
     try {
       const box = textarea(m.dom);
       box.value = "Focus on customers who run a small business.";
       m.dom.findAll(".example")[0]!.click();
       assert.match(box.value, /^Focus on customers/);
-      assert.equal(box.value.slice(box.selectionStart, box.selectionEnd), "[website URL]");
+      assert.match(box.value, /inbox/i);
+      assert.doesNotMatch(box.value, /\[[^\]]+\]/);
+      assert.equal(server.posts.length, 0, "choosing an example does not start a task");
+      const orchestrator = m.dom.root.querySelector("#home-orchestrator") as unknown as HTMLInputElement;
+      assert.equal(orchestrator.checked, false);
       startButton(m.dom).click();
-      await settle();
-      assert.equal(server.posts.length, 0);
-      assert.match(m.dom.find(".taskbox-message")!.textContent, /Replace the selected placeholder/);
-      box.value = box.value.replace("[website URL]", "not-a-link");
-      startButton(m.dom).click();
-      await settle();
-      assert.equal(server.posts.length, 0);
-      assert.match(m.dom.find(".taskbox-message")!.textContent, /https:\/\//);
-      box.value = box.value.replace("not-a-link", "https://example.org");
-      startButton(m.dom).click();
-      await settle();
+      await settle(4);
       assert.equal(server.posts.length, 1);
-      assert.match(JSON.stringify(server.posts[0]!.body), /https:\/\/example.org/);
+      const body = server.posts[0]!.body as Record<string, unknown>;
+      assert.equal(body.execution_mode, "executor");
+      assert.equal(body.executor, undefined);
+      assert.match(String(body.goal), /inbox/i);
     } finally { m.teardown(); }
   });
 
@@ -830,6 +1064,308 @@ describe("home — starting a task", () => {
       m.teardown();
     }
   });
+
+  it("retries a starting-up error once and never says Connect Codex", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const m = await mount(server);
+    try {
+      const saved = globalThis.fetch;
+      let posts = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/v1/tasks" && (init?.method ?? "GET") === "POST") {
+          posts += 1;
+          server.posts.push({ url: String(input), body: JSON.parse(String(init?.body ?? "null")) });
+          if (posts === 1) {
+            return Response.json(
+              { error: "E_RUNTIME_STARTING", message: "BotHearth is still starting its runtime.",
+                status: "starting", retry_after_ms: 25 },
+              { status: 503 },
+            );
+          }
+          return Response.json({ task: { id: "task_new" } }, { status: 201 });
+        }
+        return saved(input, init);
+      }) as typeof fetch;
+
+      const box = textarea(m.dom);
+      box.value = "Book a table";
+      box.fire("input");
+      startButton(m.dom).click();
+      await settle(12);
+
+      assert.equal(posts, 1);
+      assert.match(m.dom.find(".taskbox-message")?.textContent ?? "", /BotHearth is still starting its runtime\. Trying again/);
+      assert.doesNotMatch(m.dom.root.textContent ?? "", /Connect Codex/);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await settle(12);
+      assert.equal(posts, 2);
+      assert.equal(location.hash, "#/tasks/task_new");
+      globalThis.fetch = saved;
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("shows Connect Codex only when start settles signed out", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const m = await mount(server);
+    try {
+      const saved = globalThis.fetch;
+      let posts = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/v1/tasks" && (init?.method ?? "GET") === "POST") {
+          posts += 1;
+          server.posts.push({ url: String(input), body: JSON.parse(String(init?.body ?? "null")) });
+          return Response.json(
+            { error: "E_PROVIDER_UNAVAILABLE", message: "Connect Codex before starting.",
+              status: "signed_out" },
+            { status: 503 },
+          );
+        }
+        return saved(input, init);
+      }) as typeof fetch;
+
+      const box = textarea(m.dom);
+      box.value = "Book a table";
+      box.fire("input");
+      startButton(m.dom).click();
+      await settle(12);
+
+      assert.match(m.dom.find(".taskbox-message")?.textContent ?? "", /Connect Codex before starting/);
+      assert.equal(posts, 1, "a settled signed-out start must not auto-retry");
+      globalThis.fetch = saved;
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("unmount resolves a start retry waiter instead of hanging", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const m = await mount(server);
+    const saved = globalThis.fetch;
+    let posts = 0;
+    let unmounted = false;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/v1/tasks" && (init?.method ?? "GET") === "POST") {
+          posts += 1;
+          server.posts.push({ url: String(input), body: JSON.parse(String(init?.body ?? "null")) });
+          return Response.json(
+            { error: "E_RUNTIME_STARTING", message: "BotHearth is still starting its runtime.",
+              status: "starting", retry_after_ms: 5_000 },
+            { status: 503 },
+          );
+        }
+        return saved(input, init);
+      }) as typeof fetch;
+
+      const box = textarea(m.dom);
+      box.value = "Book a table";
+      box.fire("input");
+      startButton(m.dom).click();
+      await settle(12);
+      assert.equal(posts, 1);
+      assert.match(m.dom.find(".taskbox-message")?.textContent ?? "", /Trying again/);
+      const began = Date.now();
+      m.teardown();
+      unmounted = true;
+      await settle(12);
+      assert.ok(Date.now() - began < 1_000, "unmount must resolve the waiter instead of waiting out retry_after_ms");
+      assert.equal(posts, 1, "unmount must not retry create-task");
+    } finally {
+      globalThis.fetch = saved;
+      if (!unmounted) m.teardown();
+    }
+  });
+
+  it("shows the named computer and login note when only one computer exists", async () => {
+    const server: Server = {
+      runtime: runtime(), tasks: [], posts: [],
+      computers: { default_computer_id: "cmp_a", max_computers: 2, computers: [{ id: "cmp_a", name: "My browser", state: "idle" }] },
+    };
+    const m = await mount(server);
+    try {
+      const picker = m.dom.find(".home-computer-picker");
+      assert.equal(picker?.hidden, false);
+      const select = m.dom.root.querySelector("#home-computer")!;
+      assert.equal(select.value, "cmp_a");
+      assert.match(select.textContent, /My browser/);
+      assert.match(m.dom.find(".home-computer-note")?.textContent ?? "", /keeps its logins/);
+      textarea(m.dom).value = "Book a table";
+      textarea(m.dom).fire("input");
+      startButton(m.dom).click();
+      await settle(8);
+      assert.deepEqual(server.posts[0]!.body, { goal: "Book a table", capabilities: ["browser"], computer_id: "cmp_a" });
+    } finally { m.teardown(); }
+  });
+
+  it("shows the computer picker when more than one computer exists and sends the chosen id", async () => {
+    const server: Server = {
+      runtime: runtime(), tasks: [], posts: [],
+      computers: {
+        default_computer_id: "cmp_a", max_computers: 2,
+        computers: [
+          { id: "cmp_a", name: "My browser", state: "idle" },
+          { id: "cmp_b", name: "Second", state: "idle" },
+        ],
+      },
+    };
+    const m = await mount(server);
+    try {
+      const picker = m.dom.find(".home-computer-picker");
+      assert.equal(picker?.hidden, false);
+      const select = m.dom.root.querySelector("#home-computer")!;
+      assert.equal(select.value, "cmp_a");
+      select.value = "cmp_b";
+      select.fire("change");
+      textarea(m.dom).value = "Use the other computer";
+      textarea(m.dom).fire("input");
+      startButton(m.dom).click();
+      await settle(8);
+      assert.equal((server.posts[0]!.body as { computer_id?: string }).computer_id, "cmp_b");
+    } finally { m.teardown(); }
+  });
+
+  it("shows the picker when the default computer is busy and offers a new computer", async () => {
+    const server: Server = {
+      runtime: runtime(), tasks: [], posts: [],
+      computers: {
+        default_computer_id: "cmp_a", max_computers: 2,
+        computers: [{ id: "cmp_a", name: "My browser", state: "human-hold" }],
+      },
+    };
+    const m = await mount(server);
+    try {
+      assert.equal(m.dom.find(".home-computer-picker")?.hidden, false);
+      const select = m.dom.root.querySelector("#home-computer")!;
+      const fresh = select.children.find((option) => option.value === "__new__");
+      assert.ok(fresh);
+      select.value = "__new__";
+      select.fire("change");
+      await settle(8);
+      assert.ok(server.posts.some((post) => post.url === "/api/v1/computers"));
+      assert.match(m.dom.find(".home-computer-note")?.textContent ?? "", /must sign in to the model provider first/);
+      assert.equal(m.dom.find(".home-computer-note a")?.getAttribute("href"), "#/settings/ai");
+      assert.equal(m.dom.find(".home-computer-note a")?.textContent, "Settings → Model connection");
+    } finally { m.teardown(); }
+  });
+
+  it("says the exact computer maximum when no idle computer remains", async () => {
+    const server: Server = {
+      runtime: runtime(), tasks: [], posts: [],
+      computers: {
+        default_computer_id: "cmp_a", max_computers: 2,
+        computers: [
+          { id: "cmp_a", name: "My browser", state: "human-hold" },
+          { id: "cmp_b", name: "Second", state: "running" },
+        ],
+      },
+    };
+    const m = await mount(server);
+    try {
+      assert.equal(m.dom.find(".home-computer-picker")?.hidden, false);
+      const select = m.dom.root.querySelector("#home-computer")!;
+      assert.equal(select.children.some((option) => option.value === "__new__"), false);
+      assert.equal(m.dom.find(".home-computer-note")?.textContent, "You already have 2 computers, the maximum.");
+    } finally { m.teardown(); }
+  });
+
+  it("names the holding task and offers open, resume, stop and return control", async () => {
+    const server: Server = { runtime: runtime(), tasks: [], posts: [] };
+    const m = await mount(server);
+    try {
+      const saved = globalThis.fetch;
+      const extras: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "/api/v1/tasks" && method === "POST") {
+          return Response.json(
+            {
+              error: "E_STATE",
+              message: "“Finish signing in to the airline” still has this computer. Open it to resume, stop it, or return control before starting another.",
+              task_id: "task_held",
+              takeover_id: "tk_held",
+            },
+            { status: 409 },
+          );
+        }
+        if (method === "POST" && (url.includes("/resume") || url.includes("/cancel") || url.includes("/release"))) {
+          extras.push(url);
+          return Response.json({ ok: true, takeover: { state: "agent" } });
+        }
+        return saved(input, init);
+      }) as typeof fetch;
+
+      const box = textarea(m.dom);
+      box.value = "Something else";
+      box.fire("input");
+      box.fire("keydown", { key: "Enter", metaKey: true });
+      await settle(8);
+
+      const message = m.dom.find(".taskbox-message")!;
+      assert.match(message.textContent, /Finish signing in to the airline/);
+      assert.equal(message.querySelector("a")?.getAttribute("href"), "#/tasks/task_held");
+      assert.equal(message.querySelector("a")?.textContent, "Open it");
+      const labels = message.querySelectorAll("button").map((node) => node.textContent);
+      assert.deepEqual(labels, ["Resume it", "Stop it", "Return control"]);
+      message.querySelectorAll("button").find((node) => node.textContent === "Return control")!.click();
+      await settle(8);
+      assert.deepEqual(extras, ["/api/v1/takeover/tk_held/release"]);
+      assert.equal(m.dom.hash(), "#/tasks/task_held");
+      globalThis.fetch = saved;
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("shows Open it and Return control from the takeovers list without a 409", async () => {
+    const extras: string[] = [];
+    const server: Server = {
+      runtime: runtime(),
+      tasks: [{
+        id: "task_held",
+        computer_id: "cmp_default",
+        goal: "Open https://github.com/login and sign in",
+        status: "cancelled",
+        created_at: "2026-09-11T07:02:14.618Z",
+      }],
+      takeovers: [{
+        id: "tk_held",
+        computer_id: "cmp_default",
+        task_id: "task_held",
+        state: "human",
+      }],
+      posts: [],
+    };
+    const m = await mount(server);
+    try {
+      const saved = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (method === "POST" && url.includes("/release")) {
+          extras.push(url);
+          return Response.json({ ok: true, takeover: { state: "agent" } });
+        }
+        return saved(input, init);
+      }) as typeof fetch;
+      await settle(8);
+      const message = m.dom.find(".taskbox-message")!;
+      assert.match(message.textContent, /still holds this computer/);
+      assert.match(message.textContent, /Open https:\/\/github.com\/login/);
+      assert.equal(message.querySelector("a")?.textContent, "Open it");
+      assert.equal(message.querySelector("a")?.getAttribute("href"), "#/tasks/task_held");
+      const labels = message.querySelectorAll("button").map((node) => node.textContent);
+      assert.deepEqual(labels, ["Return control"]);
+      message.querySelectorAll("button").find((node) => node.textContent === "Return control")!.click();
+      await settle(8);
+      assert.deepEqual(extras, ["/api/v1/takeover/tk_held/release"]);
+      globalThis.fetch = saved;
+    } finally {
+      m.teardown();
+    }
+  });
 });
 
 describe("home — a blocker never takes the box away", () => {
@@ -892,9 +1428,13 @@ describe("home — a blocker never takes the box away", () => {
     try {
       const card = m.dom.find(".blocker")!;
       assert.match(card.textContent, /Connect your model account/);
-      const use = m.dom.findAll(".blocker-actions .btn").find((b) => b.textContent === "Use Claude")!;
-      use.click();
-      assert.match(location.hash, /^#\/settings\/ai/);
+      const buttons = m.dom.findAll(".blocker-actions .btn");
+      assert.equal(buttons[0]!.textContent, "Use Codex");
+      assert.match(buttons[0]!.className, /\bprimary\b/);
+      assert.equal(buttons[1]!.textContent, "Use Claude");
+      assert.doesNotMatch(buttons[1]!.className, /\bprimary\b/);
+      buttons[0]!.click();
+      assert.equal(location.hash, "#/settings/ai?pick=codex");
     } finally {
       m.teardown();
     }
@@ -1004,8 +1544,60 @@ describe("home — Recent", () => {
     try {
       assert.equal(m.dom.find(".recent-empty")?.textContent, EMPTY_RECENT);
       assert.equal(m.dom.findAll(".recent-row").length, 0);
+      assert.equal(m.dom.find(".home-now"), null, "no current/last card before any task exists");
     } finally {
       m.teardown();
+    }
+  });
+
+  it("keeps a one-click card for the live task, and for the last one when they have all finished", async () => {
+    const running = {
+      id: "t1",
+      goal: "Find the 3 cheapest direct flights\nThen book the morning one",
+      status: "running",
+      created_at: new Date(Date.now() - 120_000).toISOString(),
+      computer_id: "c",
+      max_steps: 60,
+    };
+    const m = await mount({ runtime: runtime(), tasks: [running, ...tasks.slice(1)], posts: [] });
+    try {
+      const card = m.dom.find(".home-now")!;
+      assert.match(card.textContent, /^Current task/);
+      assert.match(card.textContent, /Working · 2 min/);
+      assert.equal(card.querySelector(".recent-title")?.textContent, "Find the 3 cheapest direct flights");
+      assert.doesNotMatch(card.textContent, /Then book the morning one/);
+      assert.equal(card.getAttribute("href"), "#/tasks/t1");
+      assert.equal(m.dom.findAll(".home-now").length, 1);
+    } finally {
+      m.teardown();
+    }
+
+    const waiting = await mount({
+      runtime: runtime(),
+      tasks: [{ ...running, id: "hold", status: "paused", goal: "Sign in at the airline" }],
+      posts: [],
+    });
+    try {
+      const card = waiting.dom.find(".home-now")!;
+      assert.match(card.textContent, /^Current task/);
+      assert.match(card.textContent, /Waiting for you/);
+      assert.equal(card.getAttribute("href"), "#/tasks/hold");
+    } finally {
+      waiting.teardown();
+    }
+
+    const finished = await mount({
+      runtime: runtime(),
+      tasks: tasks.filter((task) => task.status !== "running"),
+      posts: [],
+    });
+    try {
+      const card = finished.dom.find(".home-now")!;
+      assert.match(card.textContent, /^Last task/);
+      assert.match(card.textContent, /Done · yesterday/);
+      assert.equal(card.getAttribute("href"), "#/tasks/t2");
+    } finally {
+      finished.teardown();
     }
   });
 
@@ -1037,6 +1629,95 @@ describe("home — Recent", () => {
     try {
       assert.match(m.dom.findAll(".recent-row")[0]!.textContent, /Active · 2 min/);
       assert.match(m.dom.findAll(".recent-row")[1]!.textContent, /Done/);
+    } finally {
+      m.teardown();
+    }
+  });
+});
+
+describe("home — a pending job is unmissable", () => {
+  it("renders a Needs you banner and Open the task link when the model is awaiting a message", async () => {
+    attention.sync([]);
+    const waiting = {
+      id: "task_d99aabf980027ec16e187460",
+      goal: "Review the checkout flow and tell me what is stuck",
+      status: "running",
+      awaiting_message: true,
+      last_assistant: "I need you to sign in at the airline before I can continue.",
+      created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      computer_id: "c",
+      max_steps: 60,
+    };
+    const m = await mount({ runtime: runtime(), tasks: [waiting], posts: [] });
+    try {
+      const banner = m.dom.find(".home-needs-you")!;
+      assert.match(banner.textContent, /Needs you/);
+      assert.match(banner.textContent, /Review the checkout flow and tell me what is stuck/);
+      assert.match(banner.textContent, /I need you to sign in at the airline/);
+      assert.match(banner.textContent, /waiting for 5 min/);
+      const link = [...banner.querySelectorAll("a")].find((node) => node.textContent === "Open the task");
+      assert.ok(link, "banner carries Open the task");
+      assert.equal(link!.getAttribute("href"), "#/tasks/task_d99aabf980027ec16e187460");
+      const order = m.dom.all();
+      const bannerAt = order.indexOf(banner);
+      const boxAt = order.indexOf(m.dom.find(".taskbox")!);
+      assert.ok(bannerAt >= 0 && bannerAt < boxAt, "banner sits above the task box");
+      assert.match(m.dom.find(".home-now")!.textContent, /Waiting for you/);
+      assert.doesNotMatch(m.dom.find(".home-now")!.textContent, /Working/);
+      assert.equal(document.title, "● Needs you — BotHearth");
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("does not render Needs you for a plain running task", async () => {
+    attention.sync([]);
+    const running = {
+      id: "t1",
+      goal: "Find the 3 cheapest direct flights",
+      status: "running",
+      created_at: new Date(Date.now() - 120_000).toISOString(),
+      computer_id: "c",
+      max_steps: 60,
+    };
+    const m = await mount({ runtime: runtime(), tasks: [running], posts: [] });
+    try {
+      assert.equal(m.dom.find(".home-needs-you"), null);
+      assert.doesNotMatch(m.dom.root.textContent ?? "", /Needs you/);
+      const card = m.dom.find(".home-now")!;
+      assert.match(card.textContent, /Working/);
+      assert.equal(card.getAttribute("href"), "#/tasks/t1");
+      assert.notEqual(document.title, "● Needs you — BotHearth");
+    } finally {
+      m.teardown();
+    }
+  });
+
+  it("titles the window Needs you while a takeover is waiting", async () => {
+    attention.sync([]);
+    const running = {
+      id: "hold",
+      goal: "Sign in at the airline",
+      status: "running",
+      created_at: new Date(Date.now() - 180_000).toISOString(),
+      computer_id: "c",
+      max_steps: 60,
+    };
+    const m = await mount({
+      runtime: runtime(),
+      tasks: [running],
+      posts: [],
+      takeovers: [{ id: "tk1", task_id: "hold", computer_id: "c", state: "takeover_requested" }],
+    });
+    try {
+      const banner = m.dom.find(".home-needs-you")!;
+      assert.match(banner.textContent, /Needs you/);
+      assert.equal(
+        [...banner.querySelectorAll("a")].find((node) => node.textContent === "Open the task")?.getAttribute("href"),
+        "#/tasks/hold",
+      );
+      assert.match(m.dom.find(".home-now")!.textContent, /Waiting for you/);
+      assert.equal(document.title, "● Needs you — BotHearth");
     } finally {
       m.teardown();
     }

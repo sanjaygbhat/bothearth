@@ -61,6 +61,8 @@ describe("live-view frame header", () => {
     };
     const raw = encodeControlMessage(msg);
     assert.deepEqual(decodeControlMessage(raw), msg);
+    const producer = { v: 1 as const, t: "producer" as const, status: "failed" as const, reason: "exit 1" };
+    assert.deepEqual(decodeControlMessage(encodeControlMessage(producer)), producer);
   });
 
   it("liveRelayMethod maps UI t=key|text|pointer (not type)", async () => {

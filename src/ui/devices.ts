@@ -13,6 +13,7 @@
  */
 
 import { apiDelete, apiGet, apiPost } from "./api.ts";
+import { modelbotNative } from "./native.ts";
 import { appendTextChild } from "./safe.ts";
 
 const REMOTE_GUIDE =
@@ -449,6 +450,14 @@ function signedInUntil(iso: string): string {
   return sameDay ? `${time} today` : `${time} on ${when.toLocaleDateString(undefined, { weekday: "long" })}`;
 }
 
+/**
+ * The Mac shell is an app you reopen; a browser is a link the daemon minted,
+ * and the daemon may not even be on a Mac. Both surfaces load this same file.
+ */
+function thisMachine(): string {
+  return modelbotNative.isNative ? "this Mac" : "this computer";
+}
+
 /** Render the Devices section into `pane`. Returns a disposer. */
 export function renderDevices(pane: HTMLElement): () => void {
   let disposed = false;
@@ -561,7 +570,7 @@ export function renderDevices(pane: HTMLElement): () => void {
     guide.hidden = reachable;
     lede.textContent = reachable
       ? "Your phone can watch a task and take control of BotHearth on this host. Task content and live frames are sent to the paired device over your private connection."
-      : "Your phone needs a private HTTPS address to reach this Mac. A link that only works on this computer will not open on a phone — set one up first, then come back.";
+      : `Your phone needs a private HTTPS address to reach ${thisMachine()}. A link that only works on this computer will not open on a phone — set one up first, then come back.`;
 
     list.replaceChildren();
     const devices = inventory.devices ?? [];
@@ -623,7 +632,7 @@ export function renderDevices(pane: HTMLElement): () => void {
         const remaining = Date.parse(invitation.expires_at) - Date.now();
         if (url.protocol !== "https:" || remaining <= 0 || remaining > PAIRING_TTL_MS + 1000) {
           throw new Error(
-            "That link cannot be made right now. Give this Mac a private HTTPS address, then try again.",
+            `That link cannot be made right now. Give ${thisMachine()} a private HTTPS address, then try again.`,
           );
         }
         link.value = url.href;

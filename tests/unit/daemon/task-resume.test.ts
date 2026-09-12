@@ -16,6 +16,7 @@ test("an approval timeout pauses the task and resume carries the transcript on",
     host: "127.0.0.1", port: 0, mcpToken: "resume-mcp", bootstrapToken: "resume-boot",
     workspaceRoot: mkdtempSync(join(tmpdir(), "mb-resume-")),
     approvalTtlSec: 1,
+    enabledGates: ["new_domain"],
     agentLoop: {
       model: "test", mode: "supervised",
       declaredOrigins: { readable: ["https://example.com"], writable: [] },

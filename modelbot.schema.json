@@ -9,6 +9,11 @@
     "version": {
       "const": 1
     },
+    "config_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Template generation stamp written by init. Absent means an older template; load treats old-template pins as unset."
+    },
     "bind": {
       "type": "string"
     },
@@ -52,6 +57,7 @@
       "properties": {
         "gates": {
           "type": "array",
+          "description": "Optional MCP-tool approval gates. Empty by default: tasks do not stop for detected sends, uploads, deletes, checkout confirms or new-site form submits. Set the full list to ask first. Password, OTP, passkey, CAPTCHA, payment-card entry and force-human categories still stop the task. The payment class is an extra confirm for checkout without a card field.",
           "items": {
             "type": "string",
             "enum": [
@@ -107,13 +113,15 @@
           "type": "string"
         },
         "memory": {
-          "type": "string"
+          "type": "string",
+          "description": "Browser container memory limit. When set, docker --memory and compose mem_limit use this value; otherwise 4g. Keep enough Docker VM memory for this plus sandbox shell memory plus 1 GiB; bothearth doctor warns when MemTotal is below that."
         },
         "cpus": {
           "type": "number"
         },
         "shm_size": {
-          "type": "string"
+          "type": "string",
+          "description": "Browser container /dev/shm size. When set, docker --shm-size and compose shm_size use this value; otherwise 2g."
         },
         "max_computers": {
           "type": "integer",
@@ -144,7 +152,8 @@
       "properties": {
         "max_tabs": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Maximum open browser tabs (default 20). Close a tab that is no longer needed when at the cap."
         },
         "default_tabs": {
           "type": "integer",
@@ -171,7 +180,8 @@
       "properties": {
         "max_steps": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 0,
+          "description": "Steps the API-adapter loop (src/daemon/agent-loop.ts) may take; each step is a paid API call. 0 (the default) means no cap. Native Codex and Claude Code tasks do not use this cap — they run until the work is done, the user stops them, or the provider's own usage limit pauses them. Loop detection (agent.loop_identical) is separate and still applies to the API-adapter loop."
         },
         "loop_identical": {
           "type": "integer",
@@ -184,12 +194,12 @@
         "spend_cap_usd": {
           "type": "number",
           "minimum": 0,
-          "description": "What one task is given when the request names no budget."
+          "description": "What one API-adapter task is given when the request names no budget. 0 (the default) means no cap. Native Codex and Claude Code tasks have no BotHearth spend cap; the MCP tool-call proxy is an estimate, not a bill."
         },
         "spend_cap_max_usd": {
           "type": "number",
           "minimum": 0,
-          "description": "The most a task request or a resume may ask for; above it the daemon answers E_LIMIT."
+          "description": "The most a task request or a resume may ask for; above it the daemon answers E_LIMIT. 0 (the default) means no maximum."
         },
         "max_runtime_sec": {
           "type": "integer",

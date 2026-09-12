@@ -5,7 +5,8 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { spawnSync } from "node:child_process";
@@ -17,6 +18,7 @@ import {
   composeConfigArgs,
   DEFAULT_LIMITS,
 } from "../../../src/sandbox/index.ts";
+import { toFlagOpts } from "../../../src/sandbox/lifecycle.ts";
 
 const SECCOMP = "./sandbox/seccomp-chromium.json";
 const WS = "/home/user/ModelBot/computers/demo/workspace";
@@ -50,7 +52,8 @@ describe("product compose file", () => {
     };
     assert.equal(doc.services.browser!.read_only, true);
     assert.deepEqual(doc.services.browser!.cap_drop, ["ALL"]);
-    assert.equal(doc.services.browser!.shm_size, "1g");
+    assert.equal(doc.services.browser!.shm_size, DEFAULT_LIMITS.browserShm);
+    assert.equal(doc.services.browser!.mem_limit, DEFAULT_LIMITS.browserMemory);
     assert.ok(
       (doc.services.browser!.security_opt as string[]).some((s) =>
         s.includes("seccomp="),
@@ -82,5 +85,31 @@ describe("product compose file", () => {
     });
     assert.equal(r.status, 0, r.stderr || r.stdout);
     assert.ok((r.stdout ?? "").includes("modelbot-composeunit-browser"));
+  });
+});
+
+describe("yaml sandbox limits", () => {
+  it("yaml sandbox.memory and shm_size reach compose limits", () => {
+    const root = mkdtempSync(join(tmpdir(), "mb-n04-limits-"));
+    const ws = join(root, "workspace");
+    mkdirSync(ws);
+    const cfg = join(root, "modelbot.yaml");
+    writeFileSync(cfg, "sandbox:\n  memory: 8g\n  shm_size: 3g\n");
+    const prev = process.env.MODELBOT_CONFIG;
+    process.env.MODELBOT_CONFIG = cfg;
+    try {
+      const fo = toFlagOpts("demo", ws, {});
+      assert.equal(fo.limits?.browserMemory, "8g");
+      assert.equal(fo.limits?.browserShm, "3g");
+      const args = browserCreateArgs(fo);
+      assert.equal(args[args.indexOf("--memory") + 1], "8g");
+      assert.equal(args[args.indexOf("--shm-size") + 1], "3g");
+      const lim = { ...DEFAULT_LIMITS, ...fo.limits };
+      assert.equal(lim.browserMemory, "8g");
+      assert.equal(lim.browserShm, "3g");
+    } finally {
+      if (prev === undefined) delete process.env.MODELBOT_CONFIG;
+      else process.env.MODELBOT_CONFIG = prev;
+    }
   });
 });

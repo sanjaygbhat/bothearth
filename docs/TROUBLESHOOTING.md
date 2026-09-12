@@ -4,6 +4,10 @@ Most of what goes wrong happens before the first task runs, and BotHearth tells 
 
 Command-line examples use `bothearth <command>`, which is on your PATH after `npm ci && npm run build && npm link`. Without the link, run them as `node dist/cli/index.js <command>` from the checkout. Public npm installation is not a verified path yet.
 
+## Where are the logs
+
+Structured daemon logs append to `<data_dir>/logs/daemon.log` (`~/ModelBot/logs/daemon.log` by default; `bothearth doctor` prints the resolved path).
+
 ## It will not start
 
 ### "BotHearth stopped and couldn't get going again. It tried 3 times."
@@ -104,15 +108,13 @@ Use the page’s retry action after a temporary connection failure. A failed loa
 
 Expected on any build that is not properly code-signed, which includes every build from this checkout. macOS refuses notification permission to an ad-hoc signed app, and the log records `notifications denied by the user — not posting`. No entitlement or code change fixes it; it needs a Developer ID certificate, and [apps/macos/README.md](../apps/macos/README.md) explains how to build with one.
 
-Everything else in that loop still works: the dock badge, the dock bounce, the menu-bar item flipping to **Needs you**, and the card in the window. An approval you never answer times out after 15 minutes and pauses the task, so a backgrounded window costs you a wait rather than the work — press **Resume** and it carries on. Until signing is in place, keep the window visible for tasks you expect to be asked about.
+Everything else in that loop still works: the dock badge, the dock bounce, the menu-bar item flipping to **Needs you**, and the card in the window. Review prompts are off by default. Settings → Sensitive actions → **Ask before sensitive actions** turns them on or off and writes `policy.gates` in `modelbot.yaml`. Expand the section to choose which gates fire, and to set API-adapter max tool calls and spend cap (0 = no limit); native Codex and Claude Code tasks have no BotHearth cap. A yaml that still lists `policy.gates` from an earlier install keeps asking until you turn the checkbox off or empty the list. If those prompts are on, an unanswered one times out after 15 minutes and pauses the task, so a backgrounded window costs you a wait rather than the work — press **Resume** and it carries on. Password, OTP, passkey, CAPTCHA and payment-card fields always pause for Take control; they are not gates. Checkout steps without a card field are the optional payment prompt. Until signing is in place, keep the window visible for tasks you expect to be asked about.
 
 In a plain browser the fallback is Web Notifications, which need no signature.
 
 ## "This browser or app may not be secure" when you sign in to Google
 
-Google or another site may reject a browser session even when you are driving it. BotHearth uses Chromium in a separate desktop, and does not guarantee that a site's login or anti-automation checks will accept it.
-
-Take control and follow the site's supported sign-in or recovery steps. If it still fails, retain the visible error and the site's public hostname for a report; do not share passwords, codes, cookies or a full login URL containing tokens. Repeatedly creating browsers or deleting the profile is not a verified fix.
+BotHearth's browser is configured so Google's sign-in accepts a person typing during Take control. If that message still appears, note the visible error and the site's hostname, do not share passwords, codes, cookies, or token URLs, and report it.
 
 Passkeys and physical security keys generally are not available to the container desktop. Use another account-approved factor if the site offers one. Model-provider device sign-in in Settings is separate from signing into a website in the bot's browser.
 
@@ -125,7 +127,7 @@ Passkeys and physical security keys generally are not available to the container
 | Take control shows a blank computer | Current builds initialize the desktop before acknowledging control and keep screen subscriptions across early start/stop transitions. Keep the task and profile, reopen its view, and check image readiness. If it persists, retain the task ID and visible error; do not erase the computer to hide the failure. |
 | Another task is using the browser | Open that task to continue or stop it. Check **Settings → Computers** for the computer's status before starting another task. |
 | A site blocks it, or loops a CAPTCHA | Press **Take control** and do that step yourself. BotHearth does not bypass site defenses. |
-| It asks you to take control and there is nothing to do | Read the stated reason. If no private step is needed, press **Not needed, continue**. Opening a public page in normal mode does not require destination approval. |
+| It asks you to take control and there is nothing to do | Read the stated reason. If no private step is needed, press **Not needed, continue**. Review prompts are off by default; opening a public page does not require a destination prompt. |
 | A link opens nothing | Initial popups are blocked before contact. Ask it to navigate directly, or take control. |
 | Control will not go back | A page still showing a password field keeps human control until it is safe. Finish or leave that step, then press **Give control back** again. |
 | **Couldn't finish**, or a stopped task with a partial result | Keep the result and check which actions already happened before starting another. A `fail` or `cancelled` outcome is not success. |
@@ -137,16 +139,15 @@ Browsers paused for inactivity wake on the next tool call or when you open the l
 
 ### The task says it is paused
 
-A paused task retains its computer, transcript and saved files. Read the reason, review the current page, then choose **Resume** when appropriate. External pages and unfinished actions may have changed; resumption does not guarantee an exact replay of a website step.
+A paused task retains its computer, transcript and saved files. Read the reason, review the current page, then choose **Resume** when appropriate. External pages and unfinished actions may have changed; resumption is not an exact replay of a website step.
 
 | Why it paused | What to do |
 |---|---|
-| You did not answer an approval | Answer it if it is still on screen, then **Resume**. Approvals time out after 15 minutes; change that with `policy.approval_ttl_sec` in `modelbot.yaml` |
+| You did not answer an optional review prompt | Answer it if it is still on screen, then **Resume**. Those prompts exist when **Settings → Sensitive actions → Ask before sensitive actions** is on, or when `modelbot.yaml` still lists `policy.gates`. Turn the checkbox off (or empty the list) to stop them. They time out after 15 minutes; change that with `policy.approval_ttl_sec` in `modelbot.yaml` |
 | Human control lapsed | Ten minutes without input leaves control paused, with model capture blocked. Renew control to finish the private step, then explicitly give it back; an ordinary Resume does not approve exposing an unfinished private step. |
 | It stopped making progress | Standalone adapters use `agent.stall_sec`. Native Codex/Claude tasks retain their CLI's own execution loop; do not assume quiet model output means a stalled task. Read its actual status before intervening. |
-| It ran out of steps | The step ceiling is 400 (`agent.max_steps`). The task offers **Resume with more steps**; a task that keeps hitting this usually needs to be asked for something narrower |
+| Your model subscription reached a usage limit | There is no BotHearth spend cap or call cap. When the provider pauses the task, **Resume** after the account allows more work. **Settings → Usage** shows a tool-use estimate, not a bill. |
 | It repeated the same step | Standalone adapters apply `agent.loop_identical`; native sessions use their own tool loop. Review the repeated action and message the bot or take control if the site needs you. |
-| It ran out of budget | The default internal estimate limit is $20. **Resume with a higher budget** permits more work; `agent.spend_cap_usd` and `agent.spend_cap_max_usd` configure the limits. **Settings → Usage** shows estimates, without a spending-maximum control. These estimates do not cap the model provider's bill. |
 
 A successful native turn can leave a conversation open for your answer. Reply in task chat when the model asks a question. During human control, guest model processes and their tool children stay frozen, so queued messages reach the model only after you return control. A startup interrupted by takeover can recover automatically only before a native thread or any native output exists; established work is not blindly restarted.
 

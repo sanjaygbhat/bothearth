@@ -12,11 +12,16 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import {
+  BROWSER_RESTARTED_MESSAGE,
   BrowserSession,
   clearStaleSingletons,
+  isCrashedTarget,
   launchWithLockRecovery,
+  withCrashedTargetRetry,
+  withFontLoadRetry,
 } from "../../../computer-server/src/browser/session.ts";
 import type { ServerState } from "../../../computer-server/src/dispatch.ts";
+import { createState, dispatch } from "../../../computer-server/src/dispatch.ts";
 import { closeBrowser, installShutdown } from "../../../computer-server/src/rpc-loop.ts";
 import { filesRead } from "../../../computer-server/src/shell/tools.ts";
 
@@ -249,6 +254,87 @@ it("clears the lock and retries once when Chromium reports the profile in use", 
   );
 });
 
+it("retries a screenshot once when Playwright waits for fonts to load", async () => {
+  let attempts = 0;
+  const buf = await withFontLoadRetry(async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new Error("page.screenshot: Timeout 30000ms exceeded.\nwaiting for fonts to load");
+    }
+    return Buffer.from("ok");
+  });
+  assert.equal(buf.toString(), "ok");
+  assert.equal(attempts, 2);
+
+  await assert.rejects(
+    withFontLoadRetry(async () => {
+      throw new Error("no such executable");
+    }),
+    { message: "no such executable" },
+  );
+
+  let twice = 0;
+  await assert.rejects(
+    withFontLoadRetry(async () => {
+      twice += 1;
+      throw new Error("waiting for fonts to load");
+    }),
+    /waiting for fonts to load/,
+  );
+  assert.equal(twice, 2);
+
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  let pageShots = 0;
+  let locatorShots = 0;
+  const locator = {
+    count: async () => 1,
+    screenshot: async () => {
+      locatorShots += 1;
+      if (locatorShots === 1) throw new Error("locator.screenshot: waiting for fonts to load");
+      return jpeg;
+    },
+  };
+  const page = {
+    isClosed: () => false,
+    evaluate: async (_fn: unknown, selectors?: unknown) => (selectors ? [] : { x: 0, y: 0 }),
+    viewportSize: () => ({ width: 1280, height: 720 }),
+    locator: () => locator,
+    screenshot: async () => {
+      pageShots += 1;
+      if (pageShots === 1) throw new Error("page.screenshot: waiting for fonts to load");
+      return jpeg;
+    },
+  };
+  const session = new BrowserSession();
+  session.page = page as never;
+  session.snaps.set("snap", {
+    id: "snap",
+    refs: new Set(["e1"]),
+    bindings: new Map(),
+    page: page as never,
+  });
+
+  const pageShot = await session.screenshot({
+    full_page: false,
+    max_width: null,
+    max_height: null,
+    snapshot_id: null,
+    ref: null,
+  });
+  assert.equal(pageShot.ok, true);
+  assert.equal(pageShots, 2);
+
+  const refShot = await session.screenshot({
+    full_page: false,
+    max_width: null,
+    max_height: null,
+    snapshot_id: "snap",
+    ref: "e1",
+  });
+  assert.equal(refShot.ok, true);
+  assert.equal(locatorShots, 2);
+});
+
 it("closes the browser on SIGTERM before the process exits, and does not wait forever", async () => {
   let closed = false;
   let exited: number | null = null;
@@ -278,3 +364,397 @@ it("closes the browser on SIGTERM before the process exits, and does not wait fo
   await closeBrowser({ browser: stuck } as unknown as ServerState, 20);
   assert.ok(Date.now() - started < 1000, "a hung close must not hold the shutdown open");
 });
+
+function fakeCdp() {
+  return {
+    on() {},
+    once() {},
+    detach: async () => {},
+    send: async (method: string) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+    },
+  };
+}
+
+it("isCrashedTarget treats only the live page as crashed, not a closed snapshot handle", () => {
+  const live = { isClosed: () => false };
+  const stale = { isClosed: () => true };
+  assert.equal(isCrashedTarget(new Error("Target closed"), live), false);
+  assert.equal(isCrashedTarget(new Error("Target closed"), stale), true);
+  assert.equal(isCrashedTarget(new Error("Target crashed"), live), true);
+});
+
+it("replaces a crashed page without remapping snaps or retrying click", async () => {
+  let clicks = 0;
+  const locator = {
+    count: async () => 1,
+    dblclick: async () => {},
+    click: async () => {
+      clicks += 1;
+      throw new Error("page.click: Target crashed");
+    },
+  };
+  const makePage = () => ({
+    isClosed: () => false,
+    url: () => "https://chatgpt.com/",
+    close: async () => {},
+    goto: async () => {},
+    locator: () => locator,
+    getByRole: () => ({ nth: () => locator }),
+    on() {},
+    once() {},
+    waitForEvent: async () => {
+      throw new Error("Timeout");
+    },
+  });
+  const page = makePage();
+  const pages = [page];
+  const session = new BrowserSession();
+  session.page = page as never;
+  session.context = {
+    pages: () => pages,
+    newPage: async () => {
+      const next = makePage();
+      pages.splice(0, pages.length, next);
+      return next;
+    },
+    newCDPSession: async () => fakeCdp(),
+  } as never;
+  session.snaps.set("snap", {
+    id: "snap",
+    refs: new Set(["e1"]),
+    bindings: new Map(),
+    page: page as never,
+  });
+
+  const result = await session.click({
+    snapshot_id: "snap",
+    ref: "e1",
+    button: "left",
+    double_click: false,
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, "E_IO");
+    assert.equal(result.error.message, BROWSER_RESTARTED_MESSAGE);
+  }
+  assert.equal(clicks, 1);
+  assert.notEqual(session.page, page as never);
+  assert.equal(session.snaps.get("snap")?.page, page as never);
+  assert.equal((session.page as { url(): string }).url(), "https://chatgpt.com/");
+});
+
+it("retries snapshot-like acts once after replacing the crashed page", async () => {
+  let n = 0;
+  const makePage = () => ({
+    isClosed: () => false,
+    url: () => "https://chatgpt.com/",
+    close: async () => {},
+    goto: async () => {},
+    on() {},
+    once() {},
+  });
+  const page = makePage();
+  const pages = [page];
+  const session = new BrowserSession();
+  session.page = page as never;
+  session.context = {
+    pages: () => pages,
+    newPage: async () => {
+      const next = makePage();
+      pages.splice(0, pages.length, next);
+      return next;
+    },
+    newCDPSession: async () => fakeCdp(),
+  } as never;
+
+  const out = await withCrashedTargetRetry(session, async () => {
+    n += 1;
+    if (n === 1) throw new Error("Target crashed");
+    return "ok";
+  });
+  assert.equal(out, "ok");
+  assert.equal(n, 2);
+});
+
+it("maps leftover Target crashed after one retry to the restart message", async () => {
+  const makePage = () => ({
+    isClosed: () => false,
+    url: () => "https://chatgpt.com/",
+    close: async () => {},
+    goto: async () => {},
+    on() {},
+    once() {},
+  });
+  const page = makePage();
+  const pages = [page];
+  const session = new BrowserSession();
+  session.page = page as never;
+  session.context = {
+    pages: () => pages,
+    newPage: async () => {
+      const next = makePage();
+      pages.splice(0, pages.length, next);
+      return next;
+    },
+    newCDPSession: async () => fakeCdp(),
+  } as never;
+
+  await assert.rejects(
+    withCrashedTargetRetry(session, async () => {
+      throw new Error("page.screenshot: Target crashed");
+    }),
+    (err: unknown) =>
+      err instanceof Error &&
+      err.message === BROWSER_RESTARTED_MESSAGE &&
+      (err as { code?: string }).code === "E_IO",
+  );
+  assert.notEqual(session.page, page as never);
+});
+
+it("does not close the live tab when a snapshot page throws Target closed", async () => {
+  const live = {
+    isClosed: () => false,
+    url: () => "https://chatgpt.com/",
+    close: async () => {
+      throw new Error("live tab must stay open");
+    },
+    locator: () => ({
+      count: async () => 1,
+      click: async () => {},
+    }),
+    on() {},
+    once() {},
+    waitForEvent: async () => {
+      throw new Error("Timeout");
+    },
+  };
+  const stalePage = {
+    isClosed: () => true,
+    url: () => "https://chatgpt.com/old",
+    locator: () => ({
+      count: async () => {
+        throw new Error("Target closed");
+      },
+      click: async () => {
+        throw new Error("Target closed");
+      },
+    }),
+    on() {},
+    once() {},
+  };
+  const session = new BrowserSession();
+  session.page = live as never;
+  session.context = {
+    pages: () => [live],
+    newPage: async () => {
+      throw new Error("must not open a duplicate tab");
+    },
+    newCDPSession: async () => fakeCdp(),
+  } as never;
+  session.snaps.set("snap", {
+    id: "snap",
+    refs: new Set(["e1"]),
+    bindings: new Map(),
+    page: stalePage as never,
+  });
+
+  const result = await session.click({
+    snapshot_id: "snap",
+    ref: "e1",
+    button: "left",
+    double_click: false,
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "E_STALE_REF");
+  assert.equal(session.page, live as never);
+});
+
+it("relaunches when goto after tab replace fails and does not retry click", async () => {
+  let clicks = 0;
+  let started = 0;
+  const locator = {
+    count: async () => 1,
+    dblclick: async () => {},
+    click: async () => {
+      clicks += 1;
+      throw new Error("page.click: Target crashed");
+    },
+  };
+  const makePage = () => ({
+    isClosed: () => false,
+    url: () => "https://chatgpt.com/",
+    close: async () => {},
+    goto: async () => {
+      throw new Error("net::ERR_FAILED");
+    },
+    locator: () => locator,
+    getByRole: () => ({ nth: () => locator }),
+    on() {},
+    once() {},
+    waitForEvent: async () => {
+      throw new Error("Timeout");
+    },
+  });
+  const page = makePage();
+  const pages = [page];
+  const session = new BrowserSession();
+  session.page = page as never;
+  session.context = {
+    pages: () => pages,
+    newPage: async () => {
+      const next = makePage();
+      pages.splice(0, pages.length, next);
+      return next;
+    },
+    newCDPSession: async () => fakeCdp(),
+  } as never;
+  session.close = async () => {};
+  session.start = async () => {
+    started += 1;
+    session.page = { isClosed: () => false, url: () => "about:blank" } as never;
+  };
+  session.snaps.set("snap", {
+    id: "snap",
+    refs: new Set(["e1"]),
+    bindings: new Map(),
+    page: page as never,
+  });
+
+  const result = await session.click({
+    snapshot_id: "snap",
+    ref: "e1",
+    button: "left",
+    double_click: false,
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.code, "E_IO");
+    assert.equal(result.error.message, BROWSER_RESTARTED_MESSAGE);
+  }
+  assert.equal(clicks, 1);
+  assert.equal(started, 1);
+});
+
+it("relaunches Chromium when the context is gone and returns the restart error", async () => {
+  const session = new BrowserSession();
+  let started = 0;
+  session.page = {
+    isClosed: () => true,
+    url: () => {
+      throw new Error("Target closed");
+    },
+  } as never;
+  session.context = null;
+  session.close = async () => {};
+  session.start = async () => {
+    started += 1;
+    session.page = { isClosed: () => false, url: () => "about:blank" } as never;
+  };
+
+  await assert.rejects(
+    withCrashedTargetRetry(session, async () => {
+      throw new Error("page.screenshot: Target closed");
+    }),
+    (err: unknown) =>
+      err instanceof Error &&
+      err.message === BROWSER_RESTARTED_MESSAGE &&
+      (err as { code?: string }).code === "E_IO",
+  );
+  assert.equal(started, 1);
+});
+
+it("browser_restart closes and relaunches the same session and returns url", async () => {
+  const locator = {
+    count: async () => 1,
+    dblclick: async () => {},
+    click: async () => {},
+  };
+  const makePage = (url: string) => ({
+    isClosed: () => false,
+    url: () => url,
+    locator: () => locator,
+    getByRole: () => ({ nth: () => locator }),
+    on() {},
+    once() {},
+    waitForEvent: async () => {
+      throw new Error("Timeout");
+    },
+  });
+  const session = new BrowserSession();
+  let closed = 0;
+  let started = 0;
+  let abortPending = true;
+  let closedWhileAborting = false;
+  session.page = makePage("https://chatgpt.com/c/1") as never;
+  const drain = session.abortActs.bind(session);
+  session.abortActs = () => {
+    const done = drain();
+    return Promise.resolve(done).then(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            abortPending = false;
+            resolve();
+          }, 15);
+        }),
+    );
+  };
+  session.close = async () => {
+    if (abortPending) closedWhileAborting = true;
+    closed += 1;
+  };
+  session.start = async () => {
+    started += 1;
+    session.page = makePage("https://chatgpt.com/c/1") as never;
+  };
+  const state = createState("browser");
+  state.browser = session;
+
+  const result = await dispatch(state, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "browser_restart",
+    params: {},
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    const data = result.data as { url: string; ok?: boolean };
+    assert.equal(data.url, "https://chatgpt.com/c/1");
+    assert.equal(data.ok, undefined);
+  }
+  assert.equal(closed, 1);
+  assert.equal(started, 1);
+  assert.equal(closedWhileAborting, false);
+  assert.equal(state.browser, session);
+  assert.equal(session.actAbort.signal.aborted, false);
+
+  session.snaps.set("snap", {
+    id: "snap",
+    refs: new Set(["e1"]),
+    bindings: new Map(),
+    page: session.page as never,
+  });
+  const clicked = await session.click({
+    snapshot_id: "snap",
+    ref: "e1",
+    button: "left",
+    double_click: false,
+  });
+  assert.equal(clicked.ok, true);
+});
+
+it("browser_restart returns E_TAKEOVER_BUSY while a human hold is open", async () => {
+  const state = createState("browser");
+  state.takeover.state = "human";
+  state.takeover.takeoverId = "tk_hold";
+  const result = await dispatch(state, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "browser_restart",
+    params: {},
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "E_TAKEOVER_BUSY");
+});
+

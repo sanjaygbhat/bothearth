@@ -4,7 +4,7 @@ Version 1.0 — 2026-09-07
 
 BotHearth is the public name of the project originally developed as ModelBot. This branding update does not change the copyright, patent, or relicensing grants in this agreement.
 
-BotHearth is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). The current launch has no paid offering; see [license and costs](COMMERCIAL.md). This existing agreement still grants broad relicensing rights to the author, including commercial and proprietary licensing. Read those rights before contributing.
+BotHearth is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). A US$49 commercial licence exists; see [license and costs](COMMERCIAL.md). This existing agreement still grants broad relicensing rights to the author, including commercial and proprietary licensing. Read those rights before contributing.
 
 **"The author"** means Sanjay Bhat, the copyright holder of BotHearth, and any successor in interest to the BotHearth project. **"You"** means the individual submitting a contribution. **"Contribution"** means any original work of authorship you intentionally submit to the BotHearth project — code, documentation, configuration, tests, assets or anything else — through a pull request, patch, issue attachment, or any other channel, whether or not it is accepted.
 

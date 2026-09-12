@@ -132,8 +132,12 @@ describe("credential fields the page itself declares", () => {
     assert.deepEqual(onPage("https://example.com/account", [site]), [
       { kind: "password", label: "password" },
     ]);
+    assert.equal(site.mark(), "password");
+    // A secret contenteditable is still masked for capture, but it is not a
+    // password field: only a real input/textarea credential control is.
     const box = element({ class: "secret" }, "true");
-    assert.deepEqual(onPage("https://example.com/", [box]), [{ kind: "password", label: "div" }]);
+    assert.deepEqual(onPage("https://example.com/", [box]), []);
+    assert.equal(box.mark(), "otp");
   });
 
   it("believes a field that names itself, and forgets one that stops matching", () => {

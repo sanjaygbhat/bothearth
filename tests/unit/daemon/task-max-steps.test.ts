@@ -75,3 +75,9 @@ test("without a configured budget a task falls back to the built-in default", as
     assert.equal((await create(baseUrl, headers, {})).max_steps, DEFAULT_MAX_STEPS);
   });
 });
+
+test("a request may name max_steps 0 for no cap", async () => {
+  await withDaemon({ maxSteps: 12 }, async (baseUrl, headers) => {
+    assert.equal((await create(baseUrl, headers, { max_steps: 0 })).max_steps, 0);
+  });
+});

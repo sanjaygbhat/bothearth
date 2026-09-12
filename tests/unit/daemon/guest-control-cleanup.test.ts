@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { FakeComputer } from "../../../src/computer-client/fake.ts";
 import { guestSpawn, startGuestNativeTask } from "../../../src/daemon/guest-native.ts";
-import { startDaemon, validateLiveRelayFrame } from "../../../src/daemon/server.ts";
+import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
 import { fakeCli } from "../../helpers/fake-cli.ts";
+import { until } from "../../helpers/until.ts";
 
 // Exercise the real daemon and Docker transport, with only the Docker executable
 // and browser RPC faked. Never launch a model or modify a developer's computer.
@@ -74,31 +75,21 @@ if (action === 'pause' || action === 'resume') {
   };
 }
 
-for (const expired of [false, true]) test(`cancel during ${expired ? "expired" : "active"} human control preserves the desktop; returning it unblocks guest commands`, async t => {
+for (const expired of [false, true]) test(`cancel during ${expired ? "expired" : "active"} human control closes the hold and unblocks guest commands`, async t => {
   const f = await fixture(t), id = await f.request();
   assert.equal((await f.post(`/api/v1/takeover/${id}/grant`)).status, 200);
   assert.equal(f.paused(), true);
-  const before = f.daemon.store.getTakeover(id)!;
   if (expired) {
     assert.equal((await f.computer().expireTakeover(id)).ok, true);
     f.daemon.store.updateTakeoverState(id, "paused");
   }
   assert.equal((await f.post(`/api/v1/tasks/${f.task.id}/cancel`)).status, 200);
   assert.equal(f.daemon.store.getTask(f.task.id)?.status, "cancelled");
-  const held = f.daemon.store.activeTakeoverForComputer(f.task.computer_id, "next-task");
-  assert.equal(held?.state, expired ? "paused" : "human");
-  assert.equal(held?.granted_to, before.granted_to);
-  assert.equal(f.computer().getTakeoverState(), expired ? "paused" : "human");
-  assert.equal(f.paused(), true);
-  if (!expired) {
-    const frame = { epoch: before.epoch, t: "mouse", x: 1, y: 1 };
-    assert.deepEqual(validateLiveRelayFrame(f.daemon.store, f.task.computer_id, frame, before.granted_to!), frame);
-    assert.equal(validateLiveRelayFrame(f.daemon.store, f.task.computer_id, frame, "other-device"), null);
-  }
-  const response = await f.post(`/api/v1/takeover/${id}/${expired ? "decline" : "release"}`);
-  assert.equal(response.status, 200, await response.clone().text());
-  assert.equal(f.daemon.store.getTakeover(id)?.state, "agent");
-  assert.equal(f.paused(), false, "terminal task history must still clear the native pause marker");
+  assert.equal(f.daemon.store.activeTakeoverForComputer(f.task.computer_id, "next-task"), undefined);
+  await until(() => f.computer().getTakeoverState() === "agent" && !f.paused(),
+    "computer gate was not released");
+  assert.equal(f.daemon.store.getComputer(f.task.computer_id)?.status, "running");
+  assert.ok(f.calls().every(action => action !== "volume"), "cancellation must not delete the computer’s model home");
   const next = await guestSpawn(f.task.computer_id, "codex", ["login", "status"]);
   let output = "";
   next.child.stdout!.on("data", bytes => { output += bytes; }); next.child.stderr!.resume();
@@ -120,21 +111,45 @@ test("a partial freeze stays private until the unanswered task is cancelled, the
   assert.equal(f.paused(), false);
 });
 
-test("cancelling during renewal of an expired human lease preserves its private control", async t => {
+for (const kind of ["never resolves", "returns ok:false"] as const) test(`cancel of a leftover freeze that ${kind} still answers and unfreezes the next task`, async t => {
+  const hung = Promise.withResolvers<void>();
+  const original = FakeComputer.prototype.declineTakeover;
+  t.mock.method(FakeComputer.prototype, "declineTakeover", async function (this: FakeComputer, id: string) {
+    if (kind === "never resolves") await hung.promise;
+    else return { ok: false as const, error: { code: "E_IO" as const, message: "decline failed" } };
+    return original.call(this, id);
+  });
+  const f = await fixture(t), id = await f.request();
+  writeFileSync(f.cli.path("fail-pause"), "yes");
+  assert.equal((await f.post(`/api/v1/takeover/${id}/grant`)).status, 500);
+  assert.equal(f.paused(), true);
+  const started = Date.now();
+  const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+  const elapsed = Date.now() - started;
+  hung.resolve();
+  assert.equal(cancel.status, 200);
+  assert.ok(elapsed < 4_000, `cancel took ${elapsed}ms; leftover decline must not block the response`);
+  assert.equal(f.daemon.store.getTask(f.task.id)?.status, "cancelled");
+  assert.equal(f.paused(), false, "next task must not inherit the native freeze");
+  const next = await guestSpawn(f.task.computer_id, "codex", ["login", "status"]);
+  let output = "";
+  next.child.stdout!.on("data", bytes => { output += bytes; }); next.child.stderr!.resume();
+  assert.deepEqual(await once(next.child, "close"), [0, null]);
+  assert.equal(output.trim(), "guest-ready");
+  await next.stop();
+});
+
+test("cancelling during renewal of an expired human lease closes the leftover hold", async t => {
   const f = await fixture(t), original = await f.request();
   assert.equal((await f.post(`/api/v1/takeover/${original}/grant`)).status, 200);
-  const owner = f.daemon.store.getTakeover(original)!.granted_to;
   assert.equal((await f.computer().expireTakeover(original)).ok, true);
   f.daemon.store.updateTakeoverState(original, "paused");
   const renewed = await f.request();
   assert.notEqual(renewed, original);
   assert.equal((await f.post(`/api/v1/tasks/${f.task.id}/cancel`)).status, 200);
-  assert.equal(f.daemon.store.activeTakeoverForComputer(f.task.computer_id)?.granted_to, owner);
-  assert.equal(f.computer().getTakeoverState(), "takeover_requested");
-  assert.equal(f.paused(), true);
-  assert.equal((await f.post(`/api/v1/takeover/${renewed}/grant`)).status, 200);
-  assert.equal((await f.post(`/api/v1/takeover/${renewed}/release`)).status, 200);
-  assert.equal(f.paused(), false);
+  assert.equal(f.daemon.store.activeTakeoverForComputer(f.task.computer_id), undefined);
+  await until(() => f.computer().getTakeoverState() === "agent" && !f.paused(),
+    "computer gate was not released");
 });
 
 test("a failed task's unanswered gate and partial pause do not block the next task", async t => {

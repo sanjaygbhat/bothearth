@@ -11,8 +11,8 @@
  * Where the DOM is stricter than a stand-in needs to be, this follows the DOM:
  * `tagName` is upper case for `createElement` and verbatim for
  * `createElementNS`, `className` is the `class` attribute, `id`/`href`/`rel`/
- * `target`/`tabIndex` reflect to attributes, and `location.hash =` fires
- * `hashchange`.
+ * `target`/`download`/`tabIndex` reflect to attributes, and `location.hash =`
+ * fires `hashchange`.
  */
 
 export type Listener = (event: any) => void;
@@ -87,6 +87,7 @@ export class FakeElement {
   hidden = false;
   disabled = false;
   readOnly = false;
+  checked = false;
   value = "";
   rows = 0;
   type = "";
@@ -158,6 +159,12 @@ export class FakeElement {
   }
   set target(value: string) {
     this.attributes.set("target", String(value));
+  }
+  get download(): string {
+    return this.attributes.get("download") ?? "";
+  }
+  set download(value: string) {
+    this.attributes.set("download", String(value));
   }
   get tabIndex(): number {
     return Number(this.attributes.get("tabindex") ?? -1);

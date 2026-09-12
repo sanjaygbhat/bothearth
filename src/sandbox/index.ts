@@ -9,6 +9,8 @@ export {
   createComputer,
   destroyComputer,
   inspectComputerContainer,
+  containerRunState,
+  computerContainerStatus,
   defaultSeccompPath,
   defaultWorkspaceRoot,
   workspaceHostPath,

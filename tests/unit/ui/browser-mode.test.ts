@@ -51,7 +51,8 @@ function asNativeShell<T>(fn: () => T): T {
 describe("a lost session in a plain browser", () => {
   it("names the command that mints a new link", () => {
     assert.match(PAIR_AGAIN, /Your sign-in link expired\./);
-    assert.match(PAIR_AGAIN, /modelbot pair/);
+    assert.match(PAIR_AGAIN, /bothearth pair/);
+    assert.doesNotMatch(PAIR_AGAIN, /modelbot pair/);
     assert.doesNotMatch(PAIR_AGAIN, /Applications/);
   });
 

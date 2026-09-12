@@ -1,4 +1,21 @@
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+
 type LogFields = Record<string, unknown>;
+
+/** Rotate `daemon.log` to `daemon.log.1` once the live file exceeds this size. */
+export const DAEMON_LOG_MAX_BYTES = 20 * 1024 * 1024;
+
+let fileLogPath: string | undefined;
 
 const SECRET_KEYS = new Set([
   "token",
@@ -65,14 +82,76 @@ export function redactLogFields(fields: LogFields): unknown {
   return redact(fields);
 }
 
+export function daemonLogPath(dataDir: string): string {
+  return join(dataDir, "logs", "daemon.log");
+}
+
+/**
+ * Append structured log lines to `<dataDir>/logs/daemon.log` in addition to
+ * stdout. Foreground `start` and `start --daemon` both go through here.
+ */
+export function attachDaemonFileLog(dataDir: string): string {
+  const path = daemonLogPath(dataDir);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (!existsSync(path)) writeFileSync(path, "", { mode: 0o600 });
+  chmodSync(path, 0o600);
+  fileLogPath = path;
+  return path;
+}
+
+/** Tests only. */
+export function detachDaemonFileLog(): void {
+  fileLogPath = undefined;
+}
+
+function rotateIfNeeded(path: string): void {
+  if (!existsSync(path)) return;
+  try {
+    if (statSync(path).size <= DAEMON_LOG_MAX_BYTES) return;
+    const rotated = `${path}.1`;
+    if (existsSync(rotated)) unlinkSync(rotated);
+    renameSync(path, rotated);
+    chmodSync(rotated, 0o600);
+  } catch {
+    /* stdout still works */
+  }
+}
+
+function appendFileLog(line: string): void {
+  if (!fileLogPath) return;
+  try {
+    rotateIfNeeded(fileLogPath);
+    appendFileSync(fileLogPath, `${line}\n`, { mode: 0o600 });
+    chmodSync(fileLogPath, 0o600);
+  } catch {
+    /* stdout still works */
+  }
+}
+
+function emit(
+  level: "info" | "warn" | "error",
+  write: (line: string) => void,
+  msg: string,
+  fields: LogFields,
+): void {
+  const line = JSON.stringify({
+    level,
+    msg,
+    ...(redact(fields) as object),
+    ts: new Date().toISOString(),
+  });
+  write(line);
+  appendFileLog(line);
+}
+
 export function logInfo(msg: string, fields: LogFields = {}): void {
-  console.log(JSON.stringify({ level: "info", msg, ...redact(fields) as object, ts: new Date().toISOString() }));
+  emit("info", console.log, msg, fields);
 }
 
 export function logWarn(msg: string, fields: LogFields = {}): void {
-  console.warn(JSON.stringify({ level: "warn", msg, ...redact(fields) as object, ts: new Date().toISOString() }));
+  emit("warn", console.warn, msg, fields);
 }
 
 export function logError(msg: string, fields: LogFields = {}): void {
-  console.error(JSON.stringify({ level: "error", msg, ...redact(fields) as object, ts: new Date().toISOString() }));
+  emit("error", console.error, msg, fields);
 }

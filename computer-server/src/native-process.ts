@@ -1,38 +1,94 @@
 /** Guest-only native process control and a Unix-socket/stdio MCP pipe. No TCP listener. */
 import { spawn } from "node:child_process";
-import { createServer, connect, type Socket } from "node:net";
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createInterface } from "node:readline";
+import { accessSync, readdirSync, unlinkSync } from "node:fs";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
-import { unlinkSync } from "node:fs";
+import { createInterface } from "node:readline";
 
+export type ProcInfo = { parent: number; state: string; start: string; command: string };
+
+export function resolveXauthority(tmpNames: string[], exists: (path: string) => boolean): string {
+  for (const name of tmpNames) {
+    if (!name.startsWith("modelbot-chromium-")) continue;
+    const file = join("/tmp", name, "Xauthority");
+    if (exists(file)) return file;
+  }
+  throw new Error("Desktop display cookie is missing.");
+}
+
+export function resolveDesktopEnv(env: NodeJS.ProcessEnv = process.env, tmpNames?: string[], exists?: (path: string) => boolean): NodeJS.ProcessEnv {
+  env.DISPLAY ||= ":99";
+  try {
+    env.XAUTHORITY = resolveXauthority(tmpNames ?? readdirSync("/tmp"), exists ?? (file => {
+      try { accessSync(file); return true; } catch { return false; }
+    }));
+  } catch { delete env.XAUTHORITY; }
+  return env;
+}
+
+export function isDesktopCommand(command: string): boolean {
+  if (command.includes("native-process.ts")) return false;
+  return command.includes("/usr/lib/chromium/chromium") || /\bXvfb\b/.test(command)
+    || /\bopenbox\b/.test(command) || /\bffmpeg\b/.test(command)
+    || command.includes("/opt/computer-server/");
+}
+
+export function tree(parent: number, all: Map<number, { parent: number }>) {
+  const descendants = new Set([parent]);
+  for (;;) {
+    const size = descendants.size;
+    for (const [pid, info] of all) if (descendants.has(info.parent)) descendants.add(pid);
+    if (descendants.size === size) break;
+  }
+  return descendants;
+}
+
+export function controlPids(all: Map<number, ProcInfo>, mode: "pause" | "resume", selfPid: number): number[] {
+  const protectedPids = new Set<number>([1]);
+  for (const [pid, info] of all) {
+    if (info.command.includes("native-process.ts")) continue;
+    if (/\btini\b/.test(info.command) || /\bsleep\s+infinity\b/.test(info.command)) protectedPids.add(pid);
+    else if (isDesktopCommand(info.command)) for (const child of tree(pid, all)) protectedPids.add(child);
+  }
+  return [...all].filter(([pid, info]) => pid !== selfPid && !protectedPids.has(pid) && info.state !== "Z"
+    && (mode === "pause" ? info.state !== "T" : info.state === "T")).map(([pid]) => pid);
+}
+
+const launched = new Set(["pause", "resume", "mcp-listen", "mcp-connect", "stop", "run", "exec"]);
 const [mode, id, ...args] = process.argv.slice(2);
 const root = "/tmp/bothearth-native";
-if (process.platform !== "linux" || process.getuid?.() !== 1002) throw new Error("Native process control requires the guest agent user.");
+const agentUid = process.getuid?.();
+const skip = !launched.has(mode ?? "");
+if (!skip && (process.platform !== "linux" || (agentUid !== 1001 && agentUid !== 1002))) throw new Error("Native process control requires the guest agent user.");
 // Shared files inherit the workspace GID; private model homes remain 0700.
-process.umask(0o007);
-if (!/^[a-f0-9-]{20,64}$/.test(id ?? "")) throw new Error("Invalid native session id.");
-await mkdir(root, { recursive: true, mode: 0o700 });
+if (!skip) process.umask(0o007);
+if (!skip && !/^[a-f0-9-]{20,64}$/.test(id ?? "")) throw new Error("Invalid native session id.");
+if (!skip) await mkdir(root, { recursive: true, mode: 0o700 });
 const socketPath = join(root, `${id}.sock`);
 const pidPath = join(root, `${id}.json`);
 const pausePath = join(root, "paused");
+if (!skip) resolveDesktopEnv();
 
 async function refuseWhilePaused() {
   try { await access(pausePath); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
-  throw new Error("Native execution is paused for private control.");
+  process.stderr.write("Native execution is paused for private control.\n");
+  process.exit(75);
 }
 
 async function processes() {
-  const result = new Map<number, { parent: number; state: string; start: string }>();
+  const result = new Map<number, ProcInfo>();
   for (const name of await readdir("/proc")) {
     if (!/^\d+$/.test(name)) continue;
     try {
       const status = await readFile(`/proc/${name}/status`, "utf8");
-      if (!/^Uid:\s+1002\s/m.test(status)) continue;
+      if (!new RegExp(`^Uid:\\s+${agentUid}\\s`, "m").test(status)) continue;
       const stat = await readFile(`/proc/${name}/stat`, "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      result.set(Number(name), { state: fields[0]!, parent: Number(fields[1]), start: fields[19]! });
+      const command = (await readFile(`/proc/${name}/cmdline`)).toString().replace(/\0/g, " ").trim()
+        || status.match(/^Name:\s+(\S+)/m)?.[1] || "";
+      result.set(Number(name), { state: fields[0]!, parent: Number(fields[1]), start: fields[19]!, command });
     } catch { /* Process exited during the scan. */ }
   }
   return result;
@@ -47,12 +103,7 @@ function signal(pid: number, sig: NodeJS.Signals) {
 async function killChildren(parent: number) {
   // A second scan catches children reparented to tini after their parent dies.
   for (let attempt = 0; attempt < 50; attempt++) {
-    const all = await processes(), descendants = new Set([parent]);
-    for (;;) {
-      const size = descendants.size;
-      for (const [pid, info] of all) if (descendants.has(info.parent)) descendants.add(pid);
-      if (descendants.size === size) break;
-    }
+    const all = await processes(), descendants = tree(parent, all);
     const live = [...descendants].filter(pid => pid !== parent && pid !== process.pid && all.get(pid)?.state !== "Z");
     if (!live.length) return;
     for (const pid of live.reverse()) signal(pid, "SIGKILL");
@@ -65,13 +116,12 @@ if (mode === "pause" || mode === "resume") {
   // Mark first: a Docker exec created after the final scan must not start a CLI.
   if (mode === "pause") await writeFile(pausePath, "", { mode: 0o600 });
   else await rm(pausePath, { force: true });
-  // Freeze every model-owned process, including detached native tool children.
-  // Browser, live-view and operator-terminal processes use uid 1001 and stay usable.
+  // Freeze every uid-1001 process except the operator desktop (Chromium, Xvfb,
+  // openbox, computer-server and their children). Pid1-reparented model tools stay frozen.
   for (let attempt = 0; attempt < 50; attempt++) {
-    const remaining = [...await processes()].filter(([pid, info]) => pid !== process.pid &&
-      info.state !== "Z" && (mode === "pause" ? info.state !== "T" : info.state === "T"));
+    const remaining = controlPids(await processes(), mode, process.pid);
     if (!remaining.length) break;
-    for (const [pid] of remaining) signal(pid, mode === "pause" ? "SIGSTOP" : "SIGCONT");
+    for (const pid of remaining) signal(pid, mode === "pause" ? "SIGSTOP" : "SIGCONT");
     if (attempt === 49) throw new Error("Native processes did not acknowledge control change.");
     await new Promise(resolve => setTimeout(resolve, 10));
   }
@@ -133,8 +183,15 @@ if (mode === "pause" || mode === "resume") {
   await rm(pidPath, { force: true });
 } else if (mode === "run" || mode === "exec") {
   await refuseWhilePaused();
-  for (const home of [process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR])
-    if (home) await mkdir(home, { recursive: true, mode: 0o700 });
+  for (const home of [process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR]) {
+    if (!home) continue;
+    try { await mkdir(home, { recursive: true, mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EACCES")
+        throw new Error("This computer cannot write /home/agent. Recreate the modelbot-*-agent-home volume or chown it to 1001:1001.");
+      throw error;
+    }
+  }
   const command = args.shift();
   if (!command) throw new Error("Native command is required.");
   // tini --subreaper is our parent, so orphaned tool processes remain descendants
@@ -157,7 +214,8 @@ if (mode === "pause" || mode === "resume") {
   // Keep Docker stdin open after the initial prompt: loss of the host pipe stops
   // the guest model, rather than leaving an unobserved docker-exec process alive.
   const startCommand = (prompt?: string) => {
-    child = spawn(command, args, { detached: true, cwd: "/workspace", stdio: ["pipe", "pipe", "pipe"] });
+    resolveDesktopEnv();
+    child = spawn(command, args, { detached: true, cwd: "/workspace", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } });
     child.stdout!.pipe(process.stdout);
     // Native diagnostics can contain account data. Keep them inside the model
     // home; only documented JSON display events leave the task runner.
@@ -185,4 +243,6 @@ if (mode === "pause" || mode === "resume") {
       startCommand(message.prompt);
     });
   }
+} else if (skip && !process.argv[1]?.endsWith("native-process.ts")) {
+  // helpers imported by unit tests
 } else throw new Error("Unknown native process operation.");

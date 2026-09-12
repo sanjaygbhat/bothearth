@@ -9,9 +9,12 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { startDaemon, type DaemonHandle } from "../../../src/daemon/server.ts";
+import { createFakeSandbox } from "../../../src/computer-client/fake-sandbox.ts";
 import { CSRF_HEADER } from "../../../src/daemon/auth.ts";
+import { startDaemon, type DaemonHandle } from "../../../src/daemon/server.ts";
+import { Store } from "../../../src/daemon/store.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
+import { until } from "../../helpers/until.ts";
 
 process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
 
@@ -208,5 +211,180 @@ it("polling the first-run screen does not respawn the CLI probes forever", async
     // The readiness cache TTL is 2 s and adoption backs off from 2 s to 60 s,
     // so a burst of polls must not become a burst of processes.
     assert.ok(calls() - before <= 4, `adoption spawned ${calls() - before} CLI probes across 30 polls`);
+  });
+});
+
+describe("boot reconcile lifetime", () => {
+  function seedComputers(root: string, ids: string[]): string {
+    const sqlitePath = join(root, "state.sqlite");
+    const seed = new Store(sqlitePath);
+    for (const [i, id] of ids.entries()) {
+      seed.insertComputer({
+        id,
+        name: `Idle ${i + 1}`,
+        capabilities: ["browser"],
+        persistent: true,
+        status: "running",
+      });
+    }
+    seed.close();
+    return sqlitePath;
+  }
+
+  function spyStoreAfterClose(store: Store): { afterClose: string[]; closed: () => boolean } {
+    let closed = false;
+    const afterClose: string[] = [];
+    const target = store as Store & Record<string, unknown>;
+    const origClose = store.close.bind(store);
+    target.close = () => {
+      closed = true;
+      origClose();
+    };
+    for (const name of ["listComputers", "listTasks", "activeTakeoverForComputer"] as const) {
+      const orig = (store[name] as (...args: never[]) => unknown).bind(store);
+      target[name] = (...args: never[]) => {
+        if (closed) afterClose.push(name);
+        return orig(...args);
+      };
+    }
+    return { afterClose, closed: () => closed };
+  }
+
+  it("close immediately after start does not reject", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mb-reconcile-life-"));
+    const sqlitePath = seedComputers(root, ["idle-a", "idle-b"]);
+    let releaseLimits = () => {};
+    const limitsHeld = new Promise<void>((resolve) => {
+      releaseLimits = resolve;
+    });
+    const sandbox = createFakeSandbox({ workspaceRoot: root }) as ReturnType<typeof createFakeSandbox> & {
+      reconcileLimits: (
+        computerId: string,
+        capabilities: string[],
+        opts: { allowRecreate: boolean },
+      ) => Promise<"updated" | "recreated" | false>;
+      refreshImage: (computerId: string, capabilities: string[]) => Promise<boolean>;
+    };
+    let enteredLimits = 0;
+    let daemon: DaemonHandle;
+    sandbox.reconcileLimits = async () => {
+      enteredLimits++;
+      await new Promise((resolve) => setImmediate(resolve));
+      await limitsHeld;
+      daemon.store.listComputers();
+      return "updated";
+    };
+    sandbox.refreshImage = async () => {
+      daemon.store.listTasks();
+      return false;
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    daemon = await startDaemon({
+      host: "127.0.0.1",
+      port: 0,
+      mcpToken: MCP,
+      bootstrapToken: BOOT,
+      workspaceRoot: root,
+      sqlitePath,
+      sandbox,
+      agentLoop: { model: "gpt-5.6-sol", adapter },
+    });
+    const spy = spyStoreAfterClose(daemon.store);
+    try {
+      await until(() => enteredLimits > 0, "boot reconcile never entered limits");
+      let closeDone = false;
+      const closed = daemon.close().then(() => {
+        closeDone = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(closeDone, false, "close() must wait for in-flight reconcile");
+      assert.equal(spy.closed(), false, "store must stay open until reconcile finishes");
+      releaseLimits();
+      await closed;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(unhandled.length, 0);
+      assert.deepEqual(spy.afterClose, []);
+    } finally {
+      releaseLimits();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("close waits for post-prepare reconcile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mb-reconcile-prepare-"));
+    const sqlitePath = seedComputers(root, ["idle-a", "idle-b"]);
+    let holdPrepare = false;
+    let inHold = 0;
+    let releaseLimits = () => {};
+    const limitsHeld = new Promise<void>((resolve) => {
+      releaseLimits = resolve;
+    });
+    let limitCalls = 0;
+    const sandbox = createFakeSandbox({ workspaceRoot: root }) as ReturnType<typeof createFakeSandbox> & {
+      reconcileLimits: (
+        computerId: string,
+        capabilities: string[],
+        opts: { allowRecreate: boolean },
+      ) => Promise<"updated" | "recreated" | false>;
+    };
+    let daemon: DaemonHandle;
+    sandbox.reconcileLimits = async () => {
+      limitCalls++;
+      if (holdPrepare) {
+        inHold++;
+        await limitsHeld;
+        daemon.store.listComputers();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      return "updated";
+    };
+    daemon = await startDaemon({
+      host: "127.0.0.1",
+      port: 0,
+      mcpToken: MCP,
+      bootstrapToken: BOOT,
+      workspaceRoot: root,
+      sqlitePath,
+      sandbox,
+      agentLoop: { model: "gpt-5.6-sol", adapter },
+      runBuild: async () => 0,
+    });
+    const spy = spyStoreAfterClose(daemon.store);
+    try {
+      await until(() => limitCalls >= 2, "boot reconcile never finished");
+      holdPrepare = true;
+      const session = await bootstrapSession(daemon, BOOT);
+      const origin = `http://127.0.0.1:${daemon.port}`;
+      const headers = {
+        Origin: origin,
+        Host: `127.0.0.1:${daemon.port}`,
+        cookie: session.cookie,
+        [CSRF_HEADER]: session.csrf,
+      };
+      const posted = await fetch(`${daemon.baseUrl}/api/v1/runtime/prepare`, {
+        method: "POST",
+        headers,
+      });
+      assert.equal(posted.status, 202);
+      await until(() => inHold > 0, "prepare reconcile never entered limits");
+      let closeDone = false;
+      const closed = daemon.close().then(() => {
+        closeDone = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(closeDone, false, "close() must wait for post-prepare reconcile");
+      assert.equal(spy.closed(), false);
+      releaseLimits();
+      await closed;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(spy.afterClose, []);
+    } finally {
+      releaseLimits();
+      if (!spy.closed()) await daemon.close().catch(() => undefined);
+    }
   });
 });

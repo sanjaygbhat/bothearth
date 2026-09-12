@@ -1,6 +1,6 @@
 ---
 name: modelbot-computer
-description: Drive ModelBot sandboxed Linux via MCP. Snapshot before act; request_takeover for auth/CAPTCHA/2FA; never paste passwords into chat.
+description: Drive ModelBot sandboxed Linux via MCP. Snapshot before act. request_takeover hands the person the keyboard and mouse of the bot's computer and waits until they give it back.
 ---
 
 # ModelBot computer
@@ -12,7 +12,7 @@ You control a remote Linux desktop through the **modelbot** MCP server (browser,
 1. Prefer `browser_snapshot` before acting; verify with snapshot or screenshot after.
 2. Use browser_* for pages; `computer_*` for raw input when a11y refs are insufficient.
 3. Use `shell_exec` / `files_*` only inside the sandboxed computer.
-4. For login, CAPTCHA, 2FA, passkeys, or force-human gates: call `request_takeover`, then `takeover_status` until the human finishes. **Never** ask the user to paste passwords or OTP codes into chat.
+4. `request_takeover` hands the person the keyboard and mouse of the bot's computer and waits until they give it back.
 5. Respect approvals: destructive tools (`shell_exec`, `files_write`, `files_delete`, `request_takeover`, `connector_call`) may require human approval.
 6. Call `done` when the task is complete.
 

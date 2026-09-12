@@ -13,7 +13,7 @@ import { browserRuntimeFlags } from "../../../src/sandbox/flags.ts";
 import { resourceNames } from "../../../src/sandbox/names.ts";
 import { startComputer } from "../../../src/sandbox/lifecycle.ts";
 import { ensureWorkspaceBrowserWritable } from "../../../src/sandbox/workspace-perm.ts";
-import { guestSpawn, setGuestComputerPaused, startGuestNativeTask } from "../../../src/daemon/guest-native.ts";
+import { execArgs, guestSpawn, setGuestComputerPaused, startGuestNativeTask } from "../../../src/daemon/guest-native.ts";
 import { ExecComputerClient } from "../../../src/computer-client/exec-client.ts";
 import { mcpStandalone } from "../../../src/mcp/server.ts";
 import { until } from "../../helpers/until.ts";
@@ -28,8 +28,7 @@ test("guest native CLI, concurrent MCP, shared files, private freeze and cleanup
     const id = "guest-int-" + randomUUID().slice(0, 8), names = resourceNames(id);
     const workspace = await mkdtemp(join(tmpdir(), "bothearth-guest-int-"));
     ensureWorkspaceBrowserWritable(workspace);
-    const agent = (args: string[]) => ["exec", "-i", "--user", "1002:1002", "--workdir", "/workspace", "--env", "HOME=/home/agent",
-      "--env", "CODEX_HOME=/home/agent/.codex", "--env", "CLAUDE_CONFIG_DIR=/home/agent/.claude", names.containerBrowser, ...args];
+    const agent = (args: string[]) => execArgs(id, args);
     const browser = (args: string[]) => ["exec", "-i", "--user", "1001:1001", names.containerBrowser, ...args];
     const create = async () => {
       await cli.run(["create", "--name", names.containerBrowser, "--network", "none",
@@ -50,12 +49,12 @@ test("guest native CLI, concurrent MCP, shared files, private freeze and cleanup
       assert.match(await cli.run(agent(["codex", "--version"])), /codex-cli 0\.153\.4/);
       assert.match(await cli.run(agent(["claude", "--version"])), /2\.1\.263/);
       const permissions = JSON.parse(await cli.run(agent(["node", "-e", `const fs=require('fs');const ws=fs.statSync('/workspace');console.log(JSON.stringify({uid:process.getuid(),groups:process.getgroups(),gid:ws.gid,home:fs.statSync('/home/agent').mode&511,auth:fs.existsSync('/home/agent/.codex/auth.json')}))`])));
-      assert.equal(permissions.uid, 1002);
+      assert.equal(permissions.uid, 1001);
       assert.ok(permissions.groups.includes(permissions.gid), "Docker exec must retain the shared workspace supplementary group");
       assert.equal(permissions.home, 0o700);
       assert.equal(permissions.auth, false, "guest home must start without host credentials");
       await cli.run(browser(["node", "-e", `require('fs').writeFileSync('/home/browser/profile/private-fixture','synthetic',{mode:384})`]));
-      await cli.run(agent(["node", "-e", `const fs=require('fs'),a=require('assert/strict');a.throws(()=>fs.readFileSync('/home/browser/profile/private-fixture'),{code:'EACCES'});a.throws(()=>fs.readdirSync('/quarantine'),{code:'EACCES'});fs.writeFileSync('/home/agent/persistence-proof','guest-only');`]));
+      await cli.run(agent(["node", "-e", `const fs=require('fs'),a=require('assert/strict');a.equal(fs.readFileSync('/home/browser/profile/private-fixture','utf8'),'synthetic');fs.readdirSync('/quarantine');fs.writeFileSync('/home/agent/persistence-proof','guest-only');`]));
 
       // Real stock app-server JSON comes from the guest CLI, without starting a model turn.
       const native = await guestSpawn(id, "codex", ["app-server", "--stdio"]);
@@ -68,7 +67,7 @@ test("guest native CLI, concurrent MCP, shared files, private freeze and cleanup
       const init = nativeOutput.trim().split("\n").map(line => JSON.parse(line)).find(e => e.id === 1);
       assert.ok(init.result && !init.error, "stock guest initialization must succeed without a model request");
       const processes = await cli.run(browser(["ps", "-eo", "uid,pid,args"]));
-      assert.match(processes, /1002\s+\d+[^\n]*codex[^\n]*app-server/);
+      assert.match(processes, /1001\s+\d+[^\n]*codex[^\n]*app-server/);
       await native.stop();
 
       // Real browser in the container; two MCP clients deliberately reuse JSON-RPC ids.
@@ -97,11 +96,15 @@ test("guest native CLI, concurrent MCP, shared files, private freeze and cleanup
       assert.notEqual(nav.isError, true, JSON.stringify(nav));
       const snapshot = await clients[1]!.callTool({ name: "browser_snapshot", arguments: {} });
       assert.match(JSON.stringify(snapshot), /Guest browser proof/);
-      const browserProcesses = await cli.run(browser(["ps", "-eo", "args"]));
-      const browserCommand = browserProcesses.split("\n").find(line => line.startsWith("/usr/lib/chromium/chromium ") && !line.includes("--type="));
-      assert.ok(browserCommand, "the Machine must run the distribution's regular Chromium");
+      const browserProcesses = await cli.run(browser(["ps", "-eo", "pid,args"]));
+      const chromiumLine = browserProcesses.split("\n").find(line => line.includes("/usr/lib/chromium/chromium ") && !line.includes("--type="));
+      assert.ok(chromiumLine, "the Machine must run the distribution's regular Chromium");
+      const chromiumPid = chromiumLine.trim().split(/\s+/)[0]!;
+      const browserCommand = chromiumLine.trim().slice(chromiumPid.length).trim();
       assert.match(browserCommand, /--remote-debugging-pipe/);
-      assert.doesNotMatch(browserCommand, /--(?:headless|no-sandbox|user-agent|remote-debugging-port|disable-dev-shm-usage)|AutomationControlled/);
+      assert.doesNotMatch(browserCommand, /--(?:headless|no-sandbox|user-agent|remote-debugging-port|disable-dev-shm-usage)/);
+      await cli.run(agent(["kill", "-0", chromiumPid]));
+      assert.match(await cli.run(agent(["xdotool", "getdisplaygeometry"])), /1280\s+900/);
       await clients[1]!.close();
       assert.ok((await clients[0]!.listTools()).tools.length > 0, "executor disconnection must not end the leader's bridge");
       let version = "";

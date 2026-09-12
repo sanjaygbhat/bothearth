@@ -26,3 +26,19 @@ test("operator desktop children create shared files without changing the browser
     assert.equal(process.umask(), 0o077);
   } finally { process.umask(previous); desktop.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("stationary pointer moves and clicks do not wait for a position change", async t => {
+  const desktop = new Desktop("/tmp/unused-desktop-fixture");
+  const calls: string[][] = [];
+  t.mock.method(desktop as unknown as { run(command: string, args: string[]): Promise<void> }, "run", async (command: string, args: string[]) => {
+    assert.equal(command, "xdotool");
+    assert.equal(args.includes("--sync"), false, "waiting for motion deadlocks stationary input");
+    calls.push(args);
+  });
+  for (const action of ["move", "move", "down", "up", "wheel"]) {
+    await desktop.pointer({ action, x: 12, y: 34, button: 0, dx: 0, dy: action === "wheel" ? 200 : 0 });
+  }
+  assert.deepEqual(calls[2], ["mousemove", "12", "34", "mousedown", "1"]);
+  assert.deepEqual(calls[3], ["mousemove", "12", "34", "mouseup", "1"]);
+  assert.deepEqual(calls[4], ["mousemove", "12", "34", "click", "--delay", "0", "--repeat", "2", "5"]);
+});

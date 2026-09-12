@@ -55,6 +55,8 @@ const RELAY = new Set([
   "takeover.validate",
   "takeover.ttl",
   "takeover.sync",
+  "takeover.blank",
+  "takeover.goto",
   "takeover.masked-observation",
   "screencast.subscribe",
   "screencast.unsubscribe",

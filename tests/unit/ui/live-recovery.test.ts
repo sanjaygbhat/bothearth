@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { LiveView } from "../../../src/ui/live/session.ts";
 import { encodeLiveFrame } from "../../../src/protocol/live.ts";
 
-for (const failure of ["close", "server error", "error during decode"]) test(`${failure}: recovery clears pixels, requires fresh authority/frame, and never replays input`, async () => {
+for (const failure of ["close", "server error", "error during decode"]) test(`${failure}: recovery preserves the last picture, requires fresh authority/frame, and never replays keys`, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const originals = { WebSocket: globalThis.WebSocket, location: globalThis.location, createImageBitmap: globalThis.createImageBitmap };
   const sockets: Socket[] = [];
   class Socket extends EventTarget {
@@ -49,21 +50,39 @@ for (const failure of ["close", "server error", "error during decode"]) test(`${
     assert.equal(view.sendText("x".repeat(16385)), false);
     const serverError = (socket: Socket) => socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ v: 1, t: "error", code: "E_IO", message: "Synthetic capture failure" }) }));
     if (failure === "server error") serverError(first); else first.close();
-    assert.equal(view.sendText("disconnected"), false); assert.equal(pixels, false); assert.match(banner.textContent, /Not connected/); assert.equal(errors, 1);
-    doc.hidden = true; doc.dispatchEvent(new Event("visibilitychange"));
-    doc.hidden = false; doc.dispatchEvent(new Event("visibilitychange"));
+    assert.equal(view.sendText("disconnected"), false); assert.equal(pixels, true); assert.match(banner.textContent, /Reconnecting/); assert.equal(errors, 1);
+    t.mock.timers.tick(1000);
     const second = sockets[1]!; assert.ok(second); key(); assert.equal(second.sent.length, 0, "old input is not replayed");
     mode(second, 2); key(); assert.equal(inputs(second).length, 0);
     frame(second, 2);
     if (failure === "error during decode") serverError(second);
-    else { doc.hidden = true; doc.dispatchEvent(new Event("visibilitychange")); }
+    else {
+      const beforeErrors = errors;
+      doc.hidden = true; doc.dispatchEvent(new Event("visibilitychange"));
+      assert.equal(second.readyState, 1, "backgrounding must retain the connection");
+      assert.equal(errors, beforeErrors, "backgrounding is not a connection failure");
+    }
     finishDecode!(); await new Promise(setImmediate); assert.equal(pixels, false, "in-flight HUMAN decode cannot restore a hidden or disconnected screen");
     doc.hidden = false; doc.dispatchEvent(new Event("visibilitychange"));
-    const third = sockets[2]!; mode(third, 3); frame(third, 3); finishDecode!(); await new Promise(setImmediate);
-    key(); assert.equal(inputs(third).length, 1); assert.equal(pixels, true);
-    assert.equal(third.sent.some((m) => String(m.t).startsWith("takeover")), false, "recovery never changes the server lease");
-    view.close(); assert.equal(pixels, false);
-    doc.dispatchEvent(new Event("visibilitychange")); assert.equal(sockets.length, 3, "leaving the view removes recovery listeners");
+    if (failure === "error during decode") {
+      const third = sockets[2]!; mode(third, 3); frame(third, 3); finishDecode!(); await new Promise(setImmediate);
+      key(); assert.equal(inputs(third).length, 1); assert.equal(pixels, true);
+      assert.equal(third.sent.some((m) => String(m.t).startsWith("takeover")), false, "recovery never changes the server lease");
+      third.close();
+      view.close(); assert.equal(pixels, false);
+      t.mock.timers.tick(5000);
+      doc.dispatchEvent(new Event("visibilitychange")); assert.equal(sockets.length, 3, "leaving the view removes recovery listeners");
+    } else {
+      assert.equal(sockets.length, 2, "becoming visible must not replace an open socket");
+      key(); assert.equal(inputs(second).length, 0, "hidden frames cannot enable input");
+      frame(second, 2); finishDecode!(); await new Promise(setImmediate);
+      key(); assert.equal(inputs(second).length, 1); assert.equal(pixels, true);
+      assert.equal(second.sent.some((m) => String(m.t).startsWith("takeover")), false, "recovery never changes the server lease");
+      second.close();
+      view.close(); assert.equal(pixels, false);
+      t.mock.timers.tick(5000);
+      doc.dispatchEvent(new Event("visibilitychange")); assert.equal(sockets.length, 2, "leaving the view removes recovery listeners");
+    }
   } finally { view.close(); Object.assign(globalThis, originals); }
 });
 
@@ -72,7 +91,7 @@ it("stale live frame cannot revoke newer human control", async () => {
   const { LiveView } = await import("../../../src/ui/live/session.ts");
   const { encodeLiveFrame } = await import("../../../src/protocol/live.ts");
   const frame = encodeLiveFrame({ v: 1, seq: 1, ts: 0, mime: "image/jpeg", mode: "agent", epoch: 1, target: "p", viewport: { w: 1, h: 1, dpr: 1 }, meta: { offsetTop: 0, pageScaleFactor: 1, deviceWidth: 1, deviceHeight: 1, scrollOffsetX: 0, scrollOffsetY: 0 } }, new Uint8Array());
-  const view = { epoch: 2, mode: "human", authorityKnown: true, drawFrame: () => assert.fail("stale frame painted") };
+  const view = { epoch: 2, mode: "human", authorityKnown: true, ack() {}, drawFrame: () => assert.fail("stale frame painted") };
   await (LiveView.prototype as unknown as { onMessage(data: unknown): Promise<void> }).onMessage.call(view, frame.buffer);
   assert.deepEqual([view.epoch, view.mode], [2, "human"]);
 });
@@ -168,5 +187,198 @@ describe("keys while driving", () => {
       onKey.indexOf("keepsLocally") < onKey.indexOf("ev.preventDefault()"),
       "the app's own keys escape before anything is prevented",
     );
+  });
+});
+
+describe("driving after a socket drop", () => {
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = 1;
+    sent: Array<Record<string, unknown>> = [];
+    send(data: string) {
+      this.sent.push(JSON.parse(data) as Record<string, unknown>);
+    }
+    close() {
+      this.readyState = 3;
+      this.dispatchEvent(new Event("close"));
+    }
+  }
+
+  async function mount(t: { mock: { timers: { enable(opts: { apis: string[] }): void; tick(ms: number): void } } }, driver = true) {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const originals = {
+      WebSocket: globalThis.WebSocket,
+      location: globalThis.location,
+      createImageBitmap: globalThis.createImageBitmap,
+    };
+    const sockets: Socket[] = [];
+    class Tracked extends Socket {
+      constructor() {
+        super();
+        sockets.push(this);
+      }
+    }
+    const doc = Object.assign(new EventTarget(), { hidden: false, defaultView: new EventTarget() });
+    const canvas = Object.assign(new EventTarget(), {
+      ownerDocument: doc,
+      width: 1,
+      height: 1,
+      style: { cursor: "" },
+      getContext: () => ({ clearRect() {}, drawImage() {} }),
+    });
+    const banner = { textContent: "" };
+    const recoveries: Array<{ held: boolean; message: string }> = [];
+    globalThis.createImageBitmap = (() =>
+      Promise.resolve({ width: 1, height: 1, close() {} })) as typeof createImageBitmap;
+    Object.assign(globalThis, { WebSocket: Tracked, location: { protocol: "http:", host: "localhost" } });
+    const view = new LiveView(
+      canvas as unknown as HTMLCanvasElement,
+      banner as unknown as HTMLElement,
+      "fixture",
+      {
+        onError(err, recovery) {
+          recoveries.push({ held: recovery?.held === true, message: err.message });
+        },
+      },
+    );
+    if (driver) view.setDriver(true);
+    view.connect();
+    const hello = (socket: Socket, epoch: number, mode: "agent" | "human" = "human") =>
+      socket.dispatchEvent(new MessageEvent("message", {
+        data: JSON.stringify({ v: 1, t: "hello", mode, epoch, viewport: { w: 1, h: 1, dpr: 1 }, session: "fixture" }),
+      }));
+    const modeMsg = (socket: Socket, epoch: number, mode: "agent" | "human") =>
+      socket.dispatchEvent(new MessageEvent("message", {
+        data: JSON.stringify({ v: 1, t: "mode", mode, epoch }),
+      }));
+    const frame = (socket: Socket, epoch: number, mode: "agent" | "human" = "human") =>
+      socket.dispatchEvent(new MessageEvent("message", {
+        data: encodeLiveFrame({
+          v: 1, seq: 1, ts: 0, mime: "image/jpeg", mode, epoch, target: "p",
+          viewport: { w: 1, h: 1, dpr: 1 },
+          meta: { offsetTop: 0, pageScaleFactor: 1, deviceWidth: 1, deviceHeight: 1, scrollOffsetX: 0, scrollOffsetY: 0 },
+        }, new Uint8Array()).buffer,
+      }));
+    const key = () => canvas.dispatchEvent(Object.assign(new Event("keydown"), { key: "x", code: "KeyX" }));
+    const inputs = (socket: Socket) => socket.sent.filter((m) => m.t === "key" && m.kind !== "reset");
+    return {
+      view, sockets, canvas, banner, recoveries, hello, modeMsg, frame, key, inputs,
+      restore() {
+        view.close();
+        Object.assign(globalThis, originals);
+      },
+    };
+  }
+
+  it("a fresh mode with the same epoch restores frames and input", async (t) => {
+    const s = await mount(t);
+    try {
+      const first = s.sockets[0]!;
+      s.modeMsg(first, 4, "human");
+      s.frame(first, 4);
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(first).length, 1);
+      first.close();
+      t.mock.timers.tick(250);
+      const second = s.sockets[1]!;
+      assert.ok(second);
+      s.key();
+      assert.equal(s.inputs(second).length, 0, "reconnect must wait for a fresh mode acknowledgement");
+      s.modeMsg(second, 4, "human");
+      s.key();
+      assert.equal(s.inputs(second).length, 0, "same-epoch mode without a frame must not relay");
+      s.frame(second, 4);
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(second).length, 1);
+      assert.equal((s.inputs(second)[0] as { epoch: number }).epoch, 4);
+    } finally {
+      s.restore();
+    }
+  });
+
+  it("resumes sending after reconnect without a second acquire", async (t) => {
+    const s = await mount(t);
+    try {
+      const first = s.sockets[0]!;
+      s.hello(first, 4);
+      s.frame(first, 4);
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(first).length, 1);
+      first.close();
+      assert.equal(s.recoveries[0]?.held, true);
+      assert.match(s.recoveries[0]!.message, /^Reconnecting/);
+      assert.match(s.banner.textContent, /Reconnecting/);
+      assert.doesNotMatch(s.recoveries[0]!.message, /Connection interrupted/);
+      t.mock.timers.tick(1000);
+      const second = s.sockets[1]!;
+      assert.ok(second);
+      s.key();
+      assert.equal(s.inputs(second).length, 0, "must wait for the new epoch and frame");
+      s.hello(second, 5);
+      s.key();
+      assert.equal(s.inputs(second).length, 0, "mode without a human frame must not relay");
+      s.frame(second, 5);
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(second).length, 1);
+      assert.equal((s.inputs(second)[0] as { epoch: number }).epoch, 5);
+      assert.equal(s.sockets.length, 2);
+    } finally {
+      s.restore();
+    }
+  });
+
+  it("applies a mode/epoch change on the open socket", async (t) => {
+    const s = await mount(t);
+    try {
+      const socket = s.sockets[0]!;
+      s.hello(socket, 1, "agent");
+      s.frame(socket, 1, "agent");
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(socket).length, 0);
+      s.modeMsg(socket, 2, "human");
+      s.key();
+      assert.equal(s.inputs(socket).length, 0, "human mode without a matching frame must not relay");
+      s.frame(socket, 2, "human");
+      await new Promise(setImmediate);
+      s.key();
+      assert.equal(s.inputs(socket).length, 1);
+      assert.equal((s.inputs(socket)[0] as { epoch: number }).epoch, 2);
+      assert.equal(s.sockets.length, 1, "authority change must not open a new socket");
+      s.view.connect();
+      assert.equal(s.sockets.length, 1, "connect() must reuse an open socket");
+    } finally {
+      s.restore();
+    }
+  });
+
+  it("hides the local cursor only while this window is driving", async (t) => {
+    const s = await mount(t, false);
+    try {
+      const socket = s.sockets[0]!;
+      assert.equal(s.canvas.style.cursor, "");
+      s.hello(socket, 1, "agent");
+      assert.equal(s.canvas.style.cursor, "");
+      s.view.setDriver(true);
+      assert.equal(s.canvas.style.cursor, "", "agent mode keeps the local pointer");
+      s.modeMsg(socket, 2, "human");
+      assert.equal(s.canvas.style.cursor, "", "waiting for a picture keeps the local pointer visible");
+      s.frame(socket, 2);
+      await new Promise(setImmediate);
+      assert.equal(s.canvas.style.cursor, "none");
+      s.view.setDriver(false);
+      assert.equal(s.canvas.style.cursor, "", "an observer must see the local pointer");
+      s.view.setDriver(true);
+      assert.equal(s.canvas.style.cursor, "none");
+      s.modeMsg(socket, 3, "agent");
+      assert.equal(s.canvas.style.cursor, "");
+    } finally {
+      s.restore();
+    }
   });
 });

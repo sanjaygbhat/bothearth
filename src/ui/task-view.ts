@@ -9,6 +9,10 @@ export type TaskRow = {
   model?: string | null;
   execution_mode?: "executor" | "orchestrator" | null;
   executor?: { adapter: string; model: string } | null;
+  started_at?: string | null;
+  duration_ms?: number | null;
+  awaiting_message?: boolean;
+  last_assistant?: string | null;
 };
 export type TaskStep = { kind: string; body: Record<string, unknown>; created_at: string; result_id?: number };
 

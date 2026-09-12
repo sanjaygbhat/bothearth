@@ -8,16 +8,26 @@
  *   POST /api/v1/takeover/:id/acquire       -> state human, new control epoch
  *   POST /api/v1/takeover/:id/release       -> agent, OR still human when the
  *                                              page is still sensitive
+ *   POST /api/v1/takeover/:id/clear         -> about:blank, then release
  *   POST /api/v1/takeover/:id/decline
+ *   POST /api/v1/takeover/:id/google-account -> Google account chooser, still human
  *
  * The epoch is never shown or named. Live input is authorised by the server’s
  * mode message, not by this optimistic UI: `LiveView` refuses to relay anything
  * until the server says `human`.
  */
 
-import { apiPost } from "./api.ts";
+import { apiPost, humanApiError } from "./api.ts";
 import { countdownText } from "./needs-you.ts";
+import { IS_APPLE } from "./palette.ts";
 import { appendTextChild } from "./safe.ts";
+import { toast } from "./shell.ts";
+
+function modifierKey(): string {
+  const platform = typeof navigator !== "undefined" ? navigator.platform || "" : "";
+  if (platform) return IS_APPLE() ? "⌘" : "Ctrl";
+  return "⌘";
+}
 
 export type TakeoverWire = {
   takeover_id: string;
@@ -137,6 +147,18 @@ export function takeoverReason(reason: string | undefined | null): string {
 export const STILL_SENSITIVE =
   "That page still has a password or a code on it. Finish that step or move off it, then return control again.";
 
+export const PASSWORD_STILL_ON_SCREEN =
+  "The page still shows a password field. Navigate the bot's browser away from it (for example to about:blank), then give control back.";
+
+export function blockedHoldCopy(kind?: string): string {
+  if (kind === "otp") {
+    return "The page still shows a code field. Navigate the bot's browser away from it (for example to about:blank), then give control back.";
+  }
+  return PASSWORD_STILL_ON_SCREEN;
+}
+
+export const CLEAR_AND_RETURN = "Clear the screen and give control back";
+
 export const TAKE_FAILED =
   "Your bot is still finishing a step. Try again in a moment.";
 
@@ -170,16 +192,116 @@ export async function requestControl(
   return takeover;
 }
 
-/** Returns true when control actually went back to the bot. */
-export async function releaseControl(takeoverId: string): Promise<boolean> {
+export type ReleaseResult =
+  | { ok: true; cleared?: { reason: string } }
+  | { ok: false; blocked_by?: { kind: string } };
+
+function kindString(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/** Reason the daemon named on a release: `cleared.reason`, else `blocked_by.kind`. */
+export function releaseReasonFrom(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const row = payload as { cleared?: unknown; blocked_by?: unknown };
+  const cleared = row.cleared;
+  const fromCleared =
+    cleared && typeof cleared === "object"
+      ? kindString((cleared as { reason?: unknown }).reason)
+      : undefined;
+  const blocked = row.blocked_by;
+  const fromBlocked =
+    blocked && typeof blocked === "object"
+      ? kindString((blocked as { kind?: unknown }).kind)
+      : undefined;
+  return fromCleared ?? fromBlocked;
+}
+
+/**
+ * One line after control is returned. Only the reasons the daemon actually
+ * sends are mapped; anything else is the no-reason sentence.
+ */
+export function releaseReturnedCopy(reason?: string | null): string {
+  if (reason === "password") {
+    return "You gave control back. The bot cleared the password field before continuing.";
+  }
+  if (reason === "otp") {
+    return "You gave control back. The bot cleared the code field before continuing.";
+  }
+  if (reason === "expired") return "Control returned because the hold expired.";
+  return "You gave control back.";
+}
+
+function releaseFrom(response: {
+  takeover?: { state?: string };
+  blocked_by?: { kind?: unknown };
+  cleared?: { reason?: unknown };
+}): ReleaseResult {
+  const reason = releaseReasonFrom(response);
+  if (response.takeover?.state !== "human") {
+    return reason ? { ok: true, cleared: { reason } } : { ok: true };
+  }
+  return { ok: false, blocked_by: reason ? { kind: reason } : undefined };
+}
+
+/** Returns whether control actually went back to the bot. */
+export async function releaseControl(takeoverId: string): Promise<ReleaseResult> {
   const response = (await apiPost(
     `/api/v1/takeover/${encodeURIComponent(takeoverId)}/release`,
-  )) as { takeover?: { state?: string } };
-  return response.takeover?.state !== "human";
+  )) as {
+    takeover?: { state?: string };
+    blocked_by?: { kind?: unknown };
+    cleared?: { reason?: unknown };
+  };
+  return releaseFrom(response);
+}
+
+/** Navigate the current tab to about:blank, then release. */
+export async function clearAndReleaseControl(takeoverId: string): Promise<ReleaseResult> {
+  const response = (await apiPost(`/api/v1/takeover/${encodeURIComponent(takeoverId)}/clear`)) as {
+    takeover?: { state?: string };
+    blocked_by?: { kind?: unknown };
+    cleared?: { reason?: unknown };
+  };
+  return releaseFrom(response);
 }
 
 export async function declineControl(takeoverId: string): Promise<void> {
   await apiPost(`/api/v1/takeover/${encodeURIComponent(takeoverId)}/decline`);
+}
+
+export const SWITCH_GOOGLE_ACCOUNT = "Use a different Google account";
+
+const GOOGLE_ACCOUNT_NEEDS_HOLD = "Take control first, then choose a different Google account.";
+
+/** Open Google's account chooser in the bot's current tab. Human hold only. */
+export async function switchGoogleAccount(takeoverId: string): Promise<void> {
+  await apiPost(`/api/v1/takeover/${encodeURIComponent(takeoverId)}/google-account`);
+}
+
+function appendGoogleAccountButton(
+  root: HTMLElement,
+  acts: HTMLElement,
+  armed: boolean,
+): HTMLButtonElement {
+  const google = document.createElement("button");
+  google.type = "button";
+  google.className = "btn ghost";
+  google.textContent = SWITCH_GOOGLE_ACCOUNT;
+  if (!armed) {
+    google.disabled = true;
+    google.setAttribute("title", GOOGLE_ACCOUNT_NEEDS_HOLD);
+  } else {
+    google.addEventListener("click", () => {
+      const id = root.dataset.takeoverId || acquiredControl();
+      if (!id) return;
+      void switchGoogleAccount(id).catch((error: unknown) => {
+        toast("warn", humanApiError(error, "Couldn’t open Google’s account chooser."));
+      });
+    });
+  }
+  acts.append(google);
+  return google;
 }
 
 export interface NeedsYouHandlers {
@@ -209,13 +331,18 @@ export function renderNeedsYou(handlers: NeedsYouHandlers): {
     takeoverReason(handlers.reason),
   );
   appendTextChild(root, "p", "Take control, complete this step, then give control back.");
+  appendTextChild(
+    root,
+    "p",
+    "Sign in in the picture on the right — that is your bot's own browser, not Arc or Chrome. The bot does not use your everyday cookies.",
+  );
 
   const acts = appendTextChild(root, "div", "", "acts");
   const take = document.createElement("button");
   take.type = "button";
   take.className = "btn primary";
   take.append(document.createTextNode("Take control "));
-  appendTextChild(take, "kbd", "⌘");
+  appendTextChild(take, "kbd", modifierKey());
   appendTextChild(take, "kbd", "⇧T");
   take.addEventListener("click", () => handlers.onTake());
   acts.append(take);
@@ -229,6 +356,8 @@ export function renderNeedsYou(handlers: NeedsYouHandlers): {
     acts.append(decline);
   }
 
+  appendGoogleAccountButton(root, acts, false);
+
   return {
     root,
     focus: () => take.focus({ preventScroll: true }),
@@ -238,9 +367,54 @@ export function renderNeedsYou(handlers: NeedsYouHandlers): {
   };
 }
 
+export interface PausedHoldHandlers {
+  onReturn(): void;
+  onTake(): void;
+}
+
+/** Expired or timed-out hold: the desktop stays private until control is returned. */
+export function renderPausedHold(handlers: PausedHoldHandlers): {
+  root: HTMLElement;
+  focus(): void;
+  setBusy(busy: boolean): void;
+} {
+  const root = document.createElement("section");
+  root.className = "takeover-ask";
+  root.setAttribute("role", "status");
+  appendTextChild(root, "h2", "Control has paused");
+  appendTextChild(
+    root,
+    "p",
+    "Return control once this computer has no private input on screen, or take control to finish.",
+  );
+  const acts = appendTextChild(root, "div", "", "acts");
+  const give = document.createElement("button");
+  give.type = "button";
+  give.className = "btn primary";
+  give.textContent = "Give control back";
+  give.addEventListener("click", () => handlers.onReturn());
+  const take = document.createElement("button");
+  take.type = "button";
+  take.className = "btn";
+  take.append(document.createTextNode("Take control "));
+  appendTextChild(take, "kbd", modifierKey());
+  appendTextChild(take, "kbd", "⇧T");
+  take.addEventListener("click", () => handlers.onTake());
+  acts.append(give, take);
+  return {
+    root,
+    focus: () => give.focus({ preventScroll: true }),
+    setBusy: (busy) => {
+      give.disabled = busy;
+      take.disabled = busy;
+    },
+  };
+}
+
 export interface DrivingHandlers {
   onReturn(): void;
-  onStop(): void;
+  onStop?: () => void;
+  onClear?: () => void;
 }
 
 /** Someone else took the keyboard: this window watches and sends nothing. */
@@ -296,28 +470,50 @@ export function renderDriving(handlers: DrivingHandlers): {
   give.type = "button";
   give.className = "btn primary";
   give.append(document.createTextNode("Give control back "));
-  appendTextChild(give, "kbd", "⌘");
+  appendTextChild(give, "kbd", modifierKey());
   appendTextChild(give, "kbd", "↩");
   give.addEventListener("click", () => handlers.onReturn());
+
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "btn";
+  clear.textContent = CLEAR_AND_RETURN;
+  clear.hidden = true;
+  clear.addEventListener("click", () => handlers.onClear?.());
 
   const stop = document.createElement("button");
   stop.type = "button";
   stop.className = "btn ghost";
   stop.textContent = "Stop the task instead";
-  stop.addEventListener("click", () => handlers.onStop());
+  if (handlers.onStop) stop.addEventListener("click", () => handlers.onStop?.());
+  else stop.hidden = true;
 
-  acts.append(give, stop);
+  const google = appendGoogleAccountButton(root, acts, true);
+
+  acts.append(give, clear, stop, google);
+  const held = acquiredControl();
+  if (held) root.dataset.takeoverId = held;
+
+  const paintHold = (text: string | null): void => {
+    hold.textContent = text ?? "";
+    hold.hidden = !text;
+    const holding = Boolean(text && handlers.onClear);
+    clear.hidden = !holding;
+    give.className = holding ? "btn" : "btn primary";
+    clear.className = holding ? "btn primary" : "btn";
+    if (holding) acts.insertBefore(clear, give);
+    else acts.insertBefore(give, clear);
+  };
 
   return {
     root,
-    focus: () => give.focus({ preventScroll: true }),
+    focus: () => (clear.hidden ? give : clear).focus({ preventScroll: true }),
     setBusy: (busy) => {
       give.disabled = busy;
+      clear.disabled = busy;
+      google.disabled = busy;
     },
-    setHold: (text) => {
-      hold.textContent = text ?? "";
-      hold.hidden = !text;
-    },
+    setHold: paintHold,
     setLease: (msLeft) => {
       lease.textContent = msLeft === null ? "" : leaseText(msLeft);
       lease.hidden = msLeft === null;

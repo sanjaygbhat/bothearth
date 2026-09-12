@@ -72,6 +72,28 @@ test("multiplexed operator frames arrive separately from RPC results and stop on
 });
 
 
+test("producer status notifications reach a subscribed live client", async () => {
+  const stdout = new PassThrough();
+  const child = fakeExec(stdout, new Writable({ write(chunk, _encoding, callback) {
+    const frame = decodeStdioBody(chunk.subarray(4));
+    assert.equal(frame.type, 0);
+    const request = frame.message as { id: number };
+    stdout.write(encodeRpcFrame({ jsonrpc: "2.0", id: request.id, result: { ok: true, data: {} } }));
+    callback();
+  } }));
+  const client = new ExecComputerClient("live_producer", {
+    capabilities: ["browser"],
+    cli: { binary: "fixture", run: async () => "", runSync: () => "", spawn: () => child },
+  });
+  try {
+    client.startLive();
+    await client.call("takeover_status");
+    const next = once(client, "mode");
+    stdout.write(encodeRpcFrame({ jsonrpc: "2.0", method: "live.producer", params: { v: 1, t: "producer", status: "restarting" } }));
+    assert.deepEqual(await next, [{ v: 1, t: "producer", status: "restarting" }]);
+  } finally { await client.close(); }
+});
+
 test("a dead RPC is replaced on the next call without replaying the failed action", async () => {
   let opens = 0;
   const methods: string[] = [];

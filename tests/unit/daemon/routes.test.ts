@@ -3,8 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { startDaemon, type DaemonHandle } from "../../../src/daemon/server.ts";
 import { CSRF_HEADER, SESSION_COOKIE } from "../../../src/daemon/auth.ts";
+import { type DaemonHandle, startDaemon } from "../../../src/daemon/server.ts";
+import { VERSION } from "../../../src/index.ts";
 
 process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
 
@@ -31,6 +32,7 @@ describe("daemon HTTP/WS", () => {
           else request.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
         }),
       } },
+      dockerReady: async () => false,
     });
     base = daemon.baseUrl;
     origin = `http://127.0.0.1:${daemon.port}`;
@@ -79,6 +81,67 @@ describe("daemon HTTP/WS", () => {
     const r = await api("/healthz", { omitOrigin: true });
     assert.equal(r.status, 200);
     assert.equal(r.json.ok, true);
+    assert.equal(r.json.version, VERSION);
+    assert.equal(r.json.docker, undefined);
+
+    const deep = await api("/healthz?deep=1", { omitOrigin: true });
+    assert.equal(deep.status, 503);
+    assert.equal(deep.json.docker, false);
+    assert.equal(deep.json.version, VERSION);
+    assert.equal(typeof deep.json.path, "undefined");
+    assert.doesNotMatch(JSON.stringify(deep.json), /\/(?:var|run|Users|home|tmp)\//);
+
+    const boom = await startDaemon({
+      host: "127.0.0.1",
+      port: 0,
+      mcpToken: MCP,
+      bootstrapToken: BOOT,
+      workspaceRoot: mkdtempSync(join(tmpdir(), "mb-healthz-throw-")),
+      dockerReady: async () => {
+        throw new Error("/var/run/docker.sock: connection refused");
+      },
+    });
+    try {
+      const thrown = await fetch(`${boom.baseUrl}/healthz?deep=1`);
+      assert.equal(thrown.status, 503);
+      const body = (await thrown.json()) as {
+        ok?: boolean;
+        docker?: boolean;
+        version?: string;
+        path?: string;
+      };
+      assert.equal(body.ok, false);
+      assert.equal(body.docker, false);
+      assert.equal(body.version, VERSION);
+      assert.equal(typeof body.path, "undefined");
+      const raw = JSON.stringify(body);
+      assert.doesNotMatch(raw, /\/(?:var|run|Users|home|tmp)\//);
+      assert.doesNotMatch(raw, /docker\.sock|connection refused/i);
+    } finally {
+      await boom.close();
+    }
+
+    const up = await startDaemon({
+      host: "127.0.0.1",
+      port: 0,
+      mcpToken: MCP,
+      bootstrapToken: BOOT,
+      workspaceRoot: mkdtempSync(join(tmpdir(), "mb-healthz-")),
+      dockerReady: async () => true,
+    });
+    try {
+      const live = await fetch(`${up.baseUrl}/healthz`);
+      const ready = await fetch(`${up.baseUrl}/healthz?deep=1`);
+      assert.equal(live.status, 200);
+      assert.equal(((await live.json()) as { version: string }).version, VERSION);
+      assert.equal(ready.status, 200);
+      const body = (await ready.json()) as { ok: boolean; version: string; docker: boolean };
+      assert.equal(body.ok, true);
+      assert.equal(body.version, VERSION);
+      assert.equal(body.docker, true);
+    } finally {
+      await up.close();
+    }
   });
 
   it("auth matrix: no cookie → 401; mcp on UI → 403; csrf missing → 403", async () => {

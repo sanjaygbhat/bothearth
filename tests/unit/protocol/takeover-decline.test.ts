@@ -322,7 +322,8 @@ describe("/api/v1/takeover decline + /release E_POLICY", () => {
       method: "POST",
     });
     assert.equal(release.status, 409);
-    assert.equal(release.json.error.code, "E_POLICY");
+    assert.equal(release.json.error, "E_POLICY");
+    assert.match(String(release.json.message), /not been taken yet/i);
 
     const declined = await api(`/api/v1/takeover/${tk}/decline`, {
       method: "POST",

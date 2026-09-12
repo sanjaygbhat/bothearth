@@ -16,26 +16,19 @@ const UI = join(dirname(fileURLToPath(import.meta.url)), "../../../src/ui");
 const source = (name: string) => readFileSync(join(UI, name), "utf8");
 
 describe("opening a saved file", () => {
-  it("has no anchor anywhere in the task view pointing at an API route", () => {
+  it("downloads saved files through an attachment link, not a popup", () => {
     const task = source("task.ts");
-    // A `.href = "/api/..."` on an anchor replaces the app with the raw body
-    // and leaves no way back.
-    assert.equal(
-      /\.href\s*=\s*[`"']\/api\//.test(task),
-      false,
-      "no anchor in the task view is given an API URL",
-    );
-    assert.equal(
-      /createElement\("a"\)/.test(task.slice(task.indexOf("renderArtifacts"))),
-      false,
-      "the saved-files rows build buttons, not links",
-    );
+    const artifacts = task.slice(task.indexOf("fillArtifacts"));
+    assert.match(artifacts, /createElement\("a"\)/, "Download is an attachment link");
+    assert.match(artifacts, /\.download\s*=/, "the link names the file");
+    assert.doesNotMatch(artifacts, /target\s*=\s*["']_blank/, "no new window — that replaced the app");
+    assert.doesNotMatch(artifacts, /window\.open/);
   });
 
-  it("routes both file actions through the one bridge call", () => {
+  it("opens a file through the shell; Download does not", () => {
     const task = source("task.ts");
     const calls = task.match(/modelbotNative\.revealFile\(/g) ?? [];
-    assert.equal(calls.length, 2, "the saved file and the saved result both go through it");
+    assert.equal(calls.length, 2, "Open and Open result go through it; Download does not");
   });
 
   it("hands the shell the results directory when the record carries one", () => {
@@ -55,6 +48,15 @@ describe("opening a saved file", () => {
     assert.match(readme, /`revealFile`/, "the contract doc lists the method");
     assert.match(readme, /`setAttention`/);
     assert.match(readme, /\| `back` \|/, "the shell→page kinds list `back`");
+  });
+});
+
+describe("the titlebar can open the task list", () => {
+  it("keeps a Tasks link to #/tasks next to the status cluster", () => {
+    const html = source("index.html");
+    assert.match(html, /id="tb-tasks"/);
+    assert.match(html, /href="#\/tasks"/);
+    assert.match(html, />Tasks<\/a>/);
   });
 });
 

@@ -5,8 +5,10 @@ import { test, type TestContext } from "node:test";
 import { FakeComputer } from "../../../src/computer-client/fake.ts";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { until } from "../../helpers/until.ts";
+
+isolateModelbotHome();
 
 const THREAD = "00000000-0000-0000-0000-000000000091";
 

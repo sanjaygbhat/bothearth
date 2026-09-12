@@ -77,14 +77,25 @@ const fakeWindow = new FakeWindow();
 const sessionStore = new MemoryStorage();
 const localStore = new MemoryStorage();
 
+const focusState: {
+  window: boolean;
+  active: { tagName: string; id?: string; isContentEditable?: boolean } | null;
+} = { window: false, active: null };
+
 const fakeDocument = {
   title: "ModelBot",
   readyState: "complete",
-  body: null,
+  body: null as { tagName: string } | null,
   adoptedStyleSheets: [] as unknown[],
   querySelector: () => null,
   getElementById: () => null,
   addEventListener: () => {},
+  get activeElement() {
+    return focusState.active;
+  },
+  hasFocus() {
+    return focusState.window;
+  },
 };
 
 const fakeLocation = {
@@ -194,6 +205,9 @@ beforeEach(() => {
   permission = "granted";
   noBridge();
   fakeDocument.title = "ModelBot";
+  fakeLocation.hash = "";
+  focusState.window = false;
+  focusState.active = null;
   sessionStore.clear();
   localStore.clear();
   attention.stop();
@@ -209,7 +223,10 @@ describe("native bridge", () => {
 
     // None of the five may throw, and none may reach a handler that isn’t there.
     modelbotNative.setBadge(3);
-    modelbotNative.notify("Your bot needs you.", "There’s a login it can’t do safely on its own.");
+    modelbotNative.notify(
+      "Your bot needs you.",
+      "Open BotHearth and take control. The login is in the bot's browser, not in Arc.",
+    );
     modelbotNative.setTitle("Finding last month’s invoice");
     modelbotNative.requestAttention(true);
     assert.equal(modelbotNative.openExternal("https://example.com/docs"), true);
@@ -393,7 +410,10 @@ describe("attention — what is waiting on a person", () => {
     assert.equal(attention.count(), 1);
     assert.equal(fakeDocument.title, "(1) ModelBot");
     assert.equal(notices[0]?.title, "Your bot needs you.");
-    assert.match(notices[0]?.body ?? "", /login it can’t do safely/);
+    assert.equal(
+      notices[0]?.body,
+      "Open BotHearth and take control. The login is in the bot's browser, not in Arc.",
+    );
 
     attention.sync([first, second]);
     assert.equal(notices.length, 2);
@@ -437,6 +457,59 @@ describe("attention — what is waiting on a person", () => {
     assert.deepEqual((posted[2]?.args as AnyRecord)["taskId"], "#/tasks/t_7");
     assert.deepEqual(posted[3]?.args, { critical: true });
     assert.equal(notices.length, 0, "no web notification competes with the native banner");
+  });
+
+  it("opens the task on a fresh takeover even when the window has no document focus", () => {
+    focusState.window = false;
+    focusState.active = null;
+    fakeLocation.hash = "#/";
+    attention.sync([{ id: "k-idle", kind: "takeover", taskId: "t_1", expiresAt: futureIso() }]);
+    assert.equal(fakeLocation.hash, "#/tasks/t_1");
+    fakeLocation.hash = "#/";
+    attention.sync([{ id: "k-idle", kind: "takeover", taskId: "t_1", expiresAt: futureIso() }]);
+    assert.equal(fakeLocation.hash, "#/", "the same request must not navigate again");
+  });
+
+  it("does not steal the caret while an input is focused", () => {
+    focusState.window = false;
+    fakeLocation.hash = "#/";
+    for (const active of [
+      { tagName: "INPUT" },
+      { tagName: "TEXTAREA" },
+      { tagName: "DIV", isContentEditable: true },
+    ]) {
+      attention.clear();
+      fakeLocation.hash = "#/";
+      focusState.active = active;
+      attention.sync([{ id: `k-${active.tagName}`, kind: "takeover", taskId: "t_1", expiresAt: futureIso() }]);
+      assert.equal(fakeLocation.hash, "#/", active.tagName);
+    }
+  });
+
+  it("opens the task from Home when a takeover arrives over the event stream", async () => {
+    focusState.window = false;
+    focusState.active = { tagName: "TEXTAREA", id: "home-goal" };
+    fakeLocation.hash = "#/";
+    tasks = [{ id: "t_run", status: "running" }];
+    takeovers = [];
+
+    const stop = attention.start();
+    sockets[0]?.listeners["open"]?.();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(fakeLocation.hash, "#/", "nothing waiting yet");
+
+    takeovers = [
+      { id: "tk_fresh", task_id: "t_run", state: "takeover_requested", expires_at: futureIso() },
+    ];
+    sockets[0]?.listeners["message"]?.({ data: JSON.stringify({ type: "takeover.requested" }) });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(fakeLocation.hash, "#/tasks/t_run");
+
+    fakeLocation.hash = "#/";
+    sockets[0]?.listeners["message"]?.({ data: JSON.stringify({ type: "takeover.requested" }) });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(fakeLocation.hash, "#/", "the same request must not navigate again");
+    stop();
   });
 
   it("watches the event stream, reconciles from the two lists, and reconnects once", async () => {
@@ -503,7 +576,7 @@ describe("desktop alerts", () => {
     const ping = {
       key: "takeover:d1",
       title: "Your bot needs you.",
-      body: "There’s a login it can’t do safely on its own.",
+      body: "Open BotHearth and take control. The login is in the bot's browser, not in Arc.",
       route: "#/tasks/t_1",
     };
     desktopAlerts.announce([ping]);
@@ -518,7 +591,7 @@ describe("desktop alerts", () => {
     const ping = {
       key: "takeover:d2",
       title: "Your bot needs you.",
-      body: "There’s a login it can’t do safely on its own.",
+      body: "Open BotHearth and take control. The login is in the bot's browser, not in Arc.",
       route: "#/tasks/t_2",
     };
     desktopAlerts.announce([ping]);

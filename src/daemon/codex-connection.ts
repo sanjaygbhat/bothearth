@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { modelbotHome } from "../cli/paths.ts";
 import { claudeEnvironment } from "./claude-code.ts";
+import { logError } from "./log.ts";
 import { toolPath } from "./resolve-tool.ts";
 
 export interface CodexLoginOptions {
@@ -10,6 +12,8 @@ export interface CodexLoginOptions {
   loginMode?: "browser" | "device" | "terminal";
   /** Run the official CLI in the selected computer, including cancellation. */
   spawn?(args: string[]): Promise<{ child: ChildProcess; stop(): Promise<void> }>;
+  /** Guest /home/agent EACCES: migrate ownership, then the probe retries once. */
+  repairAgentHome?(): Promise<void>;
 }
 /** Uses the installed CLI's own authentication; never reads or returns its credentials. */
 export function createCodexConnection(options: CodexLoginOptions & {
@@ -19,6 +23,8 @@ export function createCodexConnection(options: CodexLoginOptions & {
   let generation = 0, message = "", closed = false;
   let terminalOutput = "";
   let loginOwner: string | undefined, device: { verification_uri: string; user_code: string; expires_at: string } | undefined;
+  let lastKnown: "signed_in" | "signed_out" | "missing" | undefined;
+  let lastProbeFail: unknown;
   const probes = new Set<ChildProcess>();
   const externalStops = new Map<ChildProcess, () => Promise<void>>();
   const provider = options.provider ?? "codex", label = provider === "claude" ? "Claude Code" : "Codex";
@@ -29,7 +35,14 @@ export function createCodexConnection(options: CodexLoginOptions & {
     login_mode: loginMode, ...(device && audience && audience === loginOwner ? { device_auth: device } : {}),
     ...(status === "signing_in" && options.spawn && loginMode === "terminal" && audience && audience === loginOwner
       ? { native_terminal: { output: terminalOutput, can_reply: true } } : {}),
-    message: message || (loginMode === "terminal" && status === "signed_out" ? "Sign in on this server using the installed Claude Code CLI, then check again." : ""), install_url: provider === "claude" ? "https://code.claude.com/docs/en/overview" : "https://developers.openai.com/codex/cli/" });
+    message: status === "unknown" ? HOLD_CHECK_MESSAGE
+      : status === "connected" || status === "signed_in" ? ""
+      : message || (status === "error" ? "The connection could not be checked. Choose Check again in a moment."
+      : status === "missing" ? `Install ${label}, then check again.`
+      : status === "signed_out" ? (loginMode === "terminal"
+        ? "Sign in on this server using the installed Claude Code CLI, then check again."
+        : `Sign in through ${label}. BotHearth never sees your password.`) : ""),
+    install_url: provider === "claude" ? "https://code.claude.com/docs/en/overview" : "https://developers.openai.com/codex/cli/" });
   const kill = async (child: ChildProcess, signal: NodeJS.Signals) => {
     const stop = externalStops.get(child);
     if (stop) { await stop(); return; }
@@ -46,34 +59,125 @@ export function createCodexConnection(options: CodexLoginOptions & {
     owned.child.once("close", () => externalStops.delete(owned.child));
     return owned.child;
   }
-  async function probe(): Promise<"signed_in" | "signed_out" | "missing" | "error"> {
-    if (closed) return "error";
+  async function probeOnce(): Promise<{ state: "signed_in" | "signed_out" | "missing" | "error" | "unknown"; transport: boolean }> {
+    const result = (state: "signed_in" | "signed_out" | "missing" | "error" | "unknown", transport = false) => ({ state, transport });
+    if (closed) return result("error");
     let check: ChildProcess;
     try {
       check = await launch(provider === "claude" ? ["auth", "status"] : ["login", "status"],
-        { cwd: homedir(), stdio: "ignore", detached: process.platform !== "win32" });
-    } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error"; }
-    if (closed) { await kill(check, "SIGKILL"); return "error"; }
+        { cwd: homedir(), stdio: ["ignore", "ignore", "pipe"], detached: process.platform !== "win32" });
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") return result("missing");
+      if (probeBlocked(error instanceof Error ? error.message : String(error))) {
+        message = HOLD_CHECK_MESSAGE;
+        return result("unknown");
+      }
+      lastProbeFail = error;
+      if (!message) message = probeFailureMessage(error);
+      return result("error", probeTransportFailure(error instanceof Error ? `${err.code ?? ""} ${error.message}` : String(error)));
+    }
+    if (closed) { await kill(check, "SIGKILL"); return result("error"); }
     // Native status output is never an application response.
-    check.stdout?.resume(); check.stderr?.resume();
+    check.stdout?.resume();
+    let stderr = "";
+    check.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      if (stderr.length > 4096) stderr = stderr.slice(-2048);
+    });
+    check.stderr?.resume();
     return new Promise((resolve) => {
       probes.add(check);
-      const timer = setTimeout(() => { killInBackground(check); resolve("error"); }, 5000);
-      check.once("error", (error: NodeJS.ErrnoException) => { clearTimeout(timer); probes.delete(check); resolve(error.code === "ENOENT" ? "missing" : "error"); });
-      check.once("close", (code) => { clearTimeout(timer); probes.delete(check); resolve(code === 0 ? "signed_in" : code === 1 ? "signed_out" : "error"); });
+      let settled = false;
+      const finish = (code: number | null, error?: NodeJS.ErrnoException) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer); probes.delete(check);
+        if (error?.code === "ENOENT") { resolve(result("missing")); return; }
+        if (error) {
+          if (probeBlocked(`${stderr} ${error.message}`)) {
+            message = HOLD_CHECK_MESSAGE;
+            resolve(result("unknown"));
+            return;
+          }
+          lastProbeFail = `${stderr} ${error.message}`;
+          if (!message) message = probeFailureMessage(error);
+          resolve(result("error", probeTransportFailure(`${stderr} ${error.message}`)));
+          return;
+        }
+        if (probeBlocked(stderr, code)) {
+          message = HOLD_CHECK_MESSAGE;
+          resolve(result("unknown"));
+          return;
+        }
+        if (agentHomePermission(stderr) || agentHomePermission(error)) {
+          lastProbeFail = stderr || error;
+          if (!message) message = probeFailureMessage(stderr || error || "error");
+          resolve(result("error"));
+          return;
+        }
+        if ((code !== 0 && code !== 1) || probeTransportFailure(stderr)) {
+          lastProbeFail = stderr || "error";
+          if (!message) message = probeFailureMessage(stderr || "error");
+          resolve(result("error", code == null || probeTransportFailure(stderr)));
+          return;
+        }
+        if (message === HOLD_CHECK_MESSAGE
+          || message === "The connection could not be checked. Choose Check again in a moment."
+          || message === "The bot’s computer is not running"
+          || message === "Docker is not reachable") {
+          message = "";
+        }
+        resolve(result(code === 0 ? "signed_in" : "signed_out"));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        if (!message) message = "The connection could not be checked. Choose Check again in a moment.";
+        killInBackground(check); finish(null);
+      }, 5000);
+      check.once("error", (error: NodeJS.ErrnoException) => finish(null, error));
+      check.once("close", (code) => finish(code));
+      if (check.exitCode !== null || check.signalCode) setImmediate(() => finish(check.exitCode));
     });
+  }
+  async function probe(): Promise<{ state: "signed_in" | "signed_out" | "missing" | "error" | "unknown"; transport: boolean }> {
+    lastProbeFail = undefined;
+    const first = await probeOnce();
+    if (first.state !== "error" || first.transport || !options.repairAgentHome || !agentHomePermission(lastProbeFail)) return first;
+    try {
+      await options.repairAgentHome();
+    } catch (error) {
+      logError("agent home repair failed", { error: String(error) });
+      message = "The connection could not be checked. Choose Check again in a moment.";
+      return { state: "error", transport: false };
+    }
+    lastProbeFail = undefined;
+    return probeOnce();
   }
   async function status(audience?: string) {
     if (login) return view("signing_in", audience);
-    const state = await probe();
+    let probed = await probe();
     // A newer explicit login owns status while an older probe finishes.
     if (login) return view("signing_in", audience);
-    return view(state === "signed_in" && options.configured() ? "connected" : state, audience);
+    if (probed.state === "error" && probed.transport) {
+      probed = await probe();
+      if (login) return view("signing_in", audience);
+    }
+    const state = probed.state;
+    const shown = state === "signed_in" && options.configured() ? "connected" : state;
+    if (state === "signed_in" || state === "signed_out" || state === "missing") {
+      lastKnown = state;
+      return view(shown, audience);
+    }
+    if (state === "error" && probed.transport && lastKnown === "signed_in") {
+      return { ...view(options.configured() ? "connected" : "signed_in", audience), stale: true };
+    }
+    return view(shown, audience);
   }
   async function connect(model = options.model(), owner?: string) {
     const attempt = generation;
     if (login) return view("signing_in");
-    const state = await probe();
+    const { state } = await probe();
     if (closed || attempt !== generation || (owner && options.authorized?.(owner) === false)) return view("signed_out");
     if (state !== "signed_in") return view(state);
     if (options.connected(model) === false) { message = "The application is restarting. Try connecting again shortly."; return view("error"); }
@@ -84,23 +188,24 @@ export function createCodexConnection(options: CodexLoginOptions & {
     const attempt = generation;
     const authorized = () => !owner || options.authorized?.(owner) !== false;
     if (login) return view("signing_in");
-    const state = await probe();
+    const { state } = await probe();
     if (login) return view("signing_in");
     if (closed || attempt !== generation || !authorized()) return view("signed_out");
     if (state === "signed_in") return connect(model, owner);
-    if (state === "missing" || state === "error") return view(state);
+    if (state === "missing" || state === "error" || state === "unknown") return view(state);
     if (loginMode === "terminal" && !options.spawn) return view("signed_out");
     const current = ++generation;
     loginOwner = owner; device = undefined; terminalOutput = "";
     message = loginMode === "device" ? "Requesting an official one-time code from Codex…"
       : loginMode === "terminal" ? `Follow ${label}’s sign-in instructions below. Replies go only to its sign-in process.`
         : `Complete sign-in in the browser window opened by ${label}.`;
+    let temp: string | undefined;
     login = (async () => {
       let cwd = homedir();
       if (!options.spawn) {
-        const root = join(homedir(), ".modelbot", "sign-in");
+        const root = join(modelbotHome(), "sign-in");
         await mkdir(root, { recursive: true, mode: 0o700 });
-        cwd = await mkdtemp(join(root, provider + "-"));
+        cwd = temp = await mkdtemp(join(root, provider + "-"));
       }
       if (current !== generation || !authorized()) return;
       // Official login opens its own browser/callback. Raw output may contain auth URLs.
@@ -133,13 +238,16 @@ export function createCodexConnection(options: CodexLoginOptions & {
         await new Promise<void>((resolve, reject) => { owned.once("error", reject); owned.once("close", () => resolve()); });
       } finally { clearTimeout(timer); child = undefined; device = undefined; }
       if (current !== generation || !authorized()) return;
-      const finalState = await probe();
+      const { state: finalState } = await probe();
       if (current !== generation || !authorized()) return;
       if (finalState === "signed_in") { message = options.connected(model) === false
         ? "Sign-in completed. Reconnect after the application restarts." : ""; }
       else if (!message.includes("timed out") && !message.includes("unsupported")) message = "Sign-in did not finish. Try again, and complete the browser step.";
     })().catch(() => { if (current === generation) message = `${label} sign-in could not start. Check its installation and try again.`; })
-      .finally(() => { login = undefined; loginOwner = undefined; device = undefined; terminalOutput = ""; });
+      .finally(async () => {
+        login = undefined; loginOwner = undefined; device = undefined; terminalOutput = "";
+        if (temp) await rm(temp, { recursive: true, force: true }).catch(() => {});
+      });
     return view("signing_in", owner);
   }
   async function cancel(recheck = true) {
@@ -172,6 +280,41 @@ export function createCodexConnection(options: CodexLoginOptions & {
     return true;
   }
   return { status, connect, signIn, cancel, input, loginSession: () => loginOwner, close: () => { closed = true; return cancel(false); } };
+}
+
+const HOLD_CHECK_MESSAGE = "Can’t check while you have control";
+
+function agentHomePermission(error: unknown): boolean {
+  const err = error as (NodeJS.ErrnoException & { stderr?: string }) | undefined;
+  const text = typeof error === "string" ? error
+    : error instanceof Error ? `${err?.code ?? ""} ${error.message} ${err?.stderr ?? ""}`
+    : error == null ? "" : String(error);
+  if (!/\/home\/agent/i.test(text)) return false;
+  return /EACCES|permission denied|cannot write/i.test(text);
+}
+
+function probeBlocked(text: string, code?: number | null): boolean {
+  return /paused for private control/i.test(text) || code === 75;
+}
+
+function probeFailureMessage(error: unknown): string {
+  const text = typeof error === "string" ? error
+    : error instanceof Error ? `${(error as NodeJS.ErrnoException).code ?? ""} ${error.message}`
+    : String(error);
+  if (/paused for private control/i.test(text)) return HOLD_CHECK_MESSAGE;
+  if (/cannot connect|daemon is not running|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|Is the docker daemon running/i.test(text)) {
+    return "Docker is not reachable";
+  }
+  if (/is not running|no such container|no such object|cannot exec|OCI runtime exec failed|container is paused/i.test(text)) {
+    return "The bot’s computer is not running";
+  }
+  return "The connection could not be checked. Choose Check again in a moment.";
+}
+
+function probeTransportFailure(text: string): boolean {
+  if (!text) return false;
+  const msg = probeFailureMessage(text);
+  return msg === "Docker is not reachable" || msg === "The bot’s computer is not running";
 }
 
 /** Installed Codex CLI device prompt. Fail closed on other URLs or output formats. */

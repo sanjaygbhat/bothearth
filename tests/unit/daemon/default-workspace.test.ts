@@ -37,7 +37,7 @@ test("goal-only first use provisions one persistent browser only when submitted"
   try {
     const before = await f.api("computers");
     assert.equal(before.body.default_computer_id, null); assert.equal(before.body.will_create_default, true); assert.equal(f.creates(), 0);
-    for (const body of [{ goal: " " }, { goal: "example", max_steps: 0 }, { goal: "example", capabilities: ["shell"] }, { goal: "example", capabilities: { length: 1, 0: "browser" } }])
+    for (const body of [{ goal: " " }, { goal: "example", max_steps: -1 }, { goal: "example", capabilities: ["shell"] }, { goal: "example", capabilities: { length: 1, 0: "browser" } }])
       assert.equal((await f.api("tasks", body)).status, 400);
     assert.equal(f.creates(), 0);
     const response = await f.api("tasks", { goal: "Synthetic task" });

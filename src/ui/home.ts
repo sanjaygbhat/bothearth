@@ -2,10 +2,10 @@
  * Home — `#/`. The task box IS the page (ux-spec §2.1, owner ruling).
  *
  * Everything on this screen exists to get one sentence typed and started:
- * the display heading, the box (focused on arrival), three examples that fill
- * it, the Recent column, and — only when something is genuinely in the way —
- * one calm blocker card above the box. The box never stops accepting text, and
- * nothing here is ever a modal.
+ * the display heading, the box (focused on arrival), a current/last-task card
+ * under the box, three examples that fill it, the Recent column, and — only
+ * when something is genuinely in the way — one calm blocker card above the
+ * box. The box never stops accepting text, and nothing here is ever a modal.
  */
 
 import { apiGet, apiPost, ApiError } from "./api.ts";
@@ -23,12 +23,13 @@ import {
 } from "./runtime.ts";
 import { element } from "./safe.ts";
 import { publishLicenceBadge } from "./licence.ts";
-import { currentSession, PAIR_AGAIN, type SessionInfo } from "./session.ts";
+import { refreshSession, PAIR_AGAIN, type SessionInfo } from "./session.ts";
 import { attention, modelbotNative, type AttentionItem } from "./native.ts";
-import { countdownText } from "./needs-you.ts";
-import { navigate, registerView, setStatusPill, setTitle } from "./shell.ts";
+import { attentionBanner, countdownText } from "./needs-you.ts";
+import { IS_APPLE } from "./palette.ts";
+import { navigate, registerView, setAttention, setStatusPill, setTitle } from "./shell.ts";
 import { markTaskStarted } from "./task.ts";
-import type { TaskRow } from "./task-view.ts";
+import { stepText, type TaskRow, type TaskStep } from "./task-view.ts";
 import { isActiveTakeover, type TakeoverRow } from "./takeover.ts";
 import type { Connection, Provider } from "./connection.ts";
 
@@ -39,12 +40,10 @@ import type { Connection, Provider } from "./connection.ts";
 const HEADING_LINES = ["What should your bot", "get done?"] as const;
 
 export const EXAMPLES = [
-  "Audit [website URL] for AI search visibility. Prioritize three fixes and draft one for me to review.",
-  "Check links on [website URL]. List broken links with their source pages.",
-  "Summarize [page URL]. Include source links, key facts and three takeaways.",
+  "Organise an authorised inbox. Propose labels and filters first; wait for my approval before changing mail.",
+  "Collect invoices from approved billing portals. Save a ledger and wait for me to sign in.",
+  "Review staging logs for a recent failure. Record the error and matching log lines; change nothing.",
 ] as const;
-
-const STARTER_LINK = /\[(?:website|page) URL\]/;
 
 /**
  * The Mac shell is an app you reopen; a browser is a link the daemon minted,
@@ -64,10 +63,40 @@ export const EMPTY_RECENT =
   "No tasks yet. Try a public page you can check yourself.";
 
 const PLACEHOLDER = "Describe it the way you’d say it to a person";
+const RUNTIME_STARTING_COPY = "BotHearth is still starting its runtime. Trying again…";
+const START_PROBE_WAIT_MS = 15_000;
+
+function runtimeStartingError(error: unknown): { retryAfterMs: number } | null {
+  if (!(error instanceof ApiError)) return null;
+  const body = error.body as { error?: unknown; status?: unknown; retry_after_ms?: unknown } | null;
+  if (!body || (body.status !== "starting" && body.error !== "E_RUNTIME_STARTING")) return null;
+  const wait = typeof body.retry_after_ms === "number" && Number.isFinite(body.retry_after_ms)
+    ? Math.max(0, Math.min(START_PROBE_WAIT_MS, body.retry_after_ms))
+    : START_PROBE_WAIT_MS;
+  return { retryAfterMs: wait };
+}
 
 const DRAFT_KEY = "modelbot.draft";
 const REVEALED_KEY = "modelbot.revealed";
 const RECENT_SHOWN = 4;
+const NEW_COMPUTER = "__new__";
+const COMPUTER_STATE_WORD: Record<string, string> = {
+  idle: "Ready",
+  running: "Working",
+  paused: "Paused",
+  "human-hold": "Waiting for you",
+  stopped: "Off",
+};
+
+type ComputerChoice = {
+  id: string;
+  name: string;
+  state: string;
+};
+
+function computerOccupied(state: string): boolean {
+  return state === "running" || state === "paused" || state === "human-hold";
+}
 
 const ORBSTACK_URL = "https://orbstack.dev/download";
 const DOCKER_DESKTOP_URL = "https://www.docker.com/products/docker-desktop/";
@@ -110,8 +139,77 @@ export function waitingByTask(items: AttentionItem[]): Map<string, number> {
   return out;
 }
 
-export function recentStatus(status: string, controlState?: string): { word: string; tone: StatusTone } {
+const TERMINAL_STATUS = new Set(["completed", "cancelled", "failed"]);
+
+/** First line of the prompt, the same title the task screen uses. */
+export function taskTitle(goal: string): string {
+  const line = goal.trim().split("\n", 1)[0]!.trim();
+  return line || "Untitled task";
+}
+
+/** Newest-first list → the live task if any, else the most recent one. */
+export function featuredTask(
+  tasks: TaskRow[],
+): { task: TaskRow; label: "Current task" | "Last task" } | null {
+  if (!tasks.length) return null;
+  const current = tasks.find((task) => !TERMINAL_STATUS.has(task.status));
+  return current
+    ? { task: current, label: "Current task" }
+    : { task: tasks[0]!, label: "Last task" };
+}
+
+/** Running/paused and waiting on a person — awaiting a message or a hold. */
+export function taskNeedsYou(
+  task: Pick<TaskRow, "status" | "awaiting_message">,
+  controlState?: string,
+): boolean {
+  if (task.status !== "running" && task.status !== "paused") return false;
+  return task.awaiting_message === true
+    || controlState === "takeover_requested"
+    || controlState === "human"
+    || controlState === "paused";
+}
+
+/** First ~80 characters of the goal, the banner title. */
+export function needsYouTitle(goal: string): string {
+  const line = taskTitle(goal);
+  if (line.length <= 80) return line;
+  const clipped = line.slice(0, 80).replace(/\s+\S*$/, "");
+  return `${clipped || line.slice(0, 80)}…`;
+}
+
+/** Wall-clock wait, always "waiting for N min". */
+export function waitingForLabel(since: string, now: number = Date.now()): string {
+  const then = new Date(since).getTime();
+  if (Number.isNaN(then)) return "";
+  const minutes = Math.max(1, Math.round((now - then) / 60_000));
+  return `waiting for ${minutes} min`;
+}
+
+function clipExcerpt(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= 180) return trimmed;
+  return `${trimmed.slice(0, 180).trimEnd()}…`;
+}
+
+function lastAssistant(steps: TaskStep[]): { text: string; at: string } | null {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const step = steps[i]!;
+    if (step.kind !== "assistant") continue;
+    const text = stepText(step);
+    if (!text) continue;
+    return { text: clipExcerpt(text), at: step.created_at };
+  }
+  return null;
+}
+
+export function recentStatus(
+  status: string,
+  controlState?: string,
+  awaitingMessage = false,
+): { word: string; tone: StatusTone } {
   if (!["completed", "cancelled", "failed"].includes(status)) {
+    if (awaitingMessage) return { word: "Waiting for you", tone: "warn" };
     if (controlState === "human") return { word: "Human control", tone: "warn" };
     if (controlState === "paused") return { word: "Control paused", tone: "warn" };
     if (controlState === "resume_validating") return { word: "Returning control", tone: "run" };
@@ -387,8 +485,8 @@ function aiCard(status: RuntimeStatus, blocker: RuntimeBlocker): BlockerCard {
     heading: "Connect your model account",
     body: "Connect Codex or Claude Code. Your provider’s eligibility, limits and charges apply.",
     actions: [
-      { label: "Use Claude", kind: "primary", intent: "settings" },
-      { label: "Use Codex", kind: "secondary", intent: "settings" },
+      { label: "Use Codex", kind: "primary", intent: "settings" },
+      { label: "Use Claude", kind: "secondary", intent: "settings" },
       { label: "What’s the difference?", kind: "ghost", intent: "settings" },
     ],
     watch: WATCH_TRUST,
@@ -409,7 +507,7 @@ export interface ComposerState {
    * that pair. Kept as a field so the class name has a single source.
    */
   primary: boolean;
-  /** `true` renders the ⌘ ⏎ key caps rather than a sentence. */
+  /** `true` renders the ⌘/Ctrl ⏎ key caps rather than a sentence. */
   keys: boolean;
   hint: string;
   /** Shown next to the button while a start is queued. */
@@ -456,6 +554,7 @@ export function composerState(input: {
       label: "Start task", disabled: true, primary: true, keys: false,
       hint: input.blockerKey.startsWith("selected_provider_signed_out") ? "Sign in above to start"
         : input.blockerKey.startsWith("selected_provider_signing_in") ? "Finish signing in to start"
+        : input.blockerKey.startsWith("selected_provider_held") ? "Can’t check while you have control"
         : "Check Model connection to start", cancel: false,
     };
     const aiBlocked =
@@ -729,6 +828,9 @@ class HomeView {
   private message: HTMLElement | null = null;
   private announcer: HTMLElement | null = null;
   private blockerSlot: HTMLElement | null = null;
+  private killSlot: HTMLElement | null = null;
+  private needsSlot: HTMLElement | null = null;
+  private nowSlot: HTMLElement | null = null;
   private recentSlot: HTMLElement | null = null;
   private leadModel: ReturnType<typeof modelFields> | null = null;
   private executorModel: ReturnType<typeof modelFields> | null = null;
@@ -744,6 +846,15 @@ class HomeView {
   private executorEdited = false;
   private reasoning: HTMLSelectElement | null = null;
   private reasoningLabel: HTMLLabelElement | null = null;
+  private computerPicker: HTMLLabelElement | null = null;
+  private computerSelect: HTMLSelectElement | null = null;
+  private computerNote: HTMLElement | null = null;
+  private computers: ComputerChoice[] | null = null;
+  private defaultComputerId: string | null = null;
+  private maxComputers = 2;
+  private selectedComputerId = "";
+  private createdComputerId = "";
+  private creatingComputer: Promise<string> | null = null;
   private modelsRevision = 0;
 
   private watcher: RuntimeWatcher | null = null;
@@ -751,14 +862,20 @@ class HomeView {
   private session: SessionInfo | null = null;
   private tasks: TaskRow[] | null = null;
   private takeovers: TakeoverRow[] | null = null;
+  private holdBanner = false;
   private recentRevision = 0;
   private waitingTick: number | undefined;
+  private needsExcerpt: string | undefined;
+  private needsSince: string | undefined;
+  private ownedNeedsYouAttention = false;
 
   private renderedCardKey: string | null = null;
   private renderedComposer = "";
   private announced = "";
   private armed = false;
   private submitting = false;
+  private startRetryTimer: number | undefined;
+  private startRetryWait: (() => void) | undefined;
   private preparing = false;
   private failures = 0;
   private offline = false;
@@ -775,10 +892,12 @@ class HomeView {
 
     // A startup link lands on `#/`, so this view — not the legacy shell — is
     // what turns the one-time token into a session before anything is fetched.
-    void currentSession()
+    // Remounts (task → Home) must not keep the page-load `kill_switch`.
+    void refreshSession()
       .then((session) => {
         if (!this.root) return;
         this.session = session;
+        this.renderKillSwitch();
         if (!this.leadEdited && (session?.execution_mode === "codex" || session?.execution_mode === "claude")) {
           const selection = { adapter: session.execution_mode, model: session.model ?? "" };
           this.leadModel?.set(selection);
@@ -808,6 +927,11 @@ class HomeView {
     this.on(window, "hashchange", () => {
       if (location.hash === "#/" || location.hash === "") {
         this.refreshReadiness();
+        void refreshSession().then((session) => {
+          if (!this.root) return;
+          this.session = session;
+          this.renderKillSwitch();
+        });
       }
     });
     this.on(window, "keydown", (event) => this.onGlobalKey(event as KeyboardEvent));
@@ -840,10 +964,19 @@ class HomeView {
     this.watcher = null;
     if (this.waitingTick !== undefined) window.clearInterval(this.waitingTick);
     this.waitingTick = undefined;
+    if (this.startRetryTimer !== undefined) window.clearTimeout(this.startRetryTimer);
+    this.startRetryTimer = undefined;
+    const resume = this.startRetryWait;
+    this.startRetryWait = undefined;
+    resume?.();
     for (const dispose of this.disposers) dispose();
     this.disposers = [];
+    this.releaseNeedsYouAttention();
     this.root = null;
     this.box = null;
+    this.killSlot = null;
+    this.needsSlot = null;
+    this.nowSlot = null;
   }
 
   private on(target: EventTarget, type: string, handler: EventListener): void {
@@ -867,16 +1000,25 @@ class HomeView {
     });
     heading.style.setProperty("--i", "0");
 
+    this.killSlot = element("div", "home-kill-slot");
+    this.killSlot.style.setProperty("--i", "1");
+
+    this.needsSlot = element("div", "home-needs-slot");
+    this.needsSlot.style.setProperty("--i", "2");
+
     this.blockerSlot = element("div", "home-blocker-slot");
-    this.blockerSlot.style.setProperty("--i", "1");
+    this.blockerSlot.style.setProperty("--i", "3");
 
     const box = this.buildTaskBox();
-    box.style.setProperty("--i", "2");
+    box.style.setProperty("--i", "4");
+
+    this.nowSlot = element("div", "home-now-slot");
+    this.nowSlot.style.setProperty("--i", "5");
 
     const examples = this.buildExamples();
-    examples.style.setProperty("--i", "3");
+    examples.style.setProperty("--i", "6");
 
-    main.append(heading, this.blockerSlot, box, examples);
+    main.append(heading, this.killSlot, this.needsSlot, this.blockerSlot, box, this.nowSlot, examples);
 
     const side = element("div", "home-side");
     this.recentSlot = element("section", "recent");
@@ -910,9 +1052,10 @@ class HomeView {
       this.paintComposer();
     });
     box.addEventListener("keydown", (event) => {
-      // ux-spec §2.1: ⌘⏎ starts. Return on its own is a newline — a task is
-      // often more than one sentence, and nothing here should fire by accident.
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      // ux-spec §2.1: ⌘⏎ (Ctrl⏎ off Apple) starts. Return on its own is a
+      // newline — a task is often more than one sentence, and nothing here
+      // should fire by accident.
+      if (event.key === "Enter" && (event.metaKey || (!IS_APPLE() && event.ctrlKey))) {
         event.preventDefault();
         void this.start();
       }
@@ -996,7 +1139,17 @@ class HomeView {
     }
     this.reasoning.value = "medium";
     this.reasoningLabel.append(this.reasoning);
-    wrap.append(this.leadModel.root, this.reasoningLabel, label, this.executorOptions, this.modelHint, this.modelRetry);
+    this.computerPicker = element("label", "home-model-field home-computer-picker");
+    this.computerPicker.textContent = "Computer";
+    this.computerPicker.hidden = true;
+    this.computerSelect = document.createElement("select");
+    this.computerSelect.id = "home-computer";
+    this.computerSelect.setAttribute("aria-label", "Computer");
+    this.computerSelect.addEventListener("change", () => void this.onComputerPicked());
+    this.computerPicker.append(this.computerSelect);
+    this.computerNote = element("p", "home-model-hint home-computer-note");
+    this.computerNote.hidden = true;
+    wrap.append(this.leadModel.root, this.reasoningLabel, label, this.executorOptions, this.modelHint, this.modelRetry, this.computerPicker, this.computerNote);
     return wrap;
   }
 
@@ -1010,6 +1163,7 @@ class HomeView {
     if (this.leadModel) this.leadModel.root.disabled = !enabled || this.modelsBlocked || this.submitting;
     if (this.reasoningLabel) this.reasoningLabel.hidden = this.leadModel?.value().adapter !== "codex";
     if (this.reasoning) this.reasoning.disabled = !enabled || this.modelsBlocked || this.submitting;
+    if (this.computerSelect) this.computerSelect.disabled = this.submitting;
     if (this.executorModel) this.executorModel.root.disabled = !enabled || this.modelsBlocked || this.submitting;
     if (this.executorOptions) this.executorOptions.hidden = !on;
     const executor = this.executorModel?.value();
@@ -1020,17 +1174,145 @@ class HomeView {
     this.publishPill();
     this.paintComposer();
     if (this.modelCatalog && !this.modelsBlocked && isSettling(this.effectiveStatus())) this.watcher?.start();
-    if (this.armed && this.ready() && !this.submitting) {
+    if (this.armed && !this.modelsBlocked && !this.submitting) {
       this.armed = false;
       void this.start();
     }
+  }
+
+  private pickerNeeded(): boolean {
+    return (this.computers ?? []).length >= 1;
+  }
+
+  private paintComputerPicker(): void {
+    const picker = this.computerPicker;
+    const select = this.computerSelect;
+    const note = this.computerNote;
+    if (!picker || !select || !note) return;
+    const computers = this.computers ?? [];
+    const needed = this.pickerNeeded();
+    picker.hidden = !needed;
+    if (!needed) {
+      this.selectedComputerId = "";
+      this.paintComputerNote();
+      return;
+    }
+    const atCap = computers.length >= this.maxComputers;
+    const previous = this.selectedComputerId;
+    const allowed = new Set<string>();
+    select.replaceChildren();
+    for (const computer of computers) {
+      const option = document.createElement("option");
+      option.value = computer.id;
+      option.textContent = `${computer.name} · ${COMPUTER_STATE_WORD[computer.state] ?? computer.state}`;
+      option.disabled = computerOccupied(computer.state);
+      if (!option.disabled) allowed.add(computer.id);
+      select.append(option);
+    }
+    if (!atCap) {
+      const fresh = document.createElement("option");
+      fresh.value = NEW_COMPUTER;
+      fresh.textContent = "New computer";
+      select.append(fresh);
+      allowed.add(NEW_COMPUTER);
+    }
+    const free = computers.find((computer) => !computerOccupied(computer.state));
+    if (previous && allowed.has(previous)) select.value = previous;
+    else if (free) select.value = free.id;
+    else if (this.defaultComputerId) select.value = this.defaultComputerId;
+    else if (computers[0]) select.value = computers[0].id;
+    this.selectedComputerId = select.value;
+    this.paintComputerNote();
+  }
+
+  private paintComputerNote(): void {
+    const note = this.computerNote;
+    if (!note) return;
+    if (this.computers === null) {
+      note.hidden = true;
+      note.replaceChildren();
+      return;
+    }
+    const atCap = this.computers.length >= this.maxComputers;
+    const choseNew = this.selectedComputerId === NEW_COMPUTER || this.selectedComputerId === this.createdComputerId;
+    note.replaceChildren();
+    if (this.pickerNeeded() && choseNew) {
+      note.append(
+        document.createTextNode("A new computer must sign in to the model provider first ("),
+      );
+      const link = element("a", "taskbox-message-link", "Settings → Model connection");
+      link.setAttribute("href", "#/settings/ai");
+      note.append(link, document.createTextNode(")."));
+      note.hidden = false;
+      return;
+    }
+    if (this.pickerNeeded() && atCap && !this.computers.some((computer) => !computerOccupied(computer.state))) {
+      note.textContent = `You already have ${this.maxComputers} computers, the maximum.`;
+      note.hidden = false;
+      return;
+    }
+    note.textContent = "This computer keeps its logins.";
+    note.hidden = false;
+  }
+
+  private applyComputerInventory(body: {
+    computers?: ComputerChoice[];
+    default_computer_id?: string | null;
+    max_computers?: number;
+  }): void {
+    this.computers = Array.isArray(body.computers) ? body.computers : [];
+    this.defaultComputerId = typeof body.default_computer_id === "string" ? body.default_computer_id : null;
+    if (typeof body.max_computers === "number" && Number.isFinite(body.max_computers) && body.max_computers >= 1) {
+      this.maxComputers = body.max_computers;
+    }
+    this.paintComputerPicker();
+  }
+
+  private async onComputerPicked(): Promise<void> {
+    const value = this.computerSelect?.value ?? "";
+    this.selectedComputerId = value;
+    this.paintComputerNote();
+    if (value !== NEW_COMPUTER) return;
+    try { await this.createComputer(); }
+    catch (error) { this.showStartError(error); }
+  }
+
+  private createComputer(): Promise<string> {
+    if (this.selectedComputerId && this.selectedComputerId !== NEW_COMPUTER) {
+      return Promise.resolve(this.selectedComputerId);
+    }
+    this.creatingComputer ??= this.provisionComputer().finally(() => { this.creatingComputer = null; });
+    return this.creatingComputer;
+  }
+
+  private async provisionComputer(): Promise<string> {
+    const suffix = globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 12)
+      ?? Math.random().toString(16).slice(2, 10);
+    const created = await apiPost("/api/v1/computers", {
+      name: `browser-${suffix}`,
+      capabilities: ["browser"],
+      persistent: true,
+    }) as { computer: { id: string; name: string } };
+    const id = created.computer.id;
+    this.createdComputerId = id;
+    this.selectedComputerId = id;
+    try { await apiPost(`/api/v1/computers/${encodeURIComponent(id)}/default`); }
+    catch { /* Selection still stands; Model connection uses the default when it can. */ }
+    this.defaultComputerId = id;
+    if (!this.computers?.some((computer) => computer.id === id)) {
+      this.computers = [...this.computers ?? [], { id, name: created.computer.name, state: "idle" }];
+    }
+    this.paintComputerPicker();
+    return id;
   }
 
   private async loadModels(): Promise<void> {
     const revision = ++this.modelsRevision;
     const configured = this.leadModel?.value().adapter === "standalone";
     if (configured) this.configuredCurrent = false;
+    this.modelsBlocked = true;
     if (this.modelRetry) this.modelRetry.disabled = true;
+    this.paintComposer();
     try {
       const [models, session] = await Promise.allSettled([
         apiGet("/api/v1/models"), configured ? apiGet("/api/v1/session") : Promise.resolve(null),
@@ -1040,6 +1322,7 @@ class HomeView {
         if (session.status === "rejected") throw session.reason;
         const current = session.value as SessionInfo;
         this.session = current;
+        this.renderKillSwitch();
         if (current.execution_mode === "codex" || current.execution_mode === "claude") {
           this.leadModel.setConfigured(null);
           const selection = { adapter: current.execution_mode, model: current.model ?? "" };
@@ -1074,14 +1357,16 @@ class HomeView {
     } catch (error) {
       if (!this.root || revision !== this.modelsRevision) return;
       const legacy = error instanceof ApiError && error.status === 404 && !this.modelCatalog;
-      this.modelsBlocked = !legacy;
+      this.modelsBlocked = false;
       if (this.modelHint) this.modelHint.textContent = legacy
         ? `This app instance uses the connected model${this.session?.model ? ` (${this.session.model})` : ""}. Per-task model choices need an app update.`
         : this.leadModel?.value().adapter === "standalone" && !this.configuredCurrent
-        ? "Couldn’t check the configured model. Your draft is kept here. Retry before starting."
+        ? "Couldn’t check the configured model. You can still start with the last known model."
         : this.leadModel?.value().adapter === "standalone"
         ? "Couldn’t check other models. The configured model is still selected."
-        : "Couldn’t check model choices. Your draft and selections are kept here. Retry before starting.";
+        : this.modelCatalog
+        ? "Couldn’t load model choices. You can still start with the last known model."
+        : "Couldn’t load model choices. You can still start with the default model.";
       if (this.modelRetry) this.modelRetry.hidden = false;
       this.paintRunOptions();
     } finally {
@@ -1103,12 +1388,15 @@ class HomeView {
       const name = blocked?.label ?? "the selected provider";
       const state = blocked?.connection_status;
       blockers.push({ id: state === "signed_out" ? "selected_provider_signed_out"
-        : state === "signing_in" ? "selected_provider_signing_in" : "selected_provider_unavailable",
+        : state === "signing_in" ? "selected_provider_signing_in"
+        : state === "unknown" ? "selected_provider_held" : "selected_provider_unavailable",
         title: state === "signed_out" ? `Sign in to ${name}`
           : state === "signing_in" ? `Finish signing in to ${name}`
+          : state === "unknown" ? "Can’t check while you have control"
           : blocked?.limit ? `${name} limit reached` : `Check the ${name} connection`,
         detail: state === "signed_out" || state === "signing_in"
           ? `Your ${blocked === executor ? "executor " : ""}model is selected. Complete ${name} sign-in in Model connection to start.`
+          : state === "unknown" ? "Waiting for you to return control. The connection is checked again when you do."
           : blocked?.limit ? `${name} is signed in but has reached a provider limit. Check Model connection for details.`
           : "Your model selection is kept. Open Model connection to check setup, sign-in and provider access.",
         action: { kind: "open_settings" } });
@@ -1116,7 +1404,7 @@ class HomeView {
     const connection = available ? provider : blocked;
     return { ...status, task_start_available: available, blockers,
       ai: { ...status.ai, provider: connection?.id ?? null,
-        cli_found: connection?.connected === true || ["signed_out", "signing_in"].includes(connection?.connection_status ?? ""),
+        cli_found: connection?.connected === true || ["signed_out", "signing_in", "unknown"].includes(connection?.connection_status ?? ""),
         logged_in: connection?.connected ?? null, limit: connection?.limit ?? null } };
   }
 
@@ -1145,13 +1433,7 @@ class HomeView {
     this.box.value = draft ? `${draft}\n\n${text}` : text;
     writeDraft(this.box.value);
     this.focusBox();
-    this.selectStarterLink();
     this.paintComposer();
-  }
-
-  private selectStarterLink(): void {
-    const match = STARTER_LINK.exec(this.box?.value ?? "");
-    if (match) this.box?.setSelectionRange(match.index, match.index + match[0].length);
   }
 
   private focusBox(options: { onlyIfIdle?: boolean } = {}): void {
@@ -1202,7 +1484,7 @@ class HomeView {
   }
 
   private modelChoicesBlocked(): boolean {
-    return this.leadModel?.value().adapter === "standalone" ? !this.configuredCurrent : this.modelsBlocked;
+    return this.modelsBlocked;
   }
 
   private paintComposer(): void {
@@ -1214,10 +1496,15 @@ class HomeView {
       submitting: this.submitting,
     });
     if (this.modelChoicesBlocked() && !this.submitting) {
-      state.label = "Start task";
-      state.hint = this.modelRetry?.hidden ? "Loading model choices…" : "Retry model choices to start";
-      state.disabled = true;
-      state.keys = false;
+      if (this.armed) {
+        state.hint = "Queued — it starts the moment model choices are ready.";
+      } else {
+        state.label = "Start task";
+        state.hint = "Loading model choices…";
+        state.disabled = true;
+        state.keys = false;
+        state.primary = false;
+      }
     }
     const signature = JSON.stringify(state);
     if (signature === this.renderedComposer) return;
@@ -1236,7 +1523,7 @@ class HomeView {
     hint.replaceChildren();
     if (state.keys) {
       hint.append(
-        element("kbd", undefined, "⌘"),
+        element("kbd", undefined, IS_APPLE() ? "⌘" : "Ctrl"),
         element("kbd", undefined, "⏎"),
         element("span", undefined, state.hint),
       );
@@ -1255,9 +1542,9 @@ class HomeView {
     }
     if (this.submitting) return;
     if (this.modelChoicesBlocked()) {
-      if (this.message) this.message.textContent = this.modelRetry?.hidden ? "Loading model choices…"
-        : "Retry model choices before starting. Your selections are kept here.";
-      if (!this.modelRetry?.hidden) this.modelRetry?.focus();
+      this.armed = true;
+      this.announce("Queued. It starts the moment model choices are ready.");
+      this.paintComposer();
       return;
     }
     const selected = this.modelCatalog ? this.leadModel?.value() : null;
@@ -1268,31 +1555,18 @@ class HomeView {
       if (this.message) this.message.textContent = "Enter an exact model ID for each selected provider.";
       return;
     }
-    if (STARTER_LINK.test(goal)) {
-      if (this.message) this.message.textContent = "Replace the selected placeholder with the website or page link.";
-      this.focusBox();
-      this.selectStarterLink();
-      return;
-    }
-    if (EXAMPLES.some(example => goal.includes(example.split(STARTER_LINK)[1]!))) {
-      const link = goal.match(/https?:\/\/[^\s<>]+/i)?.[0];
-      let valid = false;
-      try { valid = Boolean(link && new URL(link).hostname); } catch { /* Ask for the actual page below. */ }
-      if (!valid) {
-        if (this.message) this.message.textContent = "Add the full website or page link, starting with https://.";
-        this.focusBox();
-        return;
-      }
-    }
-
     if (!this.ready()) {
       if (this.effectiveStatus()?.blockers.some((blocker) => blocker.id === "licence_required")) {
+        this.armed = false;
         navigate("#/settings/licence");
+        this.paintComposer();
         return;
       }
       const status = this.effectiveStatus();
       if (status?.blockers.some((blocker) => blocker.id.startsWith("selected_provider_"))) {
+        this.armed = false;
         navigate(`#/settings/ai${status.ai.provider ? `?pick=${status.ai.provider}` : ""}`);
+        this.paintComposer();
         return;
       }
       // ux-spec §1/§2.2: "it starts the moment the computer is ready". Arming is
@@ -1309,19 +1583,44 @@ class HomeView {
     this.paintRunOptions();
 
     try {
-      const body = { goal, capabilities: ["browser"], ...(selection ? {
+      let computerId = this.computerPicker?.hidden ? "" : this.computerSelect?.value ?? "";
+      if (computerId === NEW_COMPUTER) computerId = await this.createComputer();
+      const body = { goal, capabilities: ["browser"], ...(computerId ? { computer_id: computerId } : {}), ...(selection ? {
         ...selection, execution_mode: orchestrator ? "orchestrator" : "executor", ...(executor ? { executor } : {}),
         ...(selection.adapter === "codex" && this.reasoning?.value !== "medium" ? { reasoning_effort: this.reasoning?.value } : {}),
       } : {}) };
-      const response = (await apiPost("/api/v1/tasks", body)) as { task: TaskRow };
-      writeDraft("");
-      if (this.box) this.box.value = "";
-      this.submitting = false;
-      this.paintRunOptions();
-      // The one screen change in the app that is a handoff rather than a jump
-      // (tokens.css §6, moment 1).
-      markTaskStarted(response.task.id);
-      navigate(`#/tasks/${response.task.id}`);
+      let retried = false;
+      for (;;) {
+        try {
+          const response = (await apiPost("/api/v1/tasks", body)) as { task: TaskRow };
+          writeDraft("");
+          if (this.box) this.box.value = "";
+          this.submitting = false;
+          this.paintRunOptions();
+          // The one screen change in the app that is a handoff rather than a jump
+          // (tokens.css §6, moment 1).
+          markTaskStarted(response.task.id);
+          navigate(`#/tasks/${response.task.id}`);
+          return;
+        } catch (error) {
+          const starting = !retried ? runtimeStartingError(error) : null;
+          if (!starting) throw error;
+          retried = true;
+          if (this.message) this.message.textContent = RUNTIME_STARTING_COPY;
+          await new Promise<void>((resolve) => {
+            this.startRetryWait = resolve;
+            this.startRetryTimer = window.setTimeout(() => {
+              this.startRetryTimer = undefined;
+              this.startRetryWait = undefined;
+              resolve();
+            }, starting.retryAfterMs);
+          });
+          if (!this.root) {
+            this.submitting = false;
+            return;
+          }
+        }
+      }
     } catch (error) {
       this.submitting = false;
       this.paintRunOptions();
@@ -1335,17 +1634,93 @@ class HomeView {
     target.replaceChildren();
 
     if (error instanceof ApiError) {
-      const body = error.body as { task_id?: unknown } | null;
-      target.appendChild(document.createTextNode(error.message));
-      if (typeof body?.task_id === "string") {
-        const link = element("a", "taskbox-message-link", "Open it");
-        link.setAttribute("href", `#/tasks/${body.task_id}`);
-        target.append(document.createTextNode(" "), link);
+      const body = error.body as {
+        task_id?: unknown; takeover_id?: unknown; task_status?: unknown; computers?: unknown; max_computers?: unknown;
+      } | null;
+      if (Array.isArray(body?.computers)) {
+        this.applyComputerInventory({
+          computers: body.computers.filter((row): row is ComputerChoice =>
+            Boolean(row) && typeof row === "object" && typeof (row as ComputerChoice).id === "string"
+              && typeof (row as ComputerChoice).name === "string" && typeof (row as ComputerChoice).state === "string"),
+          default_computer_id: this.defaultComputerId,
+          max_computers: typeof body.max_computers === "number" ? body.max_computers : this.maxComputers,
+        });
       }
+      const taskId = typeof body?.task_id === "string" ? body.task_id : "";
+      const takeoverId = typeof body?.takeover_id === "string" ? body.takeover_id : "";
+      const taskStatus = typeof body?.task_status === "string" ? body.task_status : "";
+      this.paintHoldMessage(error.message, taskId, takeoverId, taskStatus);
       return;
     }
     target.textContent =
       "Your task didn’t start. Check that BotHearth is running, then try again. Your draft is saved.";
+  }
+
+  private paintHoldMessage(message: string, taskId: string, takeoverId: string, taskStatus: string): void {
+    const target = this.message;
+    if (!target) return;
+    target.replaceChildren();
+    target.appendChild(document.createTextNode(message));
+    if (!taskId && !takeoverId) return;
+    const actions = element("span", "taskbox-message-actions");
+    if (taskId) {
+      const link = element("a", "taskbox-message-link", "Open it");
+      link.setAttribute("href", `#/tasks/${taskId}`);
+      actions.append(link);
+    }
+    const live = !taskStatus || taskStatus === "paused" || taskStatus === "running";
+    if (taskId && takeoverId && live) {
+      const resume = element("button", "btn ghost sm", "Resume it");
+      resume.type = "button";
+      resume.addEventListener("click", () => void this.recoverHeldTask(taskId, "resume"));
+      const stop = element("button", "btn ghost sm", "Stop it");
+      stop.type = "button";
+      stop.addEventListener("click", () => void this.recoverHeldTask(taskId, "stop"));
+      actions.append(resume, stop);
+    }
+    if (takeoverId) {
+      const give = element("button", "btn ghost sm", "Return control");
+      give.type = "button";
+      give.addEventListener("click", () => void this.recoverHeldTask(taskId, "return", takeoverId));
+      actions.append(give);
+    }
+    target.append(document.createTextNode(" "), actions);
+    this.holdBanner = true;
+  }
+
+  private paintHoldBanner(): void {
+    if (this.submitting) return;
+    const defaultId = this.defaultComputerId;
+    const hold = this.takeovers?.find((row) =>
+      (row.state === "human" || row.state === "paused") &&
+      (!defaultId || row.computer_id === defaultId),
+    );
+    if (!hold) {
+      if (this.holdBanner && this.message) this.message.textContent = "";
+      this.holdBanner = false;
+      return;
+    }
+    const task = hold.task_id ? this.tasks?.find((row) => row.id === hold.task_id) : undefined;
+    const goal = task?.goal?.trim();
+    const named = goal ? `“${goal.length > 120 ? `${goal.slice(0, 117)}…` : goal}”` : "A task";
+    this.paintHoldMessage(
+      `${named} still holds this computer.`,
+      hold.task_id ?? task?.id ?? "",
+      hold.id,
+      task?.status ?? "",
+    );
+  }
+
+  private async recoverHeldTask(taskId: string, action: "resume" | "stop" | "return", takeoverId?: string): Promise<void> {
+    try {
+      if (action === "resume") await apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume`);
+      else if (action === "stop") await apiPost(`/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`);
+      else if (takeoverId) await apiPost(`/api/v1/takeover/${encodeURIComponent(takeoverId)}/release`);
+      if (this.message) this.message.textContent = "";
+      if (taskId) navigate(`#/tasks/${taskId}`);
+    } catch (error) {
+      this.showStartError(error);
+    }
   }
 
   /* ---------------- readiness ---------------- */
@@ -1395,7 +1770,7 @@ class HomeView {
     }
     if (status.images.prepare.state !== "running") this.preparing = false;
 
-    if (this.ready() && this.armed) {
+    if (this.armed && !this.modelsBlocked && !this.submitting) {
       this.armed = false;
       this.paintComposer();
       void this.start();
@@ -1664,17 +2039,28 @@ class HomeView {
   private async loadRecent(): Promise<void> {
     const revision = ++this.recentRevision;
     try {
-      const [tasks, takeovers] = await Promise.allSettled([
+      const [tasks, takeovers, inventory] = await Promise.allSettled([
         apiGet("/api/v1/tasks") as Promise<{ tasks: TaskRow[] }>,
         apiGet("/api/v1/takeovers") as Promise<{ takeovers: TakeoverRow[] }>,
+        apiGet("/api/v1/computers") as Promise<{
+          computers?: ComputerChoice[]; default_computer_id?: string | null; max_computers?: number;
+        }>,
       ]);
       if (!this.root || revision !== this.recentRevision) return;
       if (tasks.status === "rejected") throw tasks.reason;
       this.takeovers = takeovers.status === "fulfilled" ? takeovers.value.takeovers ?? [] : null;
+      this.defaultComputerId = inventory.status === "fulfilled"
+        && typeof inventory.value.default_computer_id === "string"
+        ? inventory.value.default_computer_id
+        : null;
       this.tasks = [...tasks.value.tasks].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
+      if (inventory.status === "fulfilled") this.applyComputerInventory(inventory.value);
+      await this.refreshNeedsYouExcerpt(revision);
+      if (!this.root || revision !== this.recentRevision) return;
       this.renderRecent();
+      this.paintHoldBanner();
     } catch {
       if (!this.root || revision !== this.recentRevision || this.tasks) return;
       this.renderRecentError();
@@ -1701,45 +2087,14 @@ class HomeView {
 
     if (!tasks.length) {
       slot.appendChild(element("p", "recent-empty", EMPTY_RECENT));
+      this.renderFeatured();
       return;
     }
 
-    const waiting = waitingByTask(attention.pending());
     const list = element("ul", "recent-list");
     for (const task of tasks.slice(0, RECENT_SHOWN)) {
-      const terminal = ["completed", "cancelled", "failed"].includes(task.status);
-      const control = terminal ? undefined : this.takeovers?.find((row) =>
-        row.computer_id === task.computer_id &&
-        (!row.task_id || row.task_id === task.id) && isActiveTakeover(row.state),
-      );
-      const deadline = terminal || (control && control.state !== "takeover_requested")
-        ? undefined : waiting.get(task.id);
-      let { word, tone } = recentStatus(task.status, control?.state);
-      if (deadline !== undefined) {
-        word = "Waiting for you";
-        tone = "warn";
-      } else if (this.takeovers === null && task.status === "running") {
-        word = "Active";
-      }
-      // An approval expires in about a minute, and this row is where a person
-      // is already looking. The countdown is the difference between "I'll get
-      // to it" and "I have 48 seconds".
-      const when = deadline === undefined
-        ? relativeTime(task.created_at)
-        : countdownText(deadline - Date.now());
-
       const item = document.createElement("li");
-      const link = element("a", "recent-row");
-      link.setAttribute("href", `#/tasks/${task.id}`);
-
-      const title = element("span", "recent-title", task.goal || "Untitled task");
-      const meta = element("span", "recent-meta");
-      meta.append(
-        element("span", tone === "neutral" ? "dot" : `dot ${tone}`),
-        document.createTextNode(when ? `${word} · ${when}` : word),
-      );
-      link.append(title, meta);
-      item.appendChild(link);
+      item.appendChild(this.taskLink(task, "recent-row"));
       list.appendChild(item);
     }
     slot.appendChild(list);
@@ -1751,6 +2106,158 @@ class HomeView {
       element("span", "recent-all-arrow", "→"),
     );
     slot.appendChild(all);
+    this.renderFeatured();
+  }
+
+  private controlState(task: TaskRow): string | undefined {
+    if (TERMINAL_STATUS.has(task.status)) return undefined;
+    return this.takeovers?.find((row) =>
+      row.computer_id === task.computer_id &&
+      (!row.task_id || row.task_id === task.id) && isActiveTakeover(row.state),
+    )?.state;
+  }
+
+  private currentNeedsYou(): TaskRow | null {
+    if (!this.tasks) return null;
+    const featured = featuredTask(this.tasks);
+    if (featured?.label === "Current task" && taskNeedsYou(featured.task, this.controlState(featured.task))) {
+      return featured.task;
+    }
+    return this.tasks.find((task) => taskNeedsYou(task, this.controlState(task))) ?? null;
+  }
+
+  private async refreshNeedsYouExcerpt(revision: number): Promise<void> {
+    const task = this.currentNeedsYou();
+    this.needsExcerpt = typeof task?.last_assistant === "string" && task.last_assistant.trim()
+      ? clipExcerpt(task.last_assistant)
+      : undefined;
+    this.needsSince = undefined;
+    if (!task?.awaiting_message || this.needsExcerpt) return;
+    try {
+      const detail = await apiGet(`/api/v1/tasks/${encodeURIComponent(task.id)}`) as {
+        steps?: TaskStep[];
+      };
+      if (!this.root || revision !== this.recentRevision) return;
+      const found = lastAssistant(detail.steps ?? []);
+      if (found) {
+        this.needsExcerpt = found.text;
+        this.needsSince = found.at;
+      }
+    } catch {
+      // Banner still renders from the list; excerpt is optional.
+    }
+  }
+
+  private renderKillSwitch(): void {
+    const slot = this.killSlot;
+    if (!slot) return;
+    if ((this.session as { kill_switch?: unknown } | null)?.kill_switch !== true) {
+      slot.replaceChildren();
+      return;
+    }
+    const banner = element("section", "blocker home-kill-switch");
+    banner.setAttribute("role", "alert");
+    banner.style.background = "var(--color-danger-wash)";
+    banner.style.borderColor = "var(--color-danger)";
+    const line = element("p");
+    line.append("The kill switch is on, so the bot will refuse every action. Turn it off in ");
+    const link = element("a");
+    link.setAttribute("href", "#/settings/sensitive");
+    link.textContent = "Settings → Sensitive actions";
+    line.append(link, ".");
+    banner.append(line);
+    slot.replaceChildren(banner);
+  }
+
+  private renderNeedsYou(): void {
+    const slot = this.needsSlot;
+    if (!slot) return;
+    const task = this.currentNeedsYou();
+    if (!task) {
+      slot.replaceChildren();
+      this.releaseNeedsYouAttention();
+      return;
+    }
+    const banner = element("section", "blocker blocker-offline home-needs-you");
+    banner.setAttribute("role", "status");
+    banner.append(element("h2", undefined, "Needs you"));
+    banner.append(element("p", undefined, needsYouTitle(task.goal)));
+    if (this.needsExcerpt) banner.append(element("p", undefined, this.needsExcerpt));
+    const wait = waitingForLabel(this.needsSince ?? task.started_at ?? task.created_at);
+    if (wait) banner.append(element("p", undefined, wait));
+    const actions = element("div", "blocker-actions");
+    const open = element("a", "btn primary", "Open the task");
+    open.setAttribute("href", `#/tasks/${task.id}`);
+    actions.append(open);
+    banner.append(actions);
+    slot.replaceChildren(banner);
+    this.claimNeedsYouAttention(task);
+  }
+
+  private claimNeedsYouAttention(task: TaskRow): void {
+    if (attention.pending().length > 0) return;
+    const wait = waitingForLabel(this.needsSince ?? task.started_at ?? task.created_at);
+    setAttention({
+      count: 1,
+      text: "Needs you",
+      route: `#/tasks/${task.id}`,
+      ...(wait ? { sub: wait } : {}),
+    });
+    this.ownedNeedsYouAttention = true;
+  }
+
+  private releaseNeedsYouAttention(): void {
+    if (!this.ownedNeedsYouAttention) return;
+    this.ownedNeedsYouAttention = false;
+    const pending = attention.pending();
+    setAttention(pending.length ? attentionBanner(pending) : null);
+  }
+
+  private renderFeatured(): void {
+    const slot = this.nowSlot;
+    if (!slot) return;
+    this.renderNeedsYou();
+    const featured = this.tasks ? featuredTask(this.tasks) : null;
+    if (!featured) {
+      slot.replaceChildren();
+      return;
+    }
+    const waiting = featured.label === "Current task"
+      && taskNeedsYou(featured.task, this.controlState(featured.task));
+    const link = this.taskLink(featured.task, "home-now", waiting);
+    link.prepend(element("span", "caps", featured.label));
+    slot.replaceChildren(link);
+  }
+
+  private taskLink(task: TaskRow, className: string, forceWaiting = false): HTMLAnchorElement {
+    const terminal = TERMINAL_STATUS.has(task.status);
+    const control = terminal ? undefined : this.takeovers?.find((row) =>
+      row.computer_id === task.computer_id &&
+      (!row.task_id || row.task_id === task.id) && isActiveTakeover(row.state),
+    );
+    const deadline = terminal || (control && control.state !== "takeover_requested")
+      ? undefined : waitingByTask(attention.pending()).get(task.id);
+    let { word, tone } = recentStatus(task.status, control?.state, task.awaiting_message === true);
+    if (forceWaiting || deadline !== undefined) {
+      word = "Waiting for you";
+      tone = "warn";
+    } else if (this.takeovers === null && task.status === "running") {
+      word = "Active";
+    }
+    const when = deadline === undefined
+      ? relativeTime(task.created_at)
+      : countdownText(deadline - Date.now());
+
+    const link = element("a", className);
+    link.setAttribute("href", `#/tasks/${task.id}`);
+    const title = element("span", "recent-title", taskTitle(task.goal));
+    const meta = element("span", "recent-meta");
+    meta.append(
+      element("span", tone === "neutral" ? "dot" : `dot ${tone}`),
+      document.createTextNode(when ? `${word} · ${when}` : word),
+    );
+    link.append(title, meta);
+    return link;
   }
 
   private renderRecentError(): void {

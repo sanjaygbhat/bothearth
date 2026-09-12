@@ -3,12 +3,24 @@ import { test } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  createFakeComputerClient,
+  FakeComputer,
+  fakeComputerFor,
+} from "../../../src/computer-client/fake.ts";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { Store } from "../../../src/daemon/store.ts";
 import { createA11yDriver } from "../../../src/drivers/a11y.ts";
-import { createFakeComputerClient } from "../../../src/computer-client/fake.ts";
+import { createApproval } from "../../../src/policy/approvals.ts";
+import { terminalCopy } from "../../../src/ui/task.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
+import { until } from "../../helpers/until.ts";
+
+function taskSummaryJson(store: Store, id: string): string | null {
+  const row = store.db.prepare("SELECT summary_json FROM tasks WHERE id = ?").get(id) as { summary_json: string | null } | undefined;
+  return row?.summary_json ?? null;
+}
 
 // Exercise cancellation during an awaited dispatch step, not merely a stored status.
 test("cancelled tasks cannot dispatch queued or subsequent tool calls", async () => {
@@ -113,6 +125,7 @@ for (const scenario of ["approve", "cancel", "routine"]) test(`${scenario}: stan
   const daemon = await startDaemon({
     host: "127.0.0.1", port: 0, mcpToken: "test-mcp", bootstrapToken: "test-boot",
     workspaceRoot: mkdtempSync(join(tmpdir(), "mb-resume-")),
+    enabledGates: ["new_domain"],
     agentLoop: { model: "test", mode: "supervised", declaredOrigins: { readable: ["https://example.com"], writable: scenario === "routine" ? ["https://example.com"] : [] },
       adapter: { kind: "openai_compat", complete: async (req) => {
         providerCalls++;
@@ -260,3 +273,381 @@ for (const olderStatus of ["completed", "running", "finishes-during-cancel"]) te
     else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
   }
 });
+
+test("cancel responds immediately when runner teardown never resolves", async () => {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const entered = Promise.withResolvers<void>();
+  const stuck = Promise.withResolvers<void>();
+  let closeSettled = false;
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "test-mcp", bootstrapToken: "test-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), "mb-cancel-hang-")),
+    agentLoop: { model: "test", createDriver: (_, computer) => {
+      const close = computer.close.bind(computer);
+      computer.close = async () => { await stuck.promise; closeSettled = true; await close(); };
+      return createA11yDriver(computer);
+    }, adapter: { kind: "openai_compat", complete: async (req) => {
+      entered.resolve();
+      return new Promise((_, reject) => req.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    } } },
+  });
+  const freeze = daemon.store.freezeTaskSummary.bind(daemon.store);
+  daemon.store.freezeTaskSummary = (id) => {
+    assert.equal(closeSettled, true, "summary_json must freeze only after teardown settles");
+    freeze(id);
+  };
+  try {
+    const { headers } = await bootstrapSession(daemon, "test-boot");
+    daemon.store.insertComputer({ id: "hang-cancel", name: "hang", capabilities: ["browser"], persistent: false, status: "running" });
+    const created = await fetch(`${daemon.baseUrl}/api/v1/tasks`, { method: "POST", headers, body: JSON.stringify({ computer_id: "hang-cancel", goal: "wait", driver: "a11y" }) });
+    assert.equal(created.status, 201);
+    const { task } = await created.json() as { task: { id: string } };
+    await entered.promise;
+    const started = Date.now();
+    const cancel = await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}/cancel`, { method: "POST", headers });
+    const elapsed = Date.now() - started;
+    assert.equal(cancel.status, 200);
+    assert.ok(elapsed < 1_000, `cancel took ${elapsed}ms; teardown must not block the response`);
+    const body = await cancel.json() as { ok: boolean; task: { id: string; status: string } };
+    assert.equal(body.ok, true);
+    assert.equal(body.task.status, "cancelled");
+    assert.equal(daemon.store.getTask(task.id)?.status, "cancelled");
+    assert.ok(daemon.store.getTask(task.id)?.summary, "hydrateTask derives summary from the cancelled event before freeze");
+    assert.equal(taskSummaryJson(daemon.store, task.id), null, "summary_json stays unset while teardown hangs");
+    const againStarted = Date.now();
+    const again = await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}/cancel`, { method: "POST", headers });
+    assert.equal(again.status, 200);
+    assert.ok(Date.now() - againStarted < 1_000, "a second cancel must stay idempotent while teardown hangs");
+    assert.equal(((await again.json()) as { task: { status: string } }).task.status, "cancelled");
+    assert.equal(taskSummaryJson(daemon.store, task.id), null, "a second cancel must not freeze while teardown hangs");
+    const events = daemon.store.db.prepare("SELECT body_json FROM audit_refs WHERE task_id = ? AND type = 'task.cancelled'").all(task.id) as Array<{ body_json: string }>;
+    assert.ok(events.some((row) => JSON.parse(row.body_json).cancelled_by === "ui"));
+    stuck.resolve();
+    const deadline = Date.now() + 3_000;
+    while (taskSummaryJson(daemon.store, task.id) == null) {
+      assert.ok(Date.now() < deadline, "summary_json was not frozen after teardown settled");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    stuck.resolve();
+    await daemon.close();
+    if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+  }
+});
+
+test("cancel still freezes summary_json when teardown rejects", async () => {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const entered = Promise.withResolvers<void>();
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "test-mcp", bootstrapToken: "test-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), "mb-cancel-throw-")),
+    agentLoop: { model: "test", adapter: { kind: "openai_compat", complete: async (req) => {
+      entered.resolve();
+      return new Promise((_, reject) => req.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    } } },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "test-boot");
+    daemon.store.insertComputer({ id: "throw-cancel", name: "throw", capabilities: ["browser"], persistent: false, status: "running" });
+    const created = await fetch(`${daemon.baseUrl}/api/v1/tasks`, { method: "POST", headers, body: JSON.stringify({ computer_id: "throw-cancel", goal: "wait", driver: "a11y" }) });
+    assert.equal(created.status, 201);
+    const { task } = await created.json() as { task: { id: string } };
+    await entered.promise;
+    let takeoverCalls = 0;
+    const takeover = daemon.store.activeTakeoverForComputer.bind(daemon.store);
+    daemon.store.activeTakeoverForComputer = (computerId, taskId) => {
+      takeoverCalls++;
+      if (takeoverCalls > 1) throw new Error("teardown boom");
+      return takeover(computerId, taskId);
+    };
+    const cancel = await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}/cancel`, { method: "POST", headers });
+    assert.equal(cancel.status, 200);
+    const deadline = Date.now() + 3_000;
+    while (taskSummaryJson(daemon.store, task.id) == null) {
+      assert.ok(Date.now() < deadline, "summary_json was not frozen after teardown rejected");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    await daemon.close();
+    if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+  }
+});
+
+test("cookie-session cancel without Origin is api; bearer cancel is not a UI route", async () => {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const entered = Promise.withResolvers<void>();
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "test-mcp", bootstrapToken: "test-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), "mb-cancel-by-")),
+    agentLoop: { model: "test", adapter: { kind: "openai_compat", complete: async (req) => {
+      entered.resolve();
+      return new Promise((_, reject) => req.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    } } },
+  });
+  try {
+    const session = await bootstrapSession(daemon, "test-boot");
+    daemon.store.insertComputer({ id: "by-cancel", name: "by", capabilities: ["browser"], persistent: false, status: "running" });
+    const created = await fetch(`${daemon.baseUrl}/api/v1/tasks`, { method: "POST", headers: session.headers, body: JSON.stringify({ computer_id: "by-cancel", goal: "wait", driver: "a11y" }) });
+    assert.equal(created.status, 201);
+    const { task } = await created.json() as { task: { id: string } };
+    await entered.promise;
+    const bearer = await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}/cancel`, {
+      method: "POST", headers: { authorization: "Bearer test-mcp" },
+    });
+    assert.equal(bearer.status, 403);
+    const cancel = await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}/cancel`, {
+      method: "POST",
+      headers: { cookie: session.cookie, "x-csrf-token": session.csrf, "content-type": "application/json" },
+    });
+    assert.equal(cancel.status, 200);
+    const events = daemon.store.db.prepare("SELECT body_json FROM audit_refs WHERE task_id = ? AND type = 'task.cancelled'").all(task.id) as Array<{ body_json: string }>;
+    assert.ok(events.some((row) => JSON.parse(row.body_json).cancelled_by === "api"));
+    const copy = terminalCopy({ status: "cancelled", reason: "cancelled", budget: null, took: null, cancelledBy: "api" });
+    assert.equal(copy.heading, "Stopped through the API");
+    assert.doesNotMatch(copy.heading, /You stopped it/);
+    assert.doesNotMatch(copy.lede, /You stopped it/);
+  } finally {
+    await daemon.close();
+    if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+  }
+});
+
+test("approval kill records cancelled_by system", async () => {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "test-mcp", bootstrapToken: "test-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), "mb-cancel-system-")),
+  });
+  try {
+    const session = await bootstrapSession(daemon, "test-boot");
+    daemon.store.insertComputer({ id: "sys-cancel", name: "sys", capabilities: ["browser"], persistent: false, status: "running" });
+    const task = daemon.store.insertTask({ computer_id: "sys-cancel", goal: "wait", max_steps: 5 });
+    const request = createApproval({
+      tool: "browser_navigate", args: { url: "https://example.com" }, gate: "new_domain",
+      task_id: task.id, control_epoch: 0, origin: "https://example.com",
+    });
+    daemon.store.insertApproval({
+      id: request.approval_id, task_id: task.id, tool: "browser_navigate",
+      args: request.args, gate: "new_domain", bind: request.bind as unknown as Record<string, unknown>,
+    });
+    const kill = await fetch(`${daemon.baseUrl}/api/v1/approvals/${request.approval_id}`, {
+      method: "POST", headers: session.headers, body: JSON.stringify({ decision: "kill", bind: request.bind }),
+    });
+    assert.equal(kill.status, 200);
+    assert.equal(daemon.store.getTask(task.id)?.status, "cancelled");
+    const events = daemon.store.db.prepare("SELECT body_json FROM audit_refs WHERE task_id = ? AND type = 'task.cancelled'").all(task.id) as Array<{ body_json: string }>;
+    assert.ok(events.some((row) => JSON.parse(row.body_json).cancelled_by === "system"));
+    const copy = terminalCopy({ status: "cancelled", reason: null, budget: null, took: null, cancelledBy: "system" });
+    assert.equal(copy.heading, "BotHearth stopped it");
+    assert.doesNotMatch(copy.heading, /You stopped it/);
+  } finally {
+    await daemon.close();
+    if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+  }
+});
+
+const OPEN_HOLD = new Set(["takeover_requested", "human", "resume_validating", "paused"]);
+
+async function cancelHoldFixture(label: string) {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "hold-mcp", bootstrapToken: "hold-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), `mb-cancel-${label}-`)),
+  });
+  const { headers } = await bootstrapSession(daemon, "hold-boot");
+  const computerId = `${label}-hold`;
+  daemon.store.insertComputer({ id: computerId, name: label, capabilities: ["browser"], persistent: false, status: "running" });
+  const task = daemon.store.insertTask({ computer_id: computerId, goal: "hold", max_steps: 5 });
+  const post = (path: string, body: unknown = {}) => fetch(`${daemon.baseUrl}${path}`, {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  return {
+    daemon, headers, computerId, task, post, oldFake,
+    async close() {
+      await daemon.close();
+      if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+      else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+    },
+    async listOpen() {
+      const res = await fetch(`${daemon.baseUrl}/api/v1/takeovers`, { headers });
+      const body = await res.json() as { takeovers: Array<{ state: string; task_id: string | null }> };
+      return { status: res.status, takeovers: body.takeovers.filter((row) => OPEN_HOLD.has(row.state)) };
+    },
+  };
+}
+
+test("cancel with a paused hold closes it, empties open takeovers, and releases the computer", async () => {
+  const f = await cancelHoldFixture("paused");
+  try {
+    const requested = await f.post("/api/v1/takeover/request", { computer_id: f.computerId, task_id: f.task.id });
+    assert.equal(requested.status, 200);
+    const id = ((await requested.json()) as { takeover: { takeover_id: string } }).takeover.takeover_id;
+    assert.equal((await f.post(`/api/v1/takeover/${id}/acquire`)).status, 200);
+    const computer = fakeComputerFor(f.computerId)!;
+    assert.equal((await computer.expireTakeover(id)).ok, true);
+    f.daemon.store.updateTakeoverState(id, "paused");
+    const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+    assert.equal(cancel.status, 200);
+    assert.equal(f.daemon.store.getTask(f.task.id)?.status, "cancelled");
+    assert.equal(OPEN_HOLD.has(f.daemon.store.getTakeover(id)?.state ?? ""), false);
+    assert.equal((await f.listOpen()).takeovers.length, 0);
+    await until(() => computer.getTakeoverState() === "agent", "computer gate was not released");
+    const events = f.daemon.store.listAuditRefs().filter((row) =>
+      row.type === "takeover.declined" || row.type === "takeover.released");
+    assert.ok(events.some((row) => JSON.parse(row.body_json).reason === "task cancelled"));
+  } finally { await f.close(); }
+});
+
+test("cancel with a human hold closes it, empties open takeovers, and releases the computer", async () => {
+  const f = await cancelHoldFixture("human");
+  try {
+    const requested = await f.post("/api/v1/takeover/request", { computer_id: f.computerId, task_id: f.task.id });
+    assert.equal(requested.status, 200);
+    const id = ((await requested.json()) as { takeover: { takeover_id: string } }).takeover.takeover_id;
+    assert.equal((await f.post(`/api/v1/takeover/${id}/acquire`)).status, 200);
+    assert.equal(f.daemon.store.getTakeover(id)?.state, "human");
+    const computer = fakeComputerFor(f.computerId)!;
+    const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+    assert.equal(cancel.status, 200);
+    assert.equal(f.daemon.store.getTask(f.task.id)?.status, "cancelled");
+    assert.equal(OPEN_HOLD.has(f.daemon.store.getTakeover(id)?.state ?? ""), false);
+    assert.equal((await f.listOpen()).takeovers.length, 0);
+    await until(() => computer.getTakeoverState() === "agent", "computer gate was not released");
+    const events = f.daemon.store.listAuditRefs().filter((row) =>
+      row.type === "takeover.declined" || row.type === "takeover.released");
+    assert.ok(events.some((row) => JSON.parse(row.body_json).reason === "task cancelled"));
+  } finally { await f.close(); }
+});
+
+test("cancel with no hold leaves takeovers empty and the computer on agent", async () => {
+  const f = await cancelHoldFixture("none");
+  try {
+    assert.equal(f.daemon.store.listTakeovers().length, 0);
+    const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+    assert.equal(cancel.status, 200);
+    assert.equal(f.daemon.store.getTask(f.task.id)?.status, "cancelled");
+    assert.equal((await f.listOpen()).takeovers.length, 0);
+    assert.equal(fakeComputerFor(f.computerId)?.getTakeoverState() ?? "agent", "agent");
+  } finally { await f.close(); }
+});
+
+async function pausedHoldOn(f: Awaited<ReturnType<typeof cancelHoldFixture>>) {
+  const requested = await f.post("/api/v1/takeover/request", { computer_id: f.computerId, task_id: f.task.id });
+  assert.equal(requested.status, 200);
+  const id = ((await requested.json()) as { takeover: { takeover_id: string } }).takeover.takeover_id;
+  assert.equal((await f.post(`/api/v1/takeover/${id}/acquire`)).status, 200);
+  const computer = fakeComputerFor(f.computerId)!;
+  assert.equal((await computer.expireTakeover(id)).ok, true);
+  f.daemon.store.updateTakeoverState(id, "paused");
+  return { id, computer };
+}
+
+test("cancel still returns the gate when takeover_status fails", async () => {
+  let failStatus = false;
+  const orig = FakeComputer.prototype.call;
+  FakeComputer.prototype.call = async function (this: FakeComputer, method: string, params?: unknown) {
+    if (failStatus && method === "takeover_status") {
+      return { ok: false as const, error: { code: "E_IO" as const, message: "status failed" } };
+    }
+    return orig.call(this, method, params);
+  };
+  const f = await cancelHoldFixture("status-fail");
+  try {
+    const { computer } = await pausedHoldOn(f);
+    failStatus = true;
+    const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+    assert.equal(cancel.status, 200);
+    await until(() => computer.getTakeoverState() === "agent", "failed status skipped decline");
+  } finally {
+    FakeComputer.prototype.call = orig;
+    await f.close();
+  }
+});
+
+test("cancel HTTP does not wait on a hung takeover_status", async () => {
+  const hung = Promise.withResolvers<void>();
+  let hangStatus = false;
+  const orig = FakeComputer.prototype.call;
+  FakeComputer.prototype.call = async function (this: FakeComputer, method: string, params?: unknown) {
+    if (hangStatus && method === "takeover_status") await hung.promise;
+    return orig.call(this, method, params);
+  };
+  const f = await cancelHoldFixture("status-hang");
+  try {
+    const { id } = await pausedHoldOn(f);
+    hangStatus = true;
+    const started = Date.now();
+    const cancel = await f.post(`/api/v1/tasks/${f.task.id}/cancel`);
+    const elapsed = Date.now() - started;
+    assert.equal(cancel.status, 200);
+    assert.ok(elapsed < 4_000, `cancel took ${elapsed}ms; HTTP must not wait past the leftover-decline bound`);
+    assert.equal(OPEN_HOLD.has(f.daemon.store.getTakeover(id)?.state ?? ""), false);
+  } finally {
+    hung.resolve();
+    FakeComputer.prototype.call = orig;
+    await f.close();
+  }
+});
+
+for (const end of ["completed", "failed"] as const) test(`${end} with a granted paused hold leaves it for return`, async () => {
+  const oldFake = process.env.MODELBOT_TEST_FAKE_COMPUTER;
+  process.env.MODELBOT_TEST_FAKE_COMPUTER = "1";
+  const entered = Promise.withResolvers<void>();
+  const proceed = Promise.withResolvers<void>();
+  const leftComplete = Promise.withResolvers<void>();
+  const daemon = await startDaemon({
+    host: "127.0.0.1", port: 0, mcpToken: "hold-mcp", bootstrapToken: "hold-boot",
+    workspaceRoot: mkdtempSync(join(tmpdir(), `mb-end-${end}-`)),
+    agentLoop: { model: "test", adapter: { kind: "openai_compat", complete: async () => {
+      entered.resolve();
+      await proceed.promise;
+      leftComplete.resolve();
+      throw new Error("runner exploded");
+    } } },
+  });
+  try {
+    const { headers } = await bootstrapSession(daemon, "hold-boot");
+    const computerId = `${end}-paused-hold`;
+    daemon.store.insertComputer({ id: computerId, name: end, capabilities: ["browser"], persistent: false, status: "running" });
+    const created = await fetch(`${daemon.baseUrl}/api/v1/tasks`, {
+      method: "POST", headers, body: JSON.stringify({ computer_id: computerId, goal: "hold", driver: "a11y" }),
+    });
+    assert.equal(created.status, 201);
+    const { task } = await created.json() as { task: { id: string } };
+    await entered.promise;
+    const requested = await fetch(`${daemon.baseUrl}/api/v1/takeover/request`, {
+      method: "POST", headers, body: JSON.stringify({ computer_id: computerId, task_id: task.id }),
+    });
+    assert.equal(requested.status, 200);
+    const id = ((await requested.json()) as { takeover: { takeover_id: string } }).takeover.takeover_id;
+    const acquired = await fetch(`${daemon.baseUrl}/api/v1/takeover/${id}/acquire`, {
+      method: "POST", headers, body: JSON.stringify({}),
+    });
+    assert.equal(acquired.status, 200);
+    const computer = fakeComputerFor(computerId)!;
+    assert.equal((await computer.expireTakeover(id)).ok, true);
+    daemon.store.updateTakeoverState(id, "paused");
+    if (end === "completed") daemon.store.finishTask(task.id, "completed");
+    proceed.resolve();
+    await leftComplete.promise;
+    await until(() => daemon.store.getTask(task.id)?.status === end, `task never ${end}`);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(daemon.store.getTakeover(id)?.state, "paused");
+    assert.equal(computer.getTakeoverState(), "paused");
+  } finally {
+    proceed.resolve();
+    await daemon.close();
+    if (oldFake === undefined) delete process.env.MODELBOT_TEST_FAKE_COMPUTER;
+    else process.env.MODELBOT_TEST_FAKE_COMPUTER = oldFake;
+  }
+});
+

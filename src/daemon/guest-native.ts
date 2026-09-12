@@ -3,9 +3,17 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createDockerCli, type DockerCli } from "../sandbox/docker.ts";
 import { detectRuntime } from "../sandbox/detect.ts";
+import {
+  agentHomeHelperArgs,
+  agentHomeMigrateArgs,
+  agentHomeStatArgs,
+  ensureAgentHomeOwner,
+} from "../sandbox/lifecycle.ts";
 import { resourceNames } from "../sandbox/names.ts";
 import { runMcpStdioBridge } from "../mcp/stdio-bridge.ts";
 import type { NativeProvider } from "../types/contracts.ts";
+
+export { agentHomeHelperArgs, agentHomeMigrateArgs, agentHomeStatArgs, ensureAgentHomeOwner };
 
 const entry = "/opt/computer-server/src/native-process.ts";
 export const GUEST_CODEX_HOME = "/home/agent/.codex";
@@ -16,14 +24,22 @@ async function finishGuestCleanup(computerId: string): Promise<void> {
   for (const cleanup of [...pendingCleanup.values()]) if (cleanup.computerId === computerId) await cleanup.stop();
 }
 
-function execArgs(computerId: string, command: string[]): string[] {
-  return ["exec", "-i", "--user", "1002:1002", "--workdir", "/workspace",
+const xauthWrap = 'for f in /tmp/modelbot-chromium-*/Xauthority; do [ -f "$f" ] && export XAUTHORITY="$f"; break; done; exec "$@"';
+
+export function execArgs(computerId: string, command: string[]): string[] {
+  return ["exec", "-i", "--user", "1001:1001", "--workdir", "/workspace",
     "--env", "HOME=/home/agent", "--env", `CODEX_HOME=${GUEST_CODEX_HOME}`,
     "--env", `CLAUDE_CONFIG_DIR=${GUEST_CLAUDE_HOME}`,
-    resourceNames(computerId).containerBrowser, ...command];
+    "--env", "DISPLAY=:99",
+    resourceNames(computerId).containerBrowser,
+    "sh", "-c", xauthWrap, "agent", ...command];
 }
 
 async function docker() { return createDockerCli(await detectRuntime()); }
+
+export async function forceAgentHomeOwner(computerId: string): Promise<void> {
+  await ensureAgentHomeOwner(await docker(), computerId, { force: true });
+}
 
 function managedSpawn(cli: DockerCli, computerId: string, provider: string, args: string[], id: string, mode: "run" | "exec") {
   const child = cli.spawn(execArgs(computerId, ["/usr/bin/tini", "-s", "--", "node", entry, mode, id, provider, ...args]));
@@ -52,14 +68,17 @@ function managedSpawn(cli: DockerCli, computerId: string, provider: string, args
 /** Stock guest auth/catalog commands with passthrough streams and guest-tree cleanup. */
 export async function guestSpawn(computerId: string, provider: NativeProvider, args: string[]): Promise<{ child: ChildProcess; stop(): Promise<void> }> {
   await finishGuestCleanup(computerId);
-  return managedSpawn(await docker(), computerId, provider, args, randomUUID(), "exec");
+  const cli = await docker();
+  await ensureAgentHomeOwner(cli, computerId);
+  return managedSpawn(cli, computerId, provider, args, randomUUID(), "exec");
 }
 
 /** Acknowledges only after model-owned processes stop/resume; the operator desktop stays alive. */
 export async function setGuestComputerPaused(computerId: string, paused: boolean): Promise<void> {
   // A cancelled frozen child must be killed, not resumed after a Docker error.
   if (!paused) await finishGuestCleanup(computerId);
-  await (await docker()).run(execArgs(computerId, ["node", entry, paused ? "pause" : "resume", randomUUID()]));
+  const cli = await docker();
+  await cli.run(execArgs(computerId, ["node", entry, paused ? "pause" : "resume", randomUUID()]));
 }
 
 export async function startGuestNativeTask(options: {
@@ -75,6 +94,7 @@ export async function startGuestNativeTask(options: {
   await finishGuestCleanup(options.computerId);
   options.signal?.throwIfAborted();
   const cli = options.cli ?? await docker();
+  await ensureAgentHomeOwner(cli, options.computerId);
   const id = randomUUID();
   const relayControl = managedSpawn(cli, options.computerId, "node", [entry, "mcp-listen", id], randomUUID(), "exec");
   const relay = relayControl.child;

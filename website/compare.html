@@ -1,0 +1,76 @@
+<header class="page-header"><p class="eyebrow">Public-page comparison · 11 September 2026</p><h1>BotHearth, Grok Bot, and Muse.</h1><p class="lead">A dated table of what public pages said about where the computer runs, who picks the model, whether the source is inspectable, and what happens when a human takes control. Grok Bot and Muse keep a 24/7 cloud computer and ship consumer apps. This is not a ranking.</p><p class="qualification">Retrieved 11 September 2026 · Technical alpha · Vendor pages are publisher claims, not independent tests</p></header>
+<div class="doc-layout"><nav class="contents" aria-label="On this page"><span>On this page</span><a href="#how-to-read">How to read this table</a><a href="#table">Dated comparison</a><a href="#strengths">Competitor strengths</a><a href="#not-claimed">What this page does not claim</a><a href="#sources">Sources</a></nav><article class="prose doc-body">
+<section id="how-to-read"><h2>How to read this table</h2><p>Each cell is a retrieved public-page statement, or <strong>Not found</strong> when this review did not locate a supporting passage. “Not found” is not “the product cannot do it.” Reopen the linked source before treating a row as current. BotHearth facts below match this site and the published source; they are not a third-party audit.</p><p>The products named here are <strong>Grok Bot</strong> (xAI, accessed with a Cursor account) and <strong>Muse</strong> (Meta’s personal agent launched 8 September 2026). Other 2026 products share the Muse name; this page means Meta’s consumer agent. BotHearth is independent of xAI, Cursor, and Meta. Those names identify products compared here and do not imply endorsement.</p></section>
+<section id="table"><h2>Dated comparison</h2>
+<div class="table-scroll" role="region" aria-label="Comparison of BotHearth, Grok Bot, and Muse" tabindex="0"><table>
+<caption>Public-page comparison retrieved 11 September 2026. Not found means no supporting passage was located in the pages checked.</caption>
+<thead>
+<tr>
+<th scope="col">Topic</th>
+<th scope="col">BotHearth</th>
+<th scope="col">Grok Bot</th>
+<th scope="col">Muse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">Customer-owned computer</th>
+<td>Yes, for this alpha: the daemon, workspace, task records, and browser profiles live on a Mac, Linux host, or VM you operate. BotHearth does not offer a hosted agent account. Remote models still receive the task context you submit. Laptop sleep stops local work.</td>
+<td>No customer-owned computer in the pages checked. Docs describe a vendor-hosted cloud computer that keeps working when the laptop is closed. On-premises and bring-your-own-image: Not found as supported options.</td>
+<td>No customer-owned computer in the pages checked. Launch and safety pages describe a vendor-hosted Secure VM. A later confidential VM is described as a plan, not as the shipping default on 11 September 2026.</td>
+</tr>
+<tr>
+<th scope="row">Model picker</th>
+<td>Operator chooses a supported connection. Native: Codex (verified live) or Claude Code (listed; not yet verified live). API adapters and local endpoints are a separate YAML path. That is a picker among documented connections, not a claim that every model works.</td>
+<td>Not found as a customer-facing picker. Settings and security pages say Cursor manages model selection.</td>
+<td>Not found as a customer picker for another frontier model. Launch copy points at Muse Spark.</td>
+</tr>
+<tr>
+<th scope="row">Source-available (not OSI)</th>
+<td>Yes. Source-available under PolyForm Noncommercial, which is not an OSI licence. The <a href="{{REPOSITORY}}/blob/main/LICENSE">licence</a> and <a href="{{BASE}}faq/#licence">FAQ</a> state the limit. Standard grants restrict commercial redistribution and hosted copies of the service.</td>
+<td>Not found as a public source tree for the Bot product.</td>
+<td>Not found as a public source tree for Muse.</td>
+</tr>
+<tr>
+<th scope="row">Model-blind takeover</th>
+<td>Take control covers the agent’s computer, including its browser, Files, and Terminal. During acknowledged control, model tools cannot capture the browser or act. Capture and ordinary agent tools resume when you give control back. Later page content can become model-visible after handback. Detectors do not catch every external effect.</td>
+<td>Docs describe taking control to finish passwords, 2FA, CAPTCHA, and payments, then returning control. A statement that the model is frozen and capture is blocked for the whole computer during that step: Not found.</td>
+<td>Help documents a browser window and “Take control of the browser,” which pauses Muse in the browser. A user-facing full-computer takeover of terminal, files, and the whole VM: Not found.</td>
+</tr>
+<tr>
+<th scope="row">24/7 cloud computer</th>
+<td>Not found as a BotHearth-hosted always-on cloud. A VM you operate can stay up; that is your hosting. Local work stops when the host sleeps.</td>
+<td>Yes, as a documented strength: the cloud computer continues while the app is closed.</td>
+<td>Yes, as a documented strength: background work continues after the app is closed.</td>
+</tr>
+<tr>
+<th scope="row">ISO in a product FAQ</th>
+<td>Not found. This alpha claims no independent audit or certification.</td>
+<td>Yes, as a documented FAQ statement: Anysphere holds ISO/IEC 27001 and 42001, and Grok Bot is in current ISO scope, with certificates pointed at trust.cursor.com. That is the vendor’s FAQ, not a BotHearth audit of Cursor.</td>
+<td>Not found on the Muse help, privacy, and safety pages checked for this table.</td>
+</tr>
+<tr>
+<th scope="row">Consumer apps</th>
+<td>Not found as an App Store, Play, or WhatsApp client. Documented path: source install on macOS or Linux.</td>
+<td>Yes, as a documented strength: desktop clients for macOS, Windows, and Linux, plus iOS and Android companion apps. Official posts on 9 September 2026 also describe native iPad availability; dated mobile docs from 2 September 2026 still said phones, not iPad.</td>
+<td>Yes, as a documented strength: US launch on iOS, Android, muse.ai, and WhatsApp.</td>
+</tr>
+<tr>
+<th scope="row">Team admin / SSO</th>
+<td>Not found. This alpha is documented as one operator. The business offer is a licence, not a SaaS control plane.</td>
+<td>Documented on Enterprise: access, network, and audit controls. Self-serve Teams do not receive every Enterprise control in the pages checked.</td>
+<td>Not found on the Muse help, privacy, and safety pages checked for this table.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Re-check the sources if you are buying. Pages move. This snapshot is 11 September 2026.</p></section>
+<section id="strengths"><h2>Where Grok Bot and Muse are stronger in public copy</h2><p>Grok Bot and Muse advertise a <strong>24/7 cloud computer</strong> that keeps working when your laptop or phone is away. BotHearth does not sell that service. If you need unattended work, you operate the host (including a VM) yourself, and sleep still stops a local Mac or Linux session.</p><p>Grok Bot’s security FAQ is the page that currently carries an <strong>ISO</strong> statement for the Bot product’s vendor scope. Muse’s checked pages did not. BotHearth’s <a href="{{BASE}}security/">security page</a> does not claim a certification.</p><p>Both competitors ship <strong>consumer apps</strong>: Grok Bot on desktop and phones; Muse on phones, the web, and WhatsApp at US launch. BotHearth’s documented path remains a source installation.</p><p>Those are real selection reasons for buyers who want a hosted teammate, a vendor FAQ with ISO language, or a downloadable consumer client. They are not a score against BotHearth’s custody and control story.</p></section>
+<section id="not-claimed"><h2>What this page does not claim</h2><p>It does not rank BotHearth above Grok Bot or Muse on security. It does not treat a FAQ badge as proof of how either vendor’s production systems behave. It does not turn “Not found” into a missing feature. It does not claim that self-hosting keeps model-visible context on your machine.</p><p>BotHearth is a source-installed alpha. Connect a supported model account; provider terms, usage limits, and charges still apply. Read <a href="{{BASE}}security/">security and privacy</a>, the <a href="{{BASE}}faq/">FAQ</a>, and <a href="{{BASE}}quickstart/">install from source</a> before relying on a task.</p></section>
+<section id="sources"><h2>Sources retrieved 11 September 2026</h2><ul>
+<li>BotHearth: this site’s <a href="{{BASE}}">overview</a>, <a href="{{BASE}}security/">security</a>, <a href="{{BASE}}faq/#licence">licence FAQ</a>, and <a href="{{REPOSITORY}}/blob/main/LICENSE">PolyForm Noncommercial licence</a>.</li>
+<li>Grok Bot: <a href="https://x.ai/bot">x.ai/bot</a>; <a href="https://docs.x.ai/grok-bot/faq">FAQ</a>; <a href="https://docs.x.ai/grok-bot/security-faq">security FAQ</a> (ISO statement); <a href="https://docs.x.ai/grok-bot/settings-and-notifications">settings</a>; <a href="https://docs.x.ai/grok-bot/computer-and-apps">computer and apps</a>; <a href="https://docs.x.ai/grok-bot/get-started">get started</a>; <a href="https://docs.x.ai/grok-bot/mobile">mobile</a>; <a href="https://trust.cursor.com">trust.cursor.com</a> as cited by that FAQ.</li>
+<li>Muse: <a href="https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/">Meta Newsroom, 8 September 2026</a>; <a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">Meta AI Research safety post, 8 September 2026</a>; <a href="https://www.meta.com/help/artificial-intelligence/2124746764949121/">Meta Help: browsing</a>; <a href="https://muse.ai/privacy">Muse privacy policy, 8 September 2026</a>; <a href="https://www.wired.com/story/meta-releases-muse-a-personal-ai-agent-with-privacy-built-into-it/">WIRED, 8 September 2026</a> (confidential VM as later work).</li>
+</ul>
+<p class="sources">Comparison retrieved 11 September 2026 for v{{VERSION}} alpha. Site configuration reviewed {{DATE}}.</p>
+</section>
+</article></div>

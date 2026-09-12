@@ -30,6 +30,7 @@ export const TOOL_NAMES = [
   "browser_tabs",
   "browser_screenshot",
   "browser_wait",
+  "browser_restart",
   "computer_mouse",
   "computer_key",
   "computer_type",
@@ -189,13 +190,17 @@ export interface ApprovalRequest {
  */
 export type ApprovalDecision = "allow_once" | "allow_task" | "deny" | "kill";
 
-export type PolicyGate =
-  | "external_send"
-  | "payment"
-  | "upload"
-  | "delete"
-  | "secret_entry"
-  | "new_domain";
+/** Optional MCP-tool approval classes. Empty by default; force-human stops (including payment-card entry) are not in this list. `payment` is an extra confirm for checkout without a card field. */
+export const OPTIONAL_POLICY_GATES = [
+  "external_send",
+  "payment",
+  "upload",
+  "delete",
+  "secret_entry",
+  "new_domain",
+] as const;
+
+export type PolicyGate = (typeof OPTIONAL_POLICY_GATES)[number];
 
 /** ARCH §6 event enum (shared with audit). */
 export type EventType =
@@ -441,7 +446,7 @@ export interface CreateTaskBody {
   driver?: DriverKind;
   capabilities?: ComputerCapability[];
   max_steps?: number;
-  /** Overrides `agent.spend_cap_usd` for this task only. */
+  /** Overrides `agent.spend_cap_usd` for an API-adapter task. Ignored for native Codex / Claude Code tasks. */
   spend_cap_usd?: number;
 }
 
@@ -469,16 +474,16 @@ export interface UsageEventBody {
 export interface TaskBudget {
   /** Spent so far. Null only when nothing has priced this task's work yet. */
   spend_usd: number | null;
-  /** The cap this task runs against. */
-  spend_cap_usd: number;
+  /** The cap this task runs against. Null when nothing here will stop it. */
+  spend_cap_usd: number | null;
   /** Tool calls the cap has counted. */
   calls: number;
   /**
    * Tool calls left before something stops the task: the lower of what
    * `spend_cap_usd` buys at the per-call price and the step budget, both of
-   * which a harness run counts in tool calls. Null on the standalone path,
-   * where spend is the provider's own estimate and steps are model turns, so
-   * no tool-call ceiling exists to name.
+   * which a harness run counts in tool calls. Null when there is no tool-call
+   * ceiling — a standalone run (provider estimate, model-turn steps) or a
+   * native run that BotHearth does not cap.
    */
   calls_cap: number | null;
 }
@@ -488,11 +493,11 @@ export interface TaskBudget {
  * event log. Re-reading a finished task returns byte-identical values.
  */
 export interface TaskSummary {
-  /** Agent steps the loop actually ran. */
+  /** Agent steps the loop actually ran. Same figure as the live view: tool calls. */
   steps: number;
   /** Hostnames the task visited, first contact first. */
   sites: string[];
-  /** Approvals the task asked the operator for. */
+  /** Approvals and takeovers the task asked the operator for. */
   asks: number;
   /** Workspace paths the task wrote or promoted. */
   files_saved: string[];
@@ -581,12 +586,13 @@ export interface ModelbotConfig {
     screenshot_jpeg_q: number;
   };
   agent: {
+    /** API-adapter loop only; each step is a paid API call. 0 = no cap. Native tasks ignore this. */
     max_steps: number;
     loop_identical: number;
     stall_sec: number;
-    /** What one task is given when the request names no budget. */
+    /** What one API-adapter task is given when the request names no budget. 0 = no cap. Native tasks have no BotHearth spend cap. */
     spend_cap_usd: number;
-    /** The most a request or a resume may ask for; above it the daemon refuses. */
+    /** The most an API-adapter request or resume may ask for; 0 = no maximum. Above a positive ceiling the daemon refuses. */
     spend_cap_max_usd: number;
     /** Seconds one run may take before it pauses; 0 means no time limit. */
     max_runtime_sec: number;

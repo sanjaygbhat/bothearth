@@ -10,8 +10,9 @@ import { join } from "node:path";
 import { canonicalHttpsOrigin } from "../daemon/auth.ts";
 import { startDaemon, type DaemonOptions } from "../daemon/server.ts";
 import { readLicencePolicy } from "../daemon/licence.ts";
-import { logInfo, logError } from "../daemon/log.ts";
+import { attachDaemonFileLog, logError, logInfo } from "../daemon/log.ts";
 import { clearOwnPid } from "./daemon-ctl.ts";
+import { killSwitchTrueWarning } from "./doctor.ts";
 import { configPath, expandHome, modelbotHome, tokensPath } from "./paths.ts";
 import { classifyStartupError, formatStartupErrorLine } from "./startup-error.ts";
 import { mintStartBootstrapToken, resolveRuntimeTokens } from "./tokens.ts";
@@ -131,6 +132,9 @@ export async function buildProductionComposition(
   const dataTok = join(dataDir, "tokens.json");
   if (existsSync(dataTok)) persistPaths.push(dataTok);
   const bootstrapToken = mintStartBootstrapToken(mcpToken, persistPaths);
+  if (config.policy.kill_switch) {
+    console.warn(killSwitchTrueWarning(cfgPath));
+  }
   return {
     config,
     bootstrapToken,
@@ -143,6 +147,7 @@ export async function buildProductionComposition(
       sqlitePath: process.env.MODELBOT_SQLITE_PATH ?? join(dataDir, "modelbot.sqlite"),
       workspaceRoot,
       idlePauseMin: config.sandbox.idle_pause_min,
+      maxComputers: config.sandbox.max_computers,
       schedulerEnabled: config.scheduler.enabled,
       ...(process.env.MODELBOT_CODEX_HOME ? { codexRunner: {
         codexHome: expandHome(process.env.MODELBOT_CODEX_HOME),
@@ -159,6 +164,9 @@ export async function buildProductionComposition(
         readable: config.policy.strict_allowlist,
         writable: config.policy.strict_allowlist,
       },
+      enabledGates: [...config.policy.gates],
+      killSwitch: config.policy.kill_switch,
+      configPath: cfgPath,
       connectorConfigs: parseConnectorConfigs(config.mcp.connectors),
       // Without this the config key is inert and the dispatcher keeps its own default.
       approvalTtlSec: config.policy.approval_ttl_sec,
@@ -240,7 +248,7 @@ export function announceBootstrapUrl(
 ): void {
   const log = deps.log ?? console.log;
   log(`Open ${url}`);
-  log("This link works for 10 minutes. Lost it? Run: modelbot pair");
+  log("This link works for 10 minutes. Lost it? Run: bothearth pair");
   if (!deps.open) return;
   if (!(deps.interactive ?? interactiveTerminal())) return;
   if ((deps.platform ?? process.platform) !== "darwin") return;
@@ -249,6 +257,10 @@ export function announceBootstrapUrl(
 
 export async function runStart(opts: StartCliOptions = {}): Promise<void> {
   const composition = await buildProductionComposition(opts);
+  attachDaemonFileLog(
+    composition.daemon.dataDir ??
+      expandHome(process.env.MODELBOT_DATA_DIR ?? composition.config.data_dir),
+  );
   const handle = await startDaemon(composition.daemon);
 
   const bootstrapUrl = `${composition.daemon.publicOrigin ? canonicalHttpsOrigin(composition.daemon.publicOrigin) : handle.baseUrl}/#bootstrap=${composition.bootstrapToken}`;

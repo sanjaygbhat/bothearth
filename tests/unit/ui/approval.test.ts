@@ -52,6 +52,21 @@ describe("approval copy — no gate names, no raw JSON", () => {
     assert.equal(copy.discloseLabel, "Show exactly what it will write");
   });
 
+  it("names a form submit as submitting the form, not opening a site", () => {
+    const copy = describeApproval(
+      pending({
+        tool: "browser_type",
+        gate: "new_domain",
+        args: { text: "hello", submit: true },
+        bind: { ...pending().bind, origin: "https://httpbin.org/post" },
+      }),
+    );
+    assert.equal(copy.title, "Submit this form to httpbin.org?");
+    assert.match(copy.what, /submit this form to httpbin.org/);
+    assert.doesNotMatch(copy.title, /open a new site|Open httpbin/i);
+    assert.doesNotMatch(copy.what, /open httpbin/i);
+  });
+
   it("names the real destination for a site this task has not been allowed", () => {
     const copy = describeApproval(
       pending({

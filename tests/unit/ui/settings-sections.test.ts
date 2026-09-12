@@ -11,6 +11,7 @@ type World = {
   tasks: Array<Record<string, unknown>>;
   records: Array<Record<string, unknown>>;
   mutations: string[];
+  domains?: Record<string, string[]>;
 };
 
 const emptyWorld = (): World => ({ computers: [], defaultId: null, tasks: [], records: [], mutations: [] });
@@ -18,6 +19,8 @@ const emptyWorld = (): World => ({ computers: [], defaultId: null, tasks: [], re
 async function mountSection(section: string, world: World) {
   const dom = installDom({ timers: "manual", hash: `#/settings/${section}`, fetch: async (path, init) => {
     if (init?.method && init.method !== "GET") world.mutations.push(`${init.method} ${path}`);
+    const signed = /^\/api\/v1\/computers\/([^/]+)\/signed-in$/.exec(path);
+    if (signed) return json({ domains: world.domains?.[decodeURIComponent(signed[1]!)] ?? [] });
     if (path.startsWith("/api/v1/computers"))
       return json({ default_computer_id: world.defaultId, computers: world.computers });
     if (path.startsWith("/api/v1/tasks")) return json({ tasks: world.tasks });
@@ -44,6 +47,10 @@ test("with no computer yet, Computers says so instead of showing an empty list",
   const { dom, view, pane } = await mountSection("computers", world);
   try {
     assert.match(text(pane), /does not have a computer yet/);
+    assert.match(
+      text(pane),
+      /Each computer has its own Chromium\. Signing in there does not sign in Arc or Chrome, and your everyday browser stays private from the model\./,
+    );
     assert.deepEqual(world.mutations, []);
   } finally {
     view.unmount();
@@ -63,6 +70,15 @@ test("a fresh computer needs two clicks, and is refused outright while a task is
   try {
     assert.match(text(pane), /Working on a task right now/);
     assert.match(text(pane), /keeps the sites it signed into/);
+
+    const forget = byText(pane, "Forget this computer's logins") as FakeElement;
+    forget.fire("click");
+    await settle();
+    assert.match(
+      text(pane),
+      /This computer has a task in progress\. Stop or finish it before forgetting its logins\./,
+    );
+    assert.deepEqual(world.mutations, [], "a busy computer is never wiped behind your back");
 
     const fresh = byText(pane, "Use a fresh one") as FakeElement;
     fresh.fire("click");
@@ -115,6 +131,75 @@ test("renaming a computer is remembered on this Mac and shows up next time", asy
       "Shopping browser",
     );
     assert.deepEqual(world.mutations, [], "a name is not a server change");
+  } finally {
+    view.unmount();
+    dom.restore();
+  }
+});
+
+test("Computers shows signed-in sites and a confirmable Forget button", async () => {
+  const world = emptyWorld();
+  world.computers = [
+    { id: "c1", name: "My browser", capabilities: ["browser"], persistent: true, status: "running", created_at: "" },
+  ];
+  world.defaultId = "c1";
+  world.domains = { c1: ["google.com", "chatgpt.com"] };
+  const { dom, view, pane } = await mountSection("computers", world);
+  try {
+    assert.match(text(pane), /Signed-in sites: google\.com, chatgpt\.com/);
+    const forget = byText(pane, "Forget this computer's logins") as FakeElement;
+    forget.fire("click");
+    assert.deepEqual(world.mutations, []);
+    assert.match(
+      text(dom.root.querySelector(".set-pane") as FakeElement),
+      /need to sign in again on those sites/,
+    );
+    (
+      byText(
+        dom.root.querySelector(".set-pane") as FakeElement,
+        "Yes, forget logins",
+      ) as FakeElement
+    ).fire("click");
+    await settle();
+    await settle();
+    assert.deepEqual(world.mutations, ["POST /api/v1/computers/c1/forget-logins"]);
+  } finally {
+    view.unmount();
+    dom.restore();
+  }
+});
+
+test("Computers shows None when no signed-in sites", async () => {
+  const world = emptyWorld();
+  world.computers = [
+    { id: "c1", name: "My browser", capabilities: ["browser"], persistent: true, status: "running", created_at: "" },
+  ];
+  world.defaultId = "c1";
+  const { dom, view, pane } = await mountSection("computers", world);
+  try {
+    assert.match(text(pane), /Signed-in sites: None/);
+    assert.ok(byText(pane, "Forget this computer's logins"));
+  } finally {
+    view.unmount();
+    dom.restore();
+  }
+});
+
+test("Computers hides Forget on a shell-only computer", async () => {
+  const world = emptyWorld();
+  world.computers = [
+    {
+      id: "c1",
+      name: "Shell",
+      capabilities: ["shell"],
+      persistent: true,
+      status: "running",
+      created_at: "",
+    },
+  ];
+  const { dom, view, pane } = await mountSection("computers", world);
+  try {
+    assert.equal(byText(pane, "Forget this computer's logins"), undefined);
   } finally {
     view.unmount();
     dom.restore();

@@ -85,13 +85,39 @@ test("init writes no limit values, so the daemon defaults apply", async () => {
     policy: { approval_ttl_sec: number };
     takeover: { ttl_sec: number };
   };
-  assert.equal(cfg.agent.max_steps, 400);
+  assert.equal(cfg.agent.max_steps, 0);
   assert.equal(cfg.agent.stall_sec, 300);
   assert.equal(cfg.policy.approval_ttl_sec, 900);
-  assert.equal(cfg.agent.spend_cap_usd, 20);
+  assert.equal(cfg.agent.spend_cap_usd, 0);
   assert.equal(cfg.takeover.ttl_sec, 600);
 });
 
+test("init writes neither policy.gates nor mode", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mb-init-gates-"));
+  process.env.MODELBOT_VAULT_KEY_HEX = Buffer.alloc(32, 7).toString("hex");
+  await runInit([
+    "--home",
+    home,
+    "--data-dir",
+    join(home, "data"),
+    "--skip-detect",
+    "--skip-images",
+    "--quiet",
+    "--force",
+  ]);
+  const text = readFileSync(join(home, "modelbot.yaml"), "utf8");
+  const active = text
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+  assert.ok(!/^\s*mode\s*:/m.test(active), "init must not pin mode");
+  assert.ok(!/^\s*gates\s*:/m.test(active), "init must not pin policy.gates");
+  const raw = parseYaml(text) as Record<string, unknown>;
+  assert.equal(raw.mode, undefined);
+  assert.equal(raw.policy, undefined);
+  const cfg = withDefaults(raw) as { policy: { gates: string[] } };
+  assert.deepEqual(cfg.policy.gates, []);
+});
 
 test("failed vault setup leaves init retryable without force", async () => {
   const home = mkdtempSync(join(tmpdir(), "mb-init-retry-"));

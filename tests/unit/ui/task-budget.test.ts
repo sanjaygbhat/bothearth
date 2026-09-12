@@ -232,6 +232,7 @@ describe("a run that stopped on its budget", () => {
     assert.equal(raisedCap(6, null, 10), 10, "never above what the daemon accepts");
     assert.equal(raisedCap(10, 50, 10), null, "already at the maximum: nothing to ask for");
     assert.equal(raisedCap(2, null, null), 4, "no known maximum, still twice what it had");
+    assert.equal(raisedCap(2, null, 0), 4, "a zero maximum is no maximum");
     assert.equal(raisedCap(null, 5, 10), 5, "no cap recorded: the figure that was set");
     assert.equal(raisedCap(null, null, null), null);
 
@@ -294,6 +295,17 @@ describe("a run a budget paused rather than failed", () => {
         { max_steps: 400 },
         "steps, not dollars: the daemon refuses the resume on the counter that stopped it",
       );
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("does not name a zero spend cap as a $0 budget", async () => {
+    const t = await mount(pausedOn("spend_cap", { spend_cap_usd: 0 }));
+    try {
+      const lede = t.root.querySelector(".done-lede")!.textContent ?? "";
+      assert.doesNotMatch(lede, /\$0/);
+      assert.match(lede, /budget set for this task/);
     } finally {
       t.restore();
     }
@@ -388,7 +400,7 @@ describe("a takeover the bot may have got wrong", () => {
       const card = t.root.querySelector(".takeover-ask")!;
       assert.match(card.textContent, /It thinks this is a one-time-code field/);
       const acts = card.querySelectorAll(".acts button");
-      assert.deepEqual(acts.map((b) => b.textContent), ["Take control ⌘⇧T", "Not needed, continue"]);
+      assert.deepEqual(acts.map((b) => b.textContent), ["Take control ⌘⇧T", "Not needed, continue", "Use a different Google account"]);
       assert.match(acts[0]!.className, /primary/, "taking control is still the first offer");
       assert.match(acts[1]!.className, /ghost/);
 
@@ -410,7 +422,7 @@ describe("a takeover the bot may have got wrong", () => {
     const t = await mount(routes);
     try {
       const acts = t.root.querySelectorAll(".takeover-ask .acts button");
-      assert.deepEqual(acts.map((b) => b.textContent), ["Take control ⌘⇧T"]);
+      assert.deepEqual(acts.map((b) => b.textContent), ["Take control ⌘⇧T", "Use a different Google account"]);
     } finally {
       t.restore();
     }

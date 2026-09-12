@@ -1,8 +1,10 @@
 import { mkdir } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { configPath } from "../cli/paths.ts";
+import { applyLegacyTemplate, loadModelbotYamlFile } from "../config/load.ts";
 import { ensureWorkspaceBrowserWritable } from "./workspace-perm.ts";
 import type {
   ComputerCapability,
@@ -16,12 +18,15 @@ import { createDockerCli, DockerError, runIgnore, type DockerCli } from "./docke
 import {
   browserCreateArgs,
   collectPersistedInternalSubnets,
+  DEFAULT_BROWSER_IMAGE,
+  DEFAULT_LIMITS,
   forceAllocateInternalDnsPlan,
   inspectArgs,
   isPoolOverlapMessage,
   loadPersistedInternalDnsPlan,
   networkCreateArgs,
   networkRmArgs,
+  parseDockerMemoryBytes,
   pauseArgs,
   probeUsedInternalSubnets,
   profileVolumeCreateArgs,
@@ -35,10 +40,12 @@ import {
   unpauseArgs,
   volumeRmArgs,
   type FlagBuildOpts,
+  type HardeningLimits,
   type InternalDnsPlan,
 } from "./flags.ts";
 import { resourceNames, sanitizeComputerName } from "./names.ts";
 import { BUILD_STAMP_LABEL } from "../daemon/build-stamp.ts";
+import { logInfo } from "../daemon/log.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 
@@ -65,6 +72,7 @@ export interface LifecycleOpts {
   browserImage?: string;
   shellImage?: string;
   proxyImage?: string;
+  limits?: Partial<HardeningLimits>;
 }
 
 export interface DestroyOpts {
@@ -81,7 +89,76 @@ async function resolveCli(opts: LifecycleOpts = {}): Promise<{
   return { runtime, cli };
 }
 
-function toFlagOpts(
+/** Raw yaml `sandbox.memory` / `sandbox.shm_size` → create limits. Absent keys stay unset so flags keep 4g/2g. */
+export function limitsFromSandboxYaml(sandbox: unknown): Partial<HardeningLimits> {
+  if (!sandbox || typeof sandbox !== "object" || Array.isArray(sandbox)) return {};
+  const s = sandbox as { memory?: unknown; shm_size?: unknown };
+  const limits: Partial<HardeningLimits> = {};
+  if (typeof s.memory === "string" && s.memory.trim()) limits.browserMemory = s.memory.trim();
+  if (typeof s.shm_size === "string" && s.shm_size.trim()) limits.browserShm = s.shm_size.trim();
+  return limits;
+}
+
+const agentHomeReady = new Set<string>();
+
+function agentHomeMissing(error: unknown): boolean {
+  const text = error instanceof DockerError ? `${error.stderr} ${error.message}` : error instanceof Error ? error.message : String(error);
+  return /no such (object|container)|no such volume/i.test(text);
+}
+
+/** In-container owner probe. Root inside the browser still cannot chown (no CAP_DAC_OVERRIDE). */
+export function agentHomeStatArgs(computerId: string): string[] {
+  return ["exec", "--user", "0", resourceNames(computerId).containerBrowser, "stat", "-c", "%u", "/home/agent"];
+}
+
+/** Helper container on the named volume — keeps CAP_DAC_OVERRIDE, never `--privileged`. */
+export function agentHomeHelperArgs(computerId: string, command: string[], image = DEFAULT_BROWSER_IMAGE): string[] {
+  return ["run", "--rm", "--user", "0", "-v", `${resourceNames(computerId).volumeAgentHome}:/home/agent`, image, ...command];
+}
+
+export function agentHomeMigrateArgs(computerId: string, image = DEFAULT_BROWSER_IMAGE): string[] {
+  return agentHomeHelperArgs(computerId, ["chown", "-R", "1001:1001", "/home/agent"], image);
+}
+
+/** One-shot volume helper: leftover uid-1002 agent-home → 1001:1001. Cheap after the first success. */
+export async function ensureAgentHomeOwner(
+  cli: DockerCli,
+  computerId: string,
+  opts?: { force?: boolean; image?: string },
+): Promise<void> {
+  if (!opts?.force && agentHomeReady.has(computerId)) return;
+  const image = opts?.image ?? DEFAULT_BROWSER_IMAGE;
+  let uid: string | undefined;
+  try {
+    uid = (await cli.run(agentHomeStatArgs(computerId))).trim();
+  } catch (error) {
+    if (agentHomeMissing(error)) return;
+    try {
+      uid = (await cli.run(agentHomeHelperArgs(computerId, ["stat", "-c", "%u", "/home/agent"], image))).trim();
+    } catch (helperError) {
+      if (agentHomeMissing(helperError)) return;
+      throw helperError;
+    }
+  }
+  if (uid !== "1001") {
+    await cli.run(agentHomeMigrateArgs(computerId, image));
+    logInfo("agent home migrated to the browser user", { computer_id: computerId });
+  }
+  agentHomeReady.add(computerId);
+}
+
+function yamlSandboxLimits(): Partial<HardeningLimits> {
+  const cfg = process.env.MODELBOT_CONFIG ?? configPath();
+  if (!existsSync(cfg)) return {};
+  try {
+    const raw = applyLegacyTemplate(loadModelbotYamlFile(cfg)) as Record<string, unknown>;
+    return limitsFromSandboxYaml(raw.sandbox);
+  } catch {
+    return {};
+  }
+}
+
+export function toFlagOpts(
   name: string,
   workspaceHost: string,
   opts: LifecycleOpts,
@@ -100,6 +177,7 @@ function toFlagOpts(
     shellImage: opts.shellImage,
     proxyImage: opts.proxyImage,
     dnsPlan,
+    limits: { ...yamlSandboxLimits(), ...opts.limits },
   };
 }
 
@@ -144,7 +222,11 @@ export async function createComputer(
 
   if (caps.includes("browser")) {
     await runIgnore(cli, profileVolumeCreateArgs(n), ["already exists"]);
-    await cli.run(["volume", "create", "--label", `${r.label}=${n}`, r.volumeAgentHome]);
+    await runIgnore(
+      cli,
+      ["volume", "create", "--label", `${r.label}=${n}`, r.volumeAgentHome],
+      ["already exists"],
+    );
   }
 
   await runIgnore(cli, ["rm", "-f", r.containerProxy], ["no such"]);
@@ -176,12 +258,7 @@ export async function startComputer(
   const { cli } = await resolveCli(life);
   const r = resourceNames(n);
   for (const c of [r.containerProxy, r.containerBrowser, r.containerShell]) {
-    try {
-      await runIgnore(cli, startArgs(c), ["no such", "already started", "is already running"]);
-    } catch (error) {
-      if (!/cannot start a paused container/i.test(String(error))) throw error;
-      await cli.run(unpauseArgs(c));
-    }
+    await runIgnore(cli, startArgs(c), ["no such", "already started", "is already running"]);
   }
   try {
     const inspected = JSON.parse(await cli.run(inspectArgs(r.containerBrowser))) as Array<{
@@ -200,6 +277,7 @@ export async function startComputer(
     const message = error instanceof Error ? error.message : String(error);
     if (!/no such (object|container)/i.test(message)) throw error;
   }
+  await ensureAgentHomeOwner(cli, n, { image: life.browserImage ?? DEFAULT_BROWSER_IMAGE });
 }
 
 /**
@@ -280,7 +358,9 @@ export async function computerImageDrifted(
  * Recreate the computer's containers from the current tags when they have
  * drifted. The workspace directory and the named profile volume are untouched,
  * so the owner keeps their files and their signed-in browser profile; only the
- * containers are replaced. Returns true when a recreate happened.
+ * containers are replaced. Idle-paused computers are unpaused first: `docker rm`
+ * of a paused container is what used to leave a drifted browser sitting until a
+ * human unpaused it. Returns true when a recreate happened.
  */
 export async function refreshComputerImage(
   name: string,
@@ -288,8 +368,83 @@ export async function refreshComputerImage(
   life: LifecycleOpts = {},
 ): Promise<boolean> {
   if (!(await computerImageDrifted(name, life))) return false;
+  await unpauseComputer(name, life);
   await createComputer(name, { capabilities }, life);
   return true;
+}
+
+function hostLimitBytes(inspect: Record<string, unknown> | null): {
+  memory?: number;
+  shm?: number;
+} {
+  const hc = inspect?.HostConfig;
+  if (!hc || typeof hc !== "object") return {};
+  const host = hc as { Memory?: unknown; ShmSize?: unknown };
+  return {
+    memory: typeof host.Memory === "number" ? host.Memory : undefined,
+    shm: typeof host.ShmSize === "number" ? host.ShmSize : undefined,
+  };
+}
+
+/**
+ * Align a running computer with the effective sandbox memory / shm. Memory
+ * can move in place (`docker update`). shm-size cannot, so a mismatch
+ * recreates the computer (profile kept) only when `allowRecreate` is set.
+ */
+export async function reconcileComputerLimits(
+  name: string,
+  capabilities: ComputerCapability[],
+  life: LifecycleOpts & { allowRecreate?: boolean } = {},
+): Promise<"updated" | "recreated" | false> {
+  const n = sanitizeComputerName(name);
+  const { cli } = await resolveCli(life);
+  const r = resourceNames(n);
+  const effective = { ...DEFAULT_LIMITS, ...yamlSandboxLimits(), ...life.limits };
+  const wantBrowserMem = parseDockerMemoryBytes(effective.browserMemory);
+  const wantShm = parseDockerMemoryBytes(effective.browserShm);
+  const wantShellMem = parseDockerMemoryBytes(effective.shellMemory);
+  const browser = capabilities.includes("browser")
+    ? await inspectComputerContainer(n, "browser", life)
+    : null;
+  const shell = capabilities.includes("shell")
+    ? await inspectComputerContainer(n, "shell", life)
+    : null;
+  const b = hostLimitBytes(browser);
+  const s = hostLimitBytes(shell);
+  const shmDrift = wantShm !== undefined && b.shm !== undefined && b.shm !== wantShm;
+  const browserMemDrift =
+    wantBrowserMem !== undefined && b.memory !== undefined && b.memory !== wantBrowserMem;
+  const shellMemDrift =
+    wantShellMem !== undefined && s.memory !== undefined && s.memory !== wantShellMem;
+  if (shmDrift && life.allowRecreate) {
+    await unpauseComputer(n, life);
+    await createComputer(n, { capabilities }, life);
+    return "recreated";
+  }
+  let updated = false;
+  if (browserMemDrift) {
+    await cli.run([
+      "update",
+      "--memory",
+      effective.browserMemory,
+      "--memory-swap",
+      effective.browserMemory,
+      r.containerBrowser,
+    ]);
+    updated = true;
+  }
+  if (shellMemDrift) {
+    await cli.run([
+      "update",
+      "--memory",
+      effective.shellMemory,
+      "--memory-swap",
+      effective.shellMemory,
+      r.containerShell,
+    ]);
+    updated = true;
+  }
+  return updated ? "updated" : false;
 }
 
 export async function stopComputer(
@@ -349,6 +504,23 @@ export async function destroyComputer(
   }
 }
 
+/**
+ * Stop the computer, drop only the Chromium profile volume, then recreate
+ * containers. The agent-home volume and workspace stay. Default destroy still
+ * keeps the profile.
+ */
+export async function forgetComputerLogins(
+  name: string,
+  createOpts: Omit<SandboxCreateOpts, "name"> = {
+    capabilities: ["browser"],
+  },
+  life: LifecycleOpts = {},
+): Promise<SandboxHandle> {
+  await stopComputer(name, life);
+  await destroyComputer(name, { keepProfile: false }, life);
+  return createComputer(name, createOpts, life);
+}
+
 export async function inspectComputerContainer(
   name: string,
   role: "browser" | "shell" | "proxy",
@@ -370,6 +542,40 @@ export async function inspectComputerContainer(
   } catch {
     return null;
   }
+}
+
+/** Docker inspect `State` → the word `/api/v1/computers` already uses. */
+export function containerRunState(
+  inspect: Record<string, unknown> | null,
+): "running" | "paused" | "stopped" {
+  const state = inspect?.State;
+  if (!state || typeof state !== "object") return "stopped";
+  const current = state as { Status?: unknown; Running?: unknown; Paused?: unknown };
+  if (current.Paused === true || current.Status === "paused") return "paused";
+  if (current.Running === true || current.Status === "running") return "running";
+  return "stopped";
+}
+
+/**
+ * Actual container state for a computer. Proxy is always required; browser and
+ * shell follow the computer's capabilities. A missing required container is
+ * stopped, not running.
+ */
+export async function computerContainerStatus(
+  name: string,
+  capabilities: ComputerCapability[] = ["browser", "shell"],
+  life: LifecycleOpts = {},
+): Promise<"running" | "paused" | "stopped"> {
+  const roles: Array<"proxy" | "browser" | "shell"> = ["proxy"];
+  if (capabilities.includes("browser")) roles.push("browser");
+  if (capabilities.includes("shell")) roles.push("shell");
+  let paused = false;
+  for (const role of roles) {
+    const state = containerRunState(await inspectComputerContainer(name, role, life));
+    if (state === "stopped") return "stopped";
+    if (state === "paused") paused = true;
+  }
+  return paused ? "paused" : "running";
 }
 
 export function createSandboxRuntime(life: LifecycleOpts = {}): SandboxRuntime {

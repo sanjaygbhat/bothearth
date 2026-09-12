@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contentDisposition, fileGone } from "../../../src/daemon/server.ts";
+import { contentDisposition, fileGone, localWorkspaceVisible, workspaceFileRel } from "../../../src/daemon/server.ts";
 
 function capture() {
   const res = {
@@ -65,4 +65,25 @@ test("the filename can never break out of the header", () => {
 
 test("a nameless path still yields a usable attachment name", () => {
   assert.match(contentDisposition("out/"), /filename="file"/);
+});
+
+test("Open asks for inline; Download stays an attachment", () => {
+  assert.match(contentDisposition("out/report.pdf", "inline"), /^inline; filename="report\.pdf"/);
+  assert.match(contentDisposition("out/report.pdf"), /^attachment;/);
+});
+
+test("the files route only accepts a path inside the workspace", () => {
+  assert.equal(workspaceFileRel("out/today.md"), "out/today.md");
+  assert.equal(workspaceFileRel("/workspace/out/today.md"), "out/today.md");
+  assert.equal(workspaceFileRel("../etc/passwd"), null);
+  assert.equal(workspaceFileRel("/etc/passwd"), null);
+  assert.equal(workspaceFileRel("/workspace/../etc/passwd"), null);
+  assert.equal(workspaceFileRel("out/foo\0bar"), null);
+});
+
+test("the host workspace path is only for a loopback install", () => {
+  assert.equal(localWorkspaceVisible(undefined), true);
+  assert.equal(localWorkspaceVisible("https://127.0.0.1"), true);
+  assert.equal(localWorkspaceVisible("https://localhost"), true);
+  assert.equal(localWorkspaceVisible("https://bot.example.test"), false);
 });

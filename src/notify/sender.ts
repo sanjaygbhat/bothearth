@@ -3,7 +3,71 @@
  * Channels: ntfy, generic webhook, Telegram bot sendMessage.
  */
 
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { capNotifyText, stripUrlsFromModelReason } from "./strip.ts";
+
+/** Replay window for signed webhook POSTs. */
+export const WEBHOOK_REPLAY_WINDOW_MS = 5 * 60 * 1000;
+export const WEBHOOK_SIGNATURE_HEADER = "x-modelbot-signature";
+export const WEBHOOK_TIMESTAMP_HEADER = "x-modelbot-timestamp";
+export const WEBHOOK_EVENT_ID_HEADER = "x-modelbot-event-id";
+
+function safeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+function webhookEndpointAndSecret(
+  url: string,
+  explicitSecret?: string,
+): { endpoint: string; secret: string } {
+  const hashAt = url.indexOf("#");
+  const endpoint = hashAt >= 0 ? url.slice(0, hashAt) : url;
+  let fromHash = hashAt >= 0 ? url.slice(hashAt + 1) : "";
+  try {
+    fromHash = decodeURIComponent(fromHash);
+  } catch {
+    // keep raw fragment
+  }
+  const secret = explicitSecret || fromHash || process.env.MODELBOT_WEBHOOK_SECRET || "";
+  return { endpoint, secret };
+}
+
+/** HMAC-SHA256 over `timestamp.event_id.body`. Prefix matches audit hashes. */
+export function hmacWebhookSignature(
+  secret: string,
+  timestamp: string,
+  eventId: string,
+  body: string,
+): string {
+  const mac = createHmac("sha256", secret).update(`${timestamp}.${eventId}.${body}`).digest("hex");
+  return `hmac-sha256:${mac}`;
+}
+
+/**
+ * Receiver helper. False when the secret is empty, the signature mismatches,
+ * or the timestamp is outside the 5-minute replay window.
+ */
+export function verifyWebhook(opts: {
+  secret: string;
+  signature: string;
+  timestamp: string;
+  eventId: string;
+  body: string;
+  nowMs?: number;
+}): boolean {
+  if (!opts.secret) return false;
+  const tsSec = Number(opts.timestamp);
+  if (!Number.isFinite(tsSec) || !opts.signature || !opts.eventId) return false;
+  const nowMs = opts.nowMs ?? Date.now();
+  const tsMs = tsSec * 1000;
+  if (nowMs - tsMs > WEBHOOK_REPLAY_WINDOW_MS) return false;
+  if (tsMs - nowMs > WEBHOOK_REPLAY_WINDOW_MS) return false;
+  const expected = hmacWebhookSignature(opts.secret, opts.timestamp, opts.eventId, opts.body);
+  return safeEqualStr(opts.signature, expected);
+}
 
 export type NotifyEventKind =
   | "takeover"
@@ -80,23 +144,37 @@ export function createNtfySender(
 export function createWebhookSender(
   url: string,
   fetchImpl: FetchLike = fetch,
+  opts: { secret?: string; now?: () => number; eventId?: () => string } = {},
 ): NotifySender {
+  const { endpoint, secret } = webhookEndpointAndSecret(url, opts.secret);
   return {
-    id: `webhook:${url}`,
+    id: `webhook:${endpoint}`,
     async send(payload) {
       const body = buildNotifyBody(payload);
-      const res = await fetchImpl(url, {
+      const timestamp = String(Math.floor((opts.now?.() ?? Date.now()) / 1000));
+      const eventId = opts.eventId?.() ?? randomUUID();
+      const raw = JSON.stringify({
+        kind: body.kind,
+        title: body.title,
+        text: body.text,
+        url: body.url ?? null,
+        task_id: payload.task_id ?? null,
+        computer_id: payload.computer_id ?? null,
+        event_id: eventId,
+      });
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (secret) {
+        headers[WEBHOOK_SIGNATURE_HEADER] = hmacWebhookSignature(secret, timestamp, eventId, raw);
+        headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp;
+        headers[WEBHOOK_EVENT_ID_HEADER] = eventId;
+      }
+      const res = await fetchImpl(endpoint, {
         method: "POST",
         signal: AbortSignal.timeout(15_000),
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: body.kind,
-          title: body.title,
-          text: body.text,
-          url: body.url ?? null,
-          task_id: payload.task_id ?? null,
-          computer_id: payload.computer_id ?? null,
-        }),
+        headers,
+        body: raw,
       });
       if (!res.ok) {
         throw new Error(`webhook send failed: HTTP ${res.status}`);

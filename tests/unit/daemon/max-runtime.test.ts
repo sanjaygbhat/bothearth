@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { until } from "../../helpers/until.ts";
+
+isolateModelbotHome();
 
 /**
  * A run used to die on a 30-minute clock nobody had set, with budget and steps

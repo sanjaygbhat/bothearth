@@ -8,7 +8,7 @@ import type {
 } from "../types/contracts.ts";
 
 export interface FakeComputerRecord extends SandboxHandle {
-  status: "created" | "running" | "stopped" | "destroyed";
+  status: "created" | "running" | "paused" | "stopped" | "destroyed";
   persistent: boolean;
   workspaceRoot: string;
 }
@@ -20,6 +20,7 @@ export function createFakeSandbox(opts?: {
   get(computerId: string): FakeComputerRecord | undefined;
   list(): FakeComputerRecord[];
   start(computerId: string): Promise<void>;
+  inspectStatus(computerId: string): Promise<"running" | "paused" | "stopped" | undefined>;
 } {
   const workspaceRoot = opts?.workspaceRoot ?? "/tmp/modelbot-fake-workspace";
   const computers = new Map<string, FakeComputerRecord>();
@@ -51,7 +52,16 @@ export function createFakeSandbox(opts?: {
       if (!rec || rec.status === "destroyed") {
         throw new Error(`computer not found: ${computerId}`);
       }
+      if (rec.status === "paused") {
+        throw new Error("Cannot start a paused container");
+      }
       rec.status = "running";
+    },
+    async inspectStatus(computerId: string) {
+      const rec = computers.get(computerId);
+      if (!rec || rec.status === "destroyed") return undefined;
+      if (rec.status === "paused") return "paused";
+      return rec.status === "running" ? "running" : "stopped";
     },
     async stop(computerId: string): Promise<void> {
       const rec = computers.get(computerId);

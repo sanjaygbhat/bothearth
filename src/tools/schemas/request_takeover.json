@@ -2,31 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "modelbot://tools/request_takeover.json",
   "title": "request_takeover",
-  "description": "Non-blocking human takeover request; poll takeover_status.",
+  "description": "Hands the person the keyboard and mouse of the bot's computer and waits until they give it back.",
   "type": "object",
   "properties": {
     "reason": {
       "type": "string"
-    },
-    "category": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "enum": [
-        "password",
-        "captcha",
-        "otp",
-        "payment",
-        "sensitive",
-        "other",
-        null
-      ]
     }
   },
-  "required": [
-    "reason",
-    "category"
-  ],
+  "required": [],
   "additionalProperties": false
 }

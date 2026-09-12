@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { signalsFromObservation } from "../policy/signals.ts";
 import type {
   ApprovalBind,
   ApprovalDecision,
+  ErrorCode,
   Mode,
   PolicyGate,
   ToolName,
@@ -26,6 +27,7 @@ export interface DispatchContext {
   signals?: EffectSignals;
   mode?: Mode;
   originSets?: Partial<OriginSets>;
+  timeoutMs?: number;
 }
 
 export interface DispatcherOptions {
@@ -40,6 +42,14 @@ export interface DispatcherOptions {
   ): Promise<ToolResult>;
   /** Schema `policy.approval_ttl_sec`. */
   approvalTtlSec?: number;
+  /**
+   * Schema `policy.gates`. Omitted = every optional gate is armed (in-process
+   * tests of matching). Empty = none of them fire. Mutating this array is how
+   * Settings live-updates the evaluator without rebuilding the dispatcher.
+   */
+  enabledGates?: PolicyGate[];
+  /** Schema `policy.kill_switch`. True → evaluateGate denies every tool call. */
+  killSwitch?: boolean;
   /**
    * Called when the computer answers "unknown method" for a tool the daemon
    * advertised. The daemon drops the tool from that computer's offer, so the
@@ -109,19 +119,7 @@ function sameReason(a: string, b: string): boolean {
   return normalize(a) === normalize(b) && normalize(a) !== "";
 }
 
-const CONTROL_RETURNED =
-  "You already have control: the person handed it back and the page has not changed since. " +
-  "Read the page in this error and continue from what is on screen — a step the task names " +
-  "may already be done or may not apply. Do not ask again for the same reason.";
-
-/**
- * "Not needed, continue" is not "here, carry on": nobody typed anything, and
- * the field the model stopped on is not a secret. Telling it control came back
- * made it wait for a change that was never coming.
- */
-const CONTROL_DECLINED =
-  "The person looked and says this field is not sensitive and no sign-in is needed. " +
-  "Continue the task yourself; do not ask for control for this field again.";
+const CONTROL_RETURNED = "The person gave control back.";
 
 function resultOrigin(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -156,13 +154,86 @@ export function recordTakeover(
   return takeoverId;
 }
 
+const TAKEOVER_OBSERVE_MS = 2_000;
+const TAKEOVER_EXECUTE_MS = 2_000;
+
+const pendingTakeoverComputerSync = new Set<string>();
+
+export function takeoverNeedsComputerSync(id: string): boolean {
+  return pendingTakeoverComputerSync.has(id);
+}
+
+export function markTakeoverComputerPending(id: string): void {
+  pendingTakeoverComputerSync.add(id);
+}
+
+export function markTakeoverComputerSynced(id: string): void {
+  pendingTakeoverComputerSync.delete(id);
+}
+
+/** Re-issue request_takeover with the daemon lease id, then grant. */
+export async function syncAndGrantTakeover(
+  client: ComputerClient,
+  takeoverId: string,
+  grant: (id: string) => Promise<ToolResult> = (id) => client.grantTakeover(id),
+): Promise<ToolResult> {
+  let asked: ToolResult;
+  try {
+    asked = await raceTimeout(
+      client.call("request_takeover", { takeover_id: takeoverId, reason: "reconcile" }),
+      TAKEOVER_EXECUTE_MS,
+    );
+  } catch (err) {
+    return toolError("E_TIMEOUT", err instanceof Error ? err.message : String(err));
+  }
+  if (!asked.ok) return asked;
+  const granted = await grant(takeoverId);
+  if (granted.ok) pendingTakeoverComputerSync.delete(takeoverId);
+  return granted;
+}
+
+async function raceFallback<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  void promise.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  void promise.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(Object.assign(new Error("Operation timed out."), { code: "E_TIMEOUT" as const }));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * Fail-closed result for a denied bound harness call, else null.
  *
  * The estimate this charges is also the estimate it reports: one `usage` event
- * per counted call, carrying the running total the cap is measured against. A
- * meter reading a different counter from the enforcer is how a task died at its
- * $2 cap with $0.00 on screen.
+ * per counted call, carrying the running total. A meter reading a different
+ * counter from the enforcer is how a task died at its $2 cap with $0.00 on
+ * screen. A binding with `spend_cap_usd` / `max_steps` of 0 (native tasks) is
+ * counted and reported but never denied — the proxy is not a bill.
  */
 export async function enforceHarnessMcpSpendCap(
   opts: { store: Store; emit: EmitEvent },
@@ -223,12 +294,55 @@ export async function enforceHarnessMcpSpendCap(
   });
 }
 
-function bindingOf(row: { bind_json: string }): ApprovalBind | null {
+function bindingOf(row: { bind_json: string }): (ApprovalBind & { navigation_url?: string }) | null {
   try {
-    return JSON.parse(row.bind_json) as ApprovalBind;
+    return JSON.parse(row.bind_json) as ApprovalBind & { navigation_url?: string };
   } catch {
     return null;
   }
+}
+
+function snapshotYamlOf(result: ToolResult): string | undefined {
+  if (!result.ok || !result.data || typeof result.data !== "object") return undefined;
+  const yaml = (result.data as { yaml?: unknown }).yaml;
+  return typeof yaml === "string" ? yaml : undefined;
+}
+
+/** Audit / live events never need the literal typed string — only its length. */
+function auditArguments(
+  tool: string,
+  args: Record<string, unknown>,
+  signals: EffectSignals,
+): Record<string, unknown> {
+  const sensitive = Boolean(signals.password_field || signals.otp_field || signals.payment_field);
+  const maskText =
+    typeof args.text === "string" &&
+    (tool === "browser_type" || (sensitive && tool === "computer_type"));
+  const maskKey =
+    sensitive &&
+    typeof args.key === "string" &&
+    (tool === "browser_press" || tool === "computer_key");
+  if (!maskText && !maskKey) return args;
+  return {
+    ...args,
+    ...(maskText ? { text: `<${(args.text as string).length} chars>` } : {}),
+    ...(maskKey ? { key: `<${(args.key as string).length} chars>` } : {}),
+  };
+}
+
+/** No-effect failures must not spend Allow once. Timeouts and I/O might have. */
+const NO_EFFECT: ReadonlySet<ErrorCode> = new Set([
+  "E_STALE_REF",
+  "E_POLICY",
+  "E_POLICY_PENDING",
+  "E_SANDBOX_DEAD",
+  "E_CAPABILITY",
+  "E_TAKEOVER_BUSY",
+  "E_AUTH",
+]);
+
+function spendOnceGrant(result: ToolResult): boolean {
+  return result.ok || !NO_EFFECT.has(result.error.code);
 }
 
 export function createToolDispatcher(opts: DispatcherOptions): {
@@ -261,19 +375,56 @@ export function createToolDispatcher(opts: DispatcherOptions): {
     returned.delete(computerId);
   }
 
+  async function busyAfterTakeoverFailure(
+    context: DispatchContext,
+    args: Record<string, unknown>,
+    ids: { task_id: string; computer_id: string },
+    takeoverId: string,
+  ): Promise<ToolResult> {
+    const recorded =
+      recordTakeover(opts.store, context.computerId, context.taskId, {
+        takeover_id: takeoverId,
+        field: null,
+      }) ?? takeoverId;
+    pendingTakeoverComputerSync.add(recorded);
+    askedFor(context.computerId, String(args.reason ?? ""));
+    await opts.emit(
+      "takeover.requested",
+      {
+        takeover_id: recorded,
+        reason: String(args.reason ?? "model"),
+        field: null,
+      },
+      ids,
+    );
+    const lease = opts.store.activeTakeoverForComputer(context.computerId, context.taskId);
+    return toolError(
+      "E_TAKEOVER_BUSY",
+      undefined,
+      lease
+        ? {
+            takeover_id: lease.id,
+            state: toWireState(lease.state),
+          }
+        : { takeover_id: recorded, state: "requested" },
+    );
+  }
+
   async function observe(
     client: ComputerClient,
     context: DispatchContext,
     navigationOrigins: string[],
-  ): Promise<{ origin: string; signals: EffectSignals; page?: Page; navigationDenied?: ToolResult }> {
+    needYaml = false,
+  ): Promise<{ origin: string; signals: EffectSignals; page?: Page; yaml?: string; navigationDenied?: ToolResult }> {
     // The standalone loop always names an origin, so short-circuiting on it
     // meant no page was ever produced there and the whole no-phantom-re-ask
     // path was dead outside the harness. A computer a person just handed back
     // is worth the one snapshot; nothing else is.
-    if (context.origin && !returned.has(context.computerId) &&
-        !declinedFields.has(declinedOn(context.taskId, normalizedOrigin(context.origin)))) {
+    const shortCircuit = Boolean(context.origin) && !returned.has(context.computerId) &&
+      !declinedFields.has(declinedOn(context.taskId, normalizedOrigin(context.origin!)));
+    if (shortCircuit && !needYaml) {
       return {
-        origin: normalizedOrigin(context.origin),
+        origin: normalizedOrigin(context.origin!),
         signals: context.signals ?? {},
       };
     }
@@ -283,33 +434,47 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       depth: 8,
       max_chars: 16_000,
     }, { navigationOrigins, allowPublicNavigation: context.mode !== "strict" });
+    const yaml = snapshotYamlOf(snapshot);
+    if (shortCircuit) {
+      const page = pageFrom(snapshot);
+      return {
+        origin: normalizedOrigin(context.origin!),
+        signals: context.signals ?? signalsFromObservation(snapshot),
+        yaml,
+        ...(page ? { page } : {}),
+      };
+    }
     const origin = resultOrigin(snapshot) ??
       (context.origin ? normalizedOrigin(context.origin) : undefined) ??
       knownOrigins.get(context.computerId) ?? "about:blank";
     knownOrigins.set(context.computerId, origin);
     const page = pageFrom(snapshot);
-    return { origin, signals: signalsFromObservation(snapshot), ...(page ? { page } : {}),
+    return { origin, signals: signalsFromObservation(snapshot), yaml, ...(page ? { page } : {}),
       ...(!snapshot.ok && typeof snapshot.error.details?.navigation_url === "string" ? { navigationDenied: snapshot } : {}) };
   }
 
   async function requestConsent(tool: ToolName, args: Record<string, unknown>, gate: PolicyGate,
     context: DispatchContext, origin: string, reason: string, navigationUrl?: string,
-    gateOrigin?: string): Promise<ToolResult> {
+    gateOrigin?: string, snapshotYaml?: string): Promise<ToolResult> {
     const request = createApproval({ tool, args, gate, task_id: context.taskId,
-      control_epoch: context.controlEpoch ?? 0, origin,
-      ttl_sec: opts.approvalTtlSec ?? APPROVAL_TTL_SEC });
+      control_epoch: context.controlEpoch ?? 0, origin, dest: navigationUrl ?? gateOrigin,
+      ttl_sec: opts.approvalTtlSec ?? APPROVAL_TTL_SEC, snapshotYaml });
     const bind = { ...request.bind, ...(navigationUrl ? { navigation_url: navigationUrl } : {}) };
     opts.store.insertApproval({ id: request.approval_id, task_id: context.taskId,
-      tool, args, gate, bind });
+      tool, args: request.args, gate, bind });
     // `bind` is a frozen shape, so the deadline and the offer of a remembered
     // grant ride on the event body: the card needs both to draw a countdown and
     // an "always allow for this task" choice.
-    const grants = gate === "new_domain" ? approvalGrantOrigins(tool, args, navigationUrl, gateOrigin) : [];
-    await opts.emit("approval.requested", { ...request, bind, tool, args, gate, reason,
+    const grants = gate === "new_domain" ? approvalGrantOrigins(tool, request.args, navigationUrl, gateOrigin) : [];
+    await opts.emit("approval.requested", { ...request, bind, tool, args: request.args, gate, reason,
       expires_at: bind.expires, can_remember: grants.length > 0,
       ...(grants.length ? { remember_origins: grants } : {}) },
       { task_id: context.taskId, computer_id: context.computerId });
     return toolError("E_POLICY_PENDING", reason, { approval_id: request.approval_id, bind });
+  }
+
+  function newDomainArmed(): boolean {
+    return opts.enabledGates === undefined || opts.enabledGates.includes("new_domain");
   }
 
   function navigationConsent(
@@ -319,11 +484,13 @@ export function createToolDispatcher(opts: DispatcherOptions): {
     url: string,
     initialPopup: boolean,
     context: DispatchContext,
+    snapshotYaml?: string,
   ): Promise<ToolResult> | ToolResult {
     if (context.mode === "strict" || initialPopup) return blocked;
+    if (!newDomainArmed()) return blocked;
     const origin = normalizedOrigin(url);
     return requestConsent(tool, { action: args, navigation_url: url }, "new_domain",
-      context, origin, `Navigation to ${origin} was blocked before contact`, url);
+      context, origin, `Navigation to ${origin} was blocked before contact`, url, undefined, snapshotYaml);
   }
 
   async function dispatch(
@@ -385,12 +552,47 @@ export function createToolDispatcher(opts: DispatcherOptions): {
     // also burned the grant it stood for, so the retry the operator had just
     // authorised asked all over again.
     const grantedOrigins = opts.store.taskGrantedOrigins(context.taskId);
-    const observed = await observe(client, context, [...(context.originSets?.readable ?? []),
-      ...(context.originSets?.writable ?? []), ...grantedOrigins]);
+    await opts.emit("tool.call", { name: tool }, ids);
+    if (cancelled()) {
+      const cancelledResult = toolError("E_POLICY", "task cancelled");
+      await opts.emit("tool.error", { name: tool, result: cancelledResult }, ids);
+      return cancelledResult;
+    }
+
+    let cause: "observe" | "execute" = "observe";
+    let observed: Awaited<ReturnType<typeof observe>>;
+    const observation = observe(client, context, [...(context.originSets?.readable ?? []),
+      ...(context.originSets?.writable ?? []), ...grantedOrigins], typeof args.ref === "string");
+    const blankObserved = {
+      origin: (context.origin ? normalizedOrigin(context.origin) : undefined)
+        ?? knownOrigins.get(context.computerId) ?? "about:blank",
+      signals: context.signals ?? {},
+    };
+    try {
+      if (tool === "request_takeover") {
+        observed = await raceFallback(
+          observation, context.timeoutMs ?? TAKEOVER_OBSERVE_MS, blankObserved,
+        );
+      } else if (context.timeoutMs != null) {
+        observed = await raceTimeout(observation, context.timeoutMs);
+      } else {
+        observed = await observation;
+      }
+    } catch (err) {
+      const result = toolError(
+        "E_TIMEOUT",
+        err instanceof Error ? err.message : String(err),
+        { cause },
+      );
+      await opts.emit("tool.error", { name: tool, result, cause }, ids);
+      return result;
+    }
     if (observed.navigationDenied && !observed.navigationDenied.ok) {
       const url = String(observed.navigationDenied.error.details!.navigation_url);
-      return navigationConsent(tool, args, observed.navigationDenied, url,
-        observed.navigationDenied.error.details?.initial_popup === true, context);
+      const initialPopup = observed.navigationDenied.error.details?.initial_popup === true;
+      if (newDomainArmed() || context.mode === "strict" || initialPopup) {
+        return navigationConsent(tool, args, observed.navigationDenied, url, initialPopup, context);
+      }
     }
     const back = returned.get(context.computerId);
     if (back && observed.page) {
@@ -399,11 +601,10 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       if (back.page.hash !== observed.page.hash) returned.delete(context.computerId);
     }
     const onReturnedPage = returned.get(context.computerId) === back ? back : undefined;
-    // "Not needed, continue" is an answer about this field on this page, and it
-    // has to outlive the one repeat the deflection answers: the gate fired again
-    // on the model's next keystroke and re-opened the card the operator had just
-    // dismissed. The URL, not the snapshot hash, is the page identity here —
-    // typing into the very field that was waved through moves the hash.
+    // "Not needed, continue" is an answer about this field on this page.
+    // declinedFields only deflects a repeat model request_takeover for the
+    // same ask on the same URL. The URL, not the snapshot hash, is the page
+    // identity here — typing into the field that was waved through moves the hash.
     if (onReturnedPage?.declined && observed.page) {
       const key = declinedOn(context.taskId, observed.origin);
       const asks = declinedFields.get(key) ?? new Set<string>();
@@ -419,8 +620,7 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       if (!onReturnedPage?.page || onReturnedPage.answered) return undefined;
       if (!sameReason(reason, onReturnedPage.reason)) return undefined;
       onReturnedPage.answered = true;
-      return toolError("E_POLICY", onReturnedPage.declined ? CONTROL_DECLINED : CONTROL_RETURNED,
-        { page: onReturnedPage.page });
+      return toolError("E_POLICY", CONTROL_RETURNED, { page: onReturnedPage.page });
     };
     // A remembered site covers everything the task does there. Keeping grants
     // out of `writable` made the grant tool-scoped in practice: mail.google.com
@@ -436,13 +636,20 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       origin: observed.origin,
       mode: context.mode ?? "supervised",
       origin_sets: originSets,
+      enabled_gates: opts.enabledGates,
+      kill_switch: opts.killSwitch,
     });
 
     let approvalArgs = args;
     let approvalOrigin = observed.origin;
     let navigationUrl: string | undefined;
     let gateOrigin = decision.decision === "require_approval" ? decision.origin : undefined;
-    const originalHash = computeActionHash({ tool, args, gate: "new_domain", origin: observed.origin });
+    if (decision.decision === "require_approval" && decision.origin && navigationUrl === undefined) {
+      navigationUrl = decision.origin;
+    }
+    const originalHash = computeActionHash({
+      tool, args, gate: "new_domain", origin: observed.origin, snapshotYaml: observed.yaml,
+    });
     // Pending redirect approvals from an older daemon must not re-gate a
     // public GET. Keep their history; only effectful calls still consume them.
     const navigationApproval = context.mode !== "strict" &&
@@ -451,7 +658,9 @@ export function createToolDispatcher(opts: DispatcherOptions): {
         const approved = JSON.parse(a.args_json) as Record<string, unknown>;
         return a.tool === tool && typeof (JSON.parse(a.bind_json) as { navigation_url?: unknown }).navigation_url === "string" &&
           approved.action && typeof approved.action === "object" &&
-          computeActionHash({ tool, args: approved.action as Record<string, unknown>, gate: "new_domain", origin: observed.origin }) === originalHash;
+          computeActionHash({
+            tool, args: approved.action as Record<string, unknown>, gate: "new_domain", origin: observed.origin,
+          }) === originalHash;
       });
     if (navigationApproval && decision.decision === "allow") {
       const navArgs = JSON.parse(navigationApproval.args_json) as Record<string, unknown>;
@@ -462,53 +671,31 @@ export function createToolDispatcher(opts: DispatcherOptions): {
         navigationUrl = String((JSON.parse(navigationApproval.bind_json) as { navigation_url: string }).navigation_url);
         gateOrigin = target;
         decision = context.mode === "strict" ? { decision: "deny", reason: `strict_origin_denied:${target}` }
-          : { decision: "require_approval", gate: "new_domain", reason: `navigate_new_origin:${target}`, origin: target };
+          : newDomainArmed()
+            ? { decision: "require_approval", gate: "new_domain", reason: `navigate_new_origin:${target}`, origin: target }
+            : { decision: "allow" };
       }
     }
 
     if (decision.decision === "deny") {
       await opts.emit("policy.denied", { tool, reason: decision.reason }, ids);
-      return toolError("E_POLICY", decision.reason);
-    }
-    // The person looked at this field and said no sign-in was needed. Asking
-    // again on the same page is the card they just dismissed; `takeover.declined`
-    // is the audit record, and the call below is logged like any other.
-    if (decision.decision === "force_human" && observed.page &&
-        declinedFields.get(declinedOn(context.taskId, observed.origin))
-          ?.has(declinedAsk(observed.page.url, decision.reason))) {
-      decision = { decision: "allow" };
-    }
-    if (decision.decision === "force_human") {
-      const settled = deflectRepeatAsk(decision.reason);
-      if (settled) {
-        await opts.emit("policy.denied", { tool, reason: "control_already_returned" }, ids);
-        return settled;
-      }
-      const takeover = await client.call("request_takeover", {
-        reason: decision.reason,
-        category: "sensitive",
-      });
-      if (takeover.ok) {
-        const data = takeover.data as Record<string, unknown>;
-        recordTakeover(opts.store, context.computerId, context.taskId, data);
-        askedFor(context.computerId, decision.reason);
-        await opts.emit("takeover.requested",
-          { reason: decision.reason, takeover_id: String(data.takeover_id ?? "") }, ids);
-      }
-      const lease = opts.store.activeTakeoverForComputer(context.computerId, context.taskId);
-      return toolError("E_TAKEOVER_BUSY", decision.reason, lease ? {
-        takeover_id: lease.id, state: toWireState(lease.state),
-      } : undefined);
+      const denied = toolError("E_POLICY", decision.reason);
+      await opts.emit("tool.error", { name: tool, result: denied }, ids);
+      return denied;
     }
 
+    let pendingOnce: { id: string; decided: ApprovalDecision; remembered: string[] } | undefined;
     if (decision.decision === "require_approval") {
       const gate = decision.gate as PolicyGate;
       const controlEpoch = context.controlEpoch ?? 0;
+      const dest = navigationUrl ?? gateOrigin;
       const actionHash = computeActionHash({
         tool,
         args: approvalArgs,
         gate,
         origin: approvalOrigin,
+        dest,
+        snapshotYaml: observed.yaml,
       });
       const previous = opts.store.findApprovalByAction(context.taskId, actionHash);
       const existing = previous?.status === "expired" || previous?.status === "consumed" ? undefined : previous;
@@ -519,39 +706,46 @@ export function createToolDispatcher(opts: DispatcherOptions): {
           bind.control_epoch === controlEpoch &&
           normalizedOrigin(bind.origin) === approvalOrigin &&
           bind.action_hash === actionHash;
-        if (!exact) return toolError("E_POLICY", "approval binding mismatch");
-        if (Date.parse(bind.expires) <= Date.now()) {
-          opts.store.setApprovalStatusIf(existing.id, existing.status, "expired", null);
-          await opts.emit("approval.expired", { approval_id: existing.id }, ids);
-          return toolError("E_POLICY", "approval expired");
+        if (exact) {
+          if (Date.parse(bind.expires) <= Date.now()) {
+            opts.store.setApprovalStatusIf(existing.id, existing.status, "expired", null);
+            await opts.emit("approval.expired", { approval_id: existing.id }, ids);
+            return toolError("E_POLICY", "approval expired");
+          }
+          if (existing.status === "pending") {
+            const pending = toolError("E_POLICY_PENDING", undefined, {
+              approval_id: existing.id,
+              bind,
+            });
+            await opts.emit("tool.error", { name: tool, result: pending }, ids);
+            return pending;
+          }
+          if (existing.status !== "approved") {
+            const rejected = toolError("E_POLICY", `approval ${existing.status}`);
+            await opts.emit("tool.error", { name: tool, result: rejected }, ids);
+            return rejected;
+          }
+          const decided = (existing.decision as ApprovalDecision | null) ?? "allow_once";
+          const storedArgs = JSON.parse(existing.args_json) as Record<string, unknown>;
+          const grants = gate === "new_domain"
+            ? approvalGrantOrigins(tool, storedArgs, bind.navigation_url)
+            : [];
+          // "Allow once" buys this one call: the origin is reachable for it and
+          // nothing is written down. Only "allow for this task" records a grant,
+          // and only a grant makes the origin writable for the rest of the run —
+          // otherwise one dismissed card silently authorised every later submit.
+          const remembered = decided === "allow_task" ? grants : [];
+          if (remembered.length) opts.store.grantTaskOrigins(context.taskId, remembered, existing.id);
+          originSets.readable.push(...grants);
+          originSets.writable.push(...remembered);
+          pendingOnce = { id: existing.id, decided, remembered };
         }
-        if (existing.status === "pending") {
-          return toolError("E_POLICY_PENDING", undefined, {
-            approval_id: existing.id,
-            bind,
-          });
-        }
-        if (existing.status !== "approved") {
-          return toolError("E_POLICY", `approval ${existing.status}`);
-        }
-        // Consume and grant in one transaction, so the tool below can never run
-        // — or fail and re-ask — against an approval that was spent without
-        // leaving a grant behind.
-        const decided = (existing.decision as ApprovalDecision | null) ?? "allow_once";
-        const grants = gate === "new_domain" ? approvalGrantOrigins(tool, args, navigationUrl, gateOrigin) : [];
-        // "Allow once" buys this one call: the origin is reachable for it and
-        // nothing is written down. Only "allow for this task" records a grant,
-        // and only a grant makes the origin writable for the rest of the run —
-        // otherwise one dismissed card silently authorised every later submit.
-        const remembered = decided === "allow_task" ? grants : [];
-        if (!opts.store.consumeApprovalWithGrant(existing.id, "approved", context.taskId, remembered, decided)) {
-          return toolError("E_POLICY", "approval already consumed");
-        }
-        originSets.readable.push(...grants);
-        originSets.writable.push(...remembered);
-      } else {
-        return requestConsent(tool, approvalArgs, gate, context, approvalOrigin, decision.reason,
-          navigationUrl, gateOrigin);
+      }
+      if (!pendingOnce) {
+        const consent = await requestConsent(tool, approvalArgs, gate, context, approvalOrigin, decision.reason,
+          navigationUrl, gateOrigin, observed.yaml);
+        await opts.emit("tool.error", { name: tool, result: consent }, ids);
+        return consent;
       }
     }
 
@@ -560,34 +754,98 @@ export function createToolDispatcher(opts: DispatcherOptions): {
       const settled = deflectRepeatAsk(reason) ??
         (observed.page && declinedFields.get(declinedOn(context.taskId, observed.origin))
           ?.has(declinedAsk(observed.page.url, reason))
-          ? toolError("E_POLICY", CONTROL_DECLINED, { page: observed.page })
+          ? toolError("E_POLICY", CONTROL_RETURNED, { page: observed.page })
           : undefined);
       if (settled) {
         await opts.emit("policy.denied", { tool, reason: "control_already_returned" }, ids);
+        await opts.emit("tool.error", { name: tool, result: settled }, ids);
         return settled;
       }
     }
 
-    await opts.emit("tool.call", { name: tool, arguments: args }, ids);
-    if (cancelled()) return toolError("E_POLICY", "task cancelled");
+    if (cancelled()) {
+      const cancelledResult = toolError("E_POLICY", "task cancelled");
+      await opts.emit("tool.error", { name: tool, result: cancelledResult }, ids);
+      return cancelledResult;
+    }
     const callContext = /^(browser_|computer_)/.test(tool)
       ? { navigationOrigins: [...originSets.readable, ...originSets.writable], allowPublicNavigation: context.mode !== "strict" } : undefined;
-    let result = opts.execute
-      ? await opts.execute(client, tool, args, callContext)
-      : await client.call(tool, args, callContext);
+    const commitOnce = (result: ToolResult): void => {
+      if (!pendingOnce || !spendOnceGrant(result)) return;
+      opts.store.consumeApprovalWithGrant(
+        pendingOnce.id, "approved", context.taskId, pendingOnce.remembered, pendingOnce.decided,
+      );
+    };
+    cause = "execute";
+    const leaseId = tool === "request_takeover" ? `tk_${randomBytes(6).toString("hex")}` : undefined;
+    const executeArgs = leaseId ? { ...args, takeover_id: leaseId } : args;
+    let result: ToolResult;
+    try {
+      const running = opts.execute
+        ? opts.execute(client, tool, executeArgs, callContext)
+        : client.call(tool, executeArgs, callContext);
+      if (tool === "request_takeover") {
+        result = await raceTimeout(running, context.timeoutMs ?? TAKEOVER_EXECUTE_MS);
+      } else if (context.timeoutMs != null) {
+        result = await raceTimeout(running, context.timeoutMs);
+      } else {
+        result = await running;
+      }
+    } catch (err) {
+      // raceTimeout rejects with code E_TIMEOUT. Any other throw never reached
+      // the computer; rethrow so allow-once is not spent as if it had.
+      if ((err as { code?: string }).code !== "E_TIMEOUT") throw err;
+      result = toolError(
+        "E_TIMEOUT",
+        err instanceof Error ? err.message : String(err),
+        { cause },
+      );
+    }
+    if (!result.ok && result.error.code === "E_TIMEOUT") {
+      commitOnce(result);
+      await opts.emit("tool.error", {
+        name: tool,
+        arguments: auditArguments(tool, args, { ...observed.signals, ...context.signals }),
+        result,
+        cause,
+      }, ids);
+      if (tool === "request_takeover" && leaseId) {
+        return busyAfterTakeoverFailure(context, args, ids, leaseId);
+      }
+      return result;
+    }
     if (callContext && !result.ok && typeof result.error.details?.navigation_url === "string") {
       const url = result.error.details.navigation_url;
-      await opts.emit("tool.error", { name: tool, result }, ids);
-      await opts.emit("policy.denied", { tool, reason: "navigation_blocked", url }, ids);
-      return navigationConsent(tool, args, result, url,
-        result.error.details.initial_popup === true, context);
+      const initialPopup = result.error.details.initial_popup === true;
+      if (context.mode !== "strict" && !initialPopup && !newDomainArmed()) {
+        const dest = normalizedOrigin(url);
+        const retryContext = {
+          navigationOrigins: [...new Set([...callContext.navigationOrigins, dest])],
+          allowPublicNavigation: callContext.allowPublicNavigation,
+        };
+        result = opts.execute
+          ? await opts.execute(client, tool, args, retryContext)
+          : await client.call(tool, args, retryContext);
+      } else {
+        await opts.emit("tool.error", { name: tool, result }, ids);
+        await opts.emit("policy.denied", { tool, reason: "navigation_blocked", url }, ids);
+        return navigationConsent(tool, args, result, url, initialPopup, context, observed.yaml);
+      }
     }
     if (result.ok && tool === "request_takeover") {
       const data = result.data as Record<string, unknown>;
       const takeoverId = recordTakeover(opts.store, context.computerId, context.taskId, data);
       askedFor(context.computerId, String(args.reason ?? ""));
       if (takeoverId) {
-        await opts.emit("takeover.requested", { takeover_id: takeoverId, reason: String(args.reason ?? "model") }, ids);
+        const rawKind = data.field && typeof data.field === "object"
+          ? (data.field as { kind?: unknown }).kind
+          : undefined;
+        const field = rawKind === "password" || rawKind === "otp" ? { kind: rawKind } : undefined;
+        await opts.emit("takeover.requested", {
+          takeover_id: takeoverId,
+          reason: String(args.reason ?? "model"),
+          ...(field ? { field } : {}),
+        }, ids);
       }
     }
     // First tool the model reaches for once control comes back. Answer it with
@@ -635,9 +893,10 @@ export function createToolDispatcher(opts: DispatcherOptions): {
         },
       };
     }
+    commitOnce(result);
     await opts.emit(result.ok ? "tool.result" : "tool.error", {
       name: tool,
-      arguments: args,
+      arguments: auditArguments(tool, args, { ...observed.signals, ...context.signals }),
       result: result.ok ? { ok: true } : result,
     }, ids);
     return result;

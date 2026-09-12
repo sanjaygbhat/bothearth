@@ -21,6 +21,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { startDaemon, type DaemonHandle } from "../../../src/daemon/server.ts";
+import { OPTIONAL_POLICY_GATES } from "../../../src/types/contracts.ts";
 import { CSRF_HEADER, SESSION_COOKIE } from "../../../src/daemon/auth.ts";
 import { verifyAuditFile } from "../../../src/audit/verify.ts";
 import { AuditLog } from "../../../src/audit/log.ts";
@@ -60,6 +61,7 @@ describe("production composition security", () => {
       bootstrapToken: BOOT,
       auditLog,
       workspaceRoot,
+      enabledGates: [...OPTIONAL_POLICY_GATES],
     });
     base = daemon.baseUrl;
     origin = `http://127.0.0.1:${daemon.port}`;

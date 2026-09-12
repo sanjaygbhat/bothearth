@@ -28,7 +28,8 @@ export type ConnectionStatus =
   | "signed_out"
   | "missing"
   | "signing_in"
-  | "error";
+  | "error"
+  | "unknown";
 
 export type Provider = "codex" | "claude";
 
@@ -45,6 +46,7 @@ export type Connection = {
   install_url?: string;
   /** Signed in and refusing. `status` stays `connected`; this says otherwise. */
   limit?: ProviderLimit | null;
+  recovery?: { action: "start_computer" | "check_again"; label: string };
 };
 
 /** The `ai` block of `GET /api/v1/runtime`. */
@@ -109,6 +111,8 @@ export function providerRowCopy(
       return `${found} · signing in now`;
     case "signed_out":
       return `${found} · not signed in`;
+    case "unknown":
+      return "Can’t check while you have control";
     case "missing":
       return connection.execution_location === "computer" ? "Not in the bot’s computer yet" : "Not installed yet";
     default:
@@ -138,6 +142,8 @@ export function statusTone(status: ConnectionStatus | null, limit?: ProviderLimi
       return "warn";
     case "error":
       return "danger";
+    case "unknown":
+      return "warn";
     default:
       return "neutral";
   }
@@ -157,6 +163,8 @@ export function statusWord(status: ConnectionStatus | null, limit?: ProviderLimi
       return "Not installed";
     case "error":
       return "Couldn’t check";
+    case "unknown":
+      return "Can’t check while you have control";
     default:
       return "Checking";
   }
@@ -482,7 +490,11 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         action.textContent = "Check again";
         break;
       case "error":
-        action.textContent = "Try again";
+        action.textContent = connection?.recovery?.label
+          || (connection?.recovery?.action === "start_computer" ? "Start computer" : "Check again");
+        break;
+      case "unknown":
+        action.textContent = "Check again";
         break;
       default:
         action.textContent = "Checking";
@@ -624,7 +636,14 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         break;
       case "error":
         message.dataset.tone = "danger";
-        message.textContent = result.message ?? "The connection could not be checked. Choose Check again in a moment.";
+        message.textContent = result.message || "The connection could not be checked. Choose Check again in a moment.";
+        break;
+      case "unknown":
+        message.dataset.tone = "warn";
+        message.textContent = result.message || "Can’t check while you have control";
+        timer = setTimeout(() => {
+          void refresh().catch(failed);
+        }, POLL_MS);
         break;
     }
     paint();
@@ -645,7 +664,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
     if (!live()) return;
     busy = false;
     if (result.status === "error") {
-      throw new Error(result.message ?? "The account could not be connected. Check that you finished signing in, then try again.");
+      throw new Error(result.message || "The account could not be connected. Check that you finished signing in, then try again.");
     }
     modelEdited = false;
     if (result.status === "connected") {
@@ -703,6 +722,12 @@ export function renderAiConnection(pane: HTMLElement): () => void {
         paintAction();
         return;
       }
+      if (status === "error" && connection?.recovery?.action === "start_computer" && connection.computer_id) {
+        await apiPost(`/api/v1/computers/${encodeURIComponent(connection.computer_id)}/start`);
+        busy = false;
+        await refresh();
+        return;
+      }
       if (status === "signed_out" && (connection?.login_mode !== "terminal" || connection.execution_location === "computer")) {
         connectAfterSignIn = true;
         const result = (await apiPost("/api/v1/connection/sign-in", {
@@ -712,7 +737,7 @@ export function renderAiConnection(pane: HTMLElement): () => void {
           ...(connection?.computer_id ? { computer_id: connection.computer_id } : {}),
         })) as Connection;
         if (result.status === "error") {
-          throw new Error(result.message ?? "Sign-in could not start. Check that BotHearth is running, then try again.");
+          throw new Error(result.message || "Sign-in could not start. Check that BotHearth is running, then try again.");
         }
       }
       busy = false;

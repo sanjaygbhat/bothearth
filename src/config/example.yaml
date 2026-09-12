@@ -9,38 +9,45 @@ updates:
   check: false
 mode: supervised
 policy:
-  gates: [external_send, payment, upload, delete, secret_entry, new_domain]
+  # Optional MCP-tool approval gates. Empty = do not stop for sends, uploads,
+  # deletes, payments or new-site form submits. Set the full list to ask first.
+  # The bot pauses only when it asks, or when you enable Ask before sensitive
+  # actions.
+  gates: []
   categories_path: policy/categories.json
   tos_risk_path: policy/tos-risk.json
   strict_allowlist: []
-  kill_switch: true
+  # true stops the bot from taking any state-changing action.
+  kill_switch: false
   # Seconds an approval card stays answerable before it expires and the task
   # pauses. Long enough to notice the ask, short enough that a forgotten one
   # does not hold a computer open.
   approval_ttl_sec: 900
 sandbox:
   runtime: auto
-  image_browser: modelbot/browser:dev
+  image_browser: modelbot/computer:dev
   image_shell: modelbot/shell:dev
-  memory: 2g
+  memory: 4g
   cpus: 2
-  shm_size: 1g
+  shm_size: 2g
   max_computers: 2
   idle_pause_min: 10
   workspace_root: ~/ModelBot/computers
   capabilities: [browser]
 browser:
-  max_tabs: 5
+  max_tabs: 20
   default_tabs: 1
   snapshot_max_chars: 16000
   screenshot_max: 2
   screenshot_jpeg_q: 60
 agent:
-  max_steps: 400
+  # API-adapter loop only (each step is a paid API call). 0 = no cap.
+  # Native Codex / Claude Code tasks ignore these and run until the provider's own plan limit.
+  max_steps: 0
   loop_identical: 3
   stall_sec: 300
-  spend_cap_usd: 20.00
-  spend_cap_max_usd: 100.00
+  spend_cap_usd: 0
+  spend_cap_max_usd: 0
   # 0 = no time limit. A positive value pauses a run that reaches it; it never fails one.
   max_runtime_sec: 0
   context_tokens_max: 120000

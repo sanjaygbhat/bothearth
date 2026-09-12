@@ -4,24 +4,32 @@
  */
 
 import { existsSync } from "node:fs";
-import { loadConfigDoc } from "../config/load.ts";
 import { verifyAuditFile } from "../audit/verify.ts";
+import {
+  applyLegacyTemplate,
+  loadConfigDoc,
+  loadModelbotYamlFile,
+  templateMigrationLines,
+} from "../config/load.ts";
+import { daemonLogPath } from "../daemon/log.ts";
 import { isDeniedAddress } from "../proxy/policy.ts";
 import { detectRuntime } from "../sandbox/detect.ts";
 import { createDockerCli, type DockerCli } from "../sandbox/docker.ts";
-import { LABEL_COMPUTER } from "../sandbox/flags.ts";
+import { DEFAULT_LIMITS, LABEL_COMPUTER, parseDockerMemoryBytes } from "../sandbox/flags.ts";
+import { limitsFromSandboxYaml } from "../sandbox/lifecycle.ts";
+import { resolveAuditVerifyKey } from "./audit-key.ts";
 import {
   configPath,
+  defaultDataDir,
   expandHome,
   modelbotHome,
   tokensPath,
 } from "./paths.ts";
-import { readTokensFile } from "./tokens.ts";
-import { resolveAuditVerifyKey } from "./audit-key.ts";
 import {
   classifyStartupError,
   type RecoveryAction,
 } from "./startup-error.ts";
+import { readTokensFile } from "./tokens.ts";
 
 type AuditSeverity = "PASS" | "FAIL" | "WARN" | "INFO";
 
@@ -77,6 +85,47 @@ export interface SecurityAuditInput {
   proxyDenylistActive: boolean;
   auditChain: { ok: boolean; detail: string };
   allowPublicBind?: boolean;
+  /** Resolved `policy.gates`. Empty (the default) is off. */
+  policyGates?: readonly string[];
+  /** `modelbot.yaml` path, for the on-line that names where the list lives. */
+  configPath?: string;
+  /** Loaded `policy.kill_switch`. True means evaluateGate will deny acting tools. */
+  killSwitch?: boolean;
+  /**
+   * Docker `info` MemTotal bytes. Omitted = fixtures that do not check host RAM.
+   * `null` = live inspect could not read MemTotal.
+   */
+  dockerMemTotalBytes?: number | null;
+  /** Injected browser memory. Omit to use the 4g create default. */
+  browserMemory?: string;
+  /** Injected shell memory. Omit to use the 512m create default. */
+  shellMemory?: string;
+  /** Plain lines from an unversioned yaml that still holds old template values. */
+  templateMigrations?: string[];
+}
+
+export function killSwitchTrueWarning(configPath: string): string {
+  return `policy.kill_switch is true in ${configPath}; the bot will refuse state-changing actions`;
+}
+
+const GIB = 1024 ** 3;
+
+function formatGiB(bytes: number): string {
+  return `${Number((bytes / GIB).toFixed(2))} GiB`;
+}
+
+/** WARN copy when Docker MemTotal is below browser+shell limits plus 1 GiB. */
+export function dockerMemoryHeadroomWarning(
+  memTotalBytes: number,
+  browserMemory: string,
+  shellMemory: string,
+): string | null {
+  const browser = parseDockerMemoryBytes(browserMemory);
+  const shell = parseDockerMemoryBytes(shellMemory);
+  if (browser === undefined || shell === undefined) return null;
+  const need = browser + shell + GIB;
+  if (memTotalBytes >= need) return null;
+  return `Docker total memory is ${formatGiB(memTotalBytes)}; browser ${browserMemory} + shell ${shellMemory} + 1g headroom needs ${formatGiB(need)}. Raise Docker's memory.`;
 }
 
 export function isPublicBind(bind: string): boolean {
@@ -141,6 +190,10 @@ function hardeningProblems(c: ContainerInspectLike): string[] {
 
 export function runSecurityAudit(input: SecurityAuditInput): AuditCheck[] {
   const out: AuditCheck[] = [];
+
+  for (const line of input.templateMigrations ?? []) {
+    out.push({ id: "template_migration", severity: "INFO", detail: line });
+  }
 
   if (isPublicBind(input.bind) && !input.allowPublicBind) {
     out.push({
@@ -265,13 +318,68 @@ export function runSecurityAudit(input: SecurityAuditInput): AuditCheck[] {
     detail: input.auditChain.detail,
   });
 
+  const gates = input.policyGates ?? [];
+  out.push({
+    id: "ask_before_sensitive",
+    severity: "PASS",
+    detail: gates.length === 0
+      ? "off"
+      : `on (policy.gates in ${input.configPath}: ${gates.join(", ")}) — turn off in Settings → Sensitive actions`,
+  });
+
+  if (input.killSwitch) {
+    out.push({
+      id: "kill_switch",
+      severity: "WARN",
+      detail: killSwitchTrueWarning(input.configPath ?? "modelbot.yaml"),
+    });
+  }
+
+  const browserMemory = input.browserMemory ?? DEFAULT_LIMITS.browserMemory;
+  const shellMemory = input.shellMemory ?? DEFAULT_LIMITS.shellMemory;
+  if (typeof input.dockerMemTotalBytes === "number") {
+    const warn = dockerMemoryHeadroomWarning(input.dockerMemTotalBytes, browserMemory, shellMemory);
+    out.push(
+      warn
+        ? { id: "docker_memory", severity: "WARN", detail: warn }
+        : {
+            id: "docker_memory",
+            severity: "PASS",
+            detail: `MemTotal ${formatGiB(input.dockerMemTotalBytes)} covers browser ${browserMemory} + shell ${shellMemory} + 1g`,
+          },
+    );
+  } else if (input.dockerMemTotalBytes === null) {
+    out.push({
+      id: "docker_memory",
+      severity: "INFO",
+      detail: "Docker MemTotal unavailable",
+    });
+  }
+
   return out;
 }
 
-export function formatDoctorReport(checks: AuditCheck[]): string {
+function resolveDoctorLogPath(opts: DoctorLoadOpts): string {
+  const home = modelbotHome(opts.home);
+  const cfgFile = opts.configFile ?? process.env.MODELBOT_CONFIG ?? configPath(home);
+  let dataDir = defaultDataDir();
+  if (existsSync(cfgFile)) {
+    const doc = loadConfigDoc(cfgFile);
+    if (typeof doc.data_dir === "string") dataDir = doc.data_dir;
+  }
+  return daemonLogPath(expandHome(process.env.MODELBOT_DATA_DIR ?? dataDir));
+}
+
+export function formatDoctorReport(checks: AuditCheck[], logFile?: string): string {
   const lines = ["modelbot doctor"];
+  if (logFile) lines.push(`log: ${logFile}`);
   for (const c of checks) {
-    lines.push(`${c.id}: ${c.severity} ${c.detail}`);
+    if (c.id === "kill_switch" || c.id === "template_migration") lines.push(c.detail);
+    else if (c.id === "ask_before_sensitive") {
+      lines.push(`Ask before sensitive actions: ${c.detail}`);
+    } else {
+      lines.push(`${c.id}: ${c.severity} ${c.detail}`);
+    }
   }
   const failed = checks.filter((c) => c.severity === "FAIL");
   lines.push(
@@ -305,6 +413,7 @@ interface DoctorLoadOpts {
   images?: string[];
   auditKey?: Buffer | string;
   allowPublicBind?: boolean;
+  dockerMemTotalBytes?: number | null;
 }
 
 // Project only fields used by this audit. Never retrieve Config.Env or other
@@ -327,6 +436,12 @@ async function buildDoctorInputFromDisk(
   let auditFile: string | undefined;
   let containers = opts.containers ?? [];
   let containerInspection: SecurityAuditInput["containerInspection"];
+  let policyGates: string[] = [];
+  let killSwitch = false;
+  let browserMemory = DEFAULT_LIMITS.browserMemory;
+  let shellMemory = DEFAULT_LIMITS.shellMemory;
+  let dockerMemTotalBytes: number | null | undefined = opts.dockerMemTotalBytes;
+  let templateMigrations: string[] = [];
 
   if (opts.containers === undefined) {
     try {
@@ -349,7 +464,24 @@ async function buildDoctorInputFromDisk(
     }
   }
 
+  if (dockerMemTotalBytes === undefined && opts.cli === undefined && opts.containers === undefined) {
+    try {
+      const cli = createDockerCli(await detectRuntime());
+      const raw = (await cli.run(["info", "--format", "{{.MemTotal}}"])).trim();
+      const n = Number(raw);
+      dockerMemTotalBytes = Number.isFinite(n) && n > 0 ? n : null;
+    } catch {
+      dockerMemTotalBytes = null;
+    }
+  }
+
   if (existsSync(cfgFile)) {
+    const raw = loadModelbotYamlFile(cfgFile) as Record<string, unknown>;
+    templateMigrations = templateMigrationLines(raw);
+    const migrated = applyLegacyTemplate(raw) as Record<string, unknown>;
+    const lim = { ...DEFAULT_LIMITS, ...limitsFromSandboxYaml(migrated.sandbox) };
+    browserMemory = lim.browserMemory;
+    shellMemory = lim.shellMemory;
     const doc = loadConfigDoc(cfgFile);
     if (typeof doc.bind === "string") bind = doc.bind;
     if (typeof doc.port === "number") port = doc.port;
@@ -370,6 +502,11 @@ async function buildDoctorInputFromDisk(
         (x): x is string => Boolean(x),
       );
     }
+    const policy = doc.policy as { gates?: unknown; kill_switch?: unknown } | undefined;
+    if (Array.isArray(policy?.gates)) {
+      policyGates = policy.gates.filter((g): g is string => typeof g === "string");
+    }
+    killSwitch = policy?.kill_switch === true;
   }
 
   const tokens = readTokensFile(tokensPath(home));
@@ -413,6 +550,13 @@ async function buildDoctorInputFromDisk(
     proxyDenylistActive: proxyDenylistSelfCheck(),
     auditChain,
     allowPublicBind: opts.allowPublicBind,
+    policyGates,
+    killSwitch,
+    configPath: cfgFile,
+    dockerMemTotalBytes,
+    browserMemory,
+    shellMemory,
+    templateMigrations,
   };
 }
 
@@ -454,11 +598,12 @@ function parseDoctorFlags(argv: string[]): DoctorLoadOpts & { json?: boolean } {
 }
 
 /** `doctor --json` — one object the Mac app can act on without parsing prose. */
-function formatDoctorJson(checks: AuditCheck[]): string {
+function formatDoctorJson(checks: AuditCheck[], logFile: string): string {
   return `${JSON.stringify(
     {
       result: auditExitCode(checks) ? "FAIL" : "PASS",
       checks,
+      log: logFile,
     },
     null,
     2,
@@ -484,7 +629,8 @@ export async function runDoctorCli(
       input.vaultUnlock = await checkVaultUnlock(input.vaultPath, "auto", load.home);
     }
     const checks = runSecurityAudit(input);
-    process.stdout.write(json ? formatDoctorJson(checks) : formatDoctorReport(checks));
+    const logFile = resolveDoctorLogPath(load);
+    process.stdout.write(json ? formatDoctorJson(checks, logFile) : formatDoctorReport(checks, logFile));
     return auditExitCode(checks);
   } finally {
     if (json) console.log = log;

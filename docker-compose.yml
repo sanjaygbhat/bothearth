@@ -44,8 +44,8 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
       - /run:rw,noexec,nosuid,nodev,size=16m
       - /quarantine:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=1001,gid=1001
-    shm_size: 1g
-    mem_limit: 2g
+    shm_size: 2g
+    mem_limit: 4g
     cpus: 2
     pids_limit: 512
     cap_drop:

@@ -15,8 +15,10 @@ import { Store } from "../../../src/daemon/store.ts";
 import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { createFakeSandbox } from "../../../src/computer-client/fake-sandbox.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { until } from "../../helpers/until.ts";
+
+isolateModelbotHome();
 
 function accepts(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -120,7 +122,7 @@ await client.close();console.log(JSON.stringify({type:'turn.completed'}));
     try {
       assert.equal(saved.getTask(task.id)?.status, "paused");
       assert.equal(saved.getTask(task.id)?.cancelled_at, null);
-      assert.equal(saved.getTakeover(takeover.id)?.state, "paused");
+      assert.equal(saved.getTakeover(takeover.id)?.state, "human");
       if (orphaned) saved.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
     } finally { saved.close(); }
     daemon = await startDaemon({ ...options, bootstrapToken: "reopened-boot" });

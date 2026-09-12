@@ -296,6 +296,7 @@ export function aiIdentity(input: {
       : input.connectionStatus === "signing_in" ? "finish sign-in"
       : input.connectionStatus === "missing" ? "setup needed"
       : input.connectionStatus === "error" ? "connection check failed"
+      : input.connectionStatus === "unknown" ? "can’t check while you have control"
       : input.status ? "check connection" : "checking connection";
     return {
       text, sub: `· ${state}`, tone: "warn",

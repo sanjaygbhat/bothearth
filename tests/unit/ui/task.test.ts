@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   taskCost,
   taskModelLabel,
@@ -24,7 +27,7 @@ import { LivePanel } from "../../../src/ui/live/panel.ts";
 import { limitTime } from "../../../src/ui/runtime.ts";
 import { formatUsd } from "../../../src/ui/usage.ts";
 import { installDom, type FakeElement } from "./fake-dom.ts";
-import type { UiEvent } from "../../../src/types/contracts.ts";
+import { EVENT_TYPES, TOOL_NAMES, type UiEvent } from "../../../src/types/contracts.ts";
 
 const ts = (minute: number, second = 0): string =>
   new Date(Date.UTC(2026, 8, 7, 10, minute, second)).toISOString();
@@ -164,6 +167,16 @@ describe("step lines (§2.3 — names are user-facing)", () => {
     assert.equal(feedLine("tool.result", { code: "ok" }), null);
     assert.equal(feedLine("task.step", { status: "running" }), null);
     assert.equal(feedLine("task.started", {})?.text, "Opened its computer");
+    assert.equal(feedLine("task.cancelled", {})!.text, "You stopped the task");
+    assert.equal(feedLine("task.cancelled", { cancelled_by: "ui" })!.text, "You stopped the task");
+    assert.equal(
+      feedLine("task.cancelled", { cancelled_by: "api" })!.text,
+      "Stopped through the API",
+    );
+    assert.equal(
+      feedLine("task.cancelled", { cancelled_by: "system" })!.text,
+      "BotHearth stopped it",
+    );
   });
 
   it("explains the awkward moments without blaming the person", () => {
@@ -171,6 +184,14 @@ describe("step lines (§2.3 — names are user-facing)", () => {
     assert.equal(
       feedLine("policy.denied", { url: "https://ads.example.com/x" })!.text,
       "Held back from opening ads.example.com/x",
+    );
+    assert.equal(
+      feedLine("approval.requested", { gate: "new_domain", tool: "browser_type" })!.text,
+      "Asked you about submitting a form",
+    );
+    assert.equal(
+      feedLine("approval.requested", { gate: "new_domain", tool: "browser_navigate" })!.text,
+      "Asked you about opening a new site",
     );
     assert.match(feedLine("approval.expired", {})!.text, /stopped and waited for you/);
     assert.equal(feedLine("takeover.started", {})!.text, "Handed you the keyboard and the mouse");
@@ -200,7 +221,74 @@ describe("step lines (§2.3 — names are user-facing)", () => {
       }
     }
   });
+
+  it("labels a native browser step in words, not as 'browser type finished'", () => {
+    assert.equal(
+      feedLine("native_tool", { name: "browser_type", status: "completed" })!.text,
+      "Typed on the page",
+    );
+    assert.equal(
+      feedLine("native_tool", { name: "mcp__modelbot__browser_type", status: "started" })!.text,
+      "Typed on the page",
+    );
+    assert.equal(
+      feedLine("native_tool", {
+        name: "browser_type",
+        arguments: { text: "BotHearth test" },
+        status: "completed",
+      })!.text,
+      "Typed “BotHearth test”",
+    );
+    assert.equal(
+      feedLine("native_tool", { name: "mystery_gadget", status: "completed" })!.text,
+      "mystery gadget · finished",
+    );
+    assert.equal(feedLine("widget.frobbed", {})!.text, "widget · frobbed");
+  });
+
+  it("never renders a daemon step kind as its raw id", () => {
+    const kinds = new Set<string>(EVENT_TYPES);
+    const root = join(dirname(fileURLToPath(import.meta.url)), "../../../src/daemon");
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          visit(path);
+          continue;
+        }
+        if (!name.endsWith(".ts")) continue;
+        const src = readFileSync(path, "utf8");
+        for (const match of src.matchAll(/emit\((?:opts,\s*)?["']([a-z][a-z0-9_.]+)["']/g)) {
+          kinds.add(match[1]!);
+        }
+        for (const match of src.matchAll(/insertStep\([^,]+,\s*[^,]+,\s*["']([a-z][a-z0-9_.]+)["']/g)) {
+          kinds.add(match[1]!);
+        }
+      }
+    };
+    visit(root);
+    assert.ok(kinds.has("native_tool"), "daemon emits native_tool");
+    assert.ok(kinds.has("tool.call"), "daemon emits tool.call");
+    for (const kind of kinds) {
+      const line = feedLine(kind, {});
+      if (line) assert.notEqual(line.text, kind, `${kind} rendered as its raw id`);
+    }
+    for (const tool of TOOL_NAMES) {
+      for (const status of ["started", "completed"] as const) {
+        const line = feedLine("native_tool", { name: tool, type: tool, status });
+        if (!line) continue;
+        assert.notEqual(line.text, kindMangled(tool, status), `${tool} ${status}: ${line.text}`);
+        assert.notEqual(line.text, tool, `${tool} rendered as its raw id`);
+        assert.doesNotMatch(line.text, /browser type finished/i);
+      }
+    }
+  });
 });
+
+function kindMangled(tool: string, status: "started" | "completed"): string {
+  const label = tool.replaceAll("_", " ");
+  return status === "completed" ? `${label} finished` : `Using ${label}`;
+}
 
 describe("feed collapsing", () => {
   it("collapses consecutive identical steps and keeps the latest time", () => {
@@ -237,6 +325,22 @@ describe("feed collapsing", () => {
       { text: "Same", voice: "stumble", at: ts(2) },
     ]);
     assert.equal(rows.length, 2);
+  });
+
+  it("does not collapse distinct tool calls that happen to share a verb", () => {
+    const rows = collapseFeed([
+      { text: "Read the page", voice: "do", at: ts(4, 1), callId: "step_a" },
+      { text: "Read the page", voice: "do", at: ts(4, 2), callId: "step_b" },
+      { text: "Read the page", voice: "do", at: ts(4, 3), callId: "step_c" },
+    ]);
+    assert.deepEqual(
+      rows.map((r) => [r.text, r.repeat]),
+      [
+        ["Read the page", 1],
+        ["Read the page", 1],
+        ["Read the page", 1],
+      ],
+    );
   });
 });
 
@@ -489,6 +593,94 @@ function feedText(root: FakeElement): string[] {
   return root.querySelectorAll(".feed .step .what").map((n) => n.textContent);
 }
 
+const T1_CALLS = [
+  "browser_navigate", "browser_snapshot",
+  "browser_type", "browser_type", "browser_type", "browser_type", "browser_type",
+  "browser_click", "browser_click", "browser_click", "browser_click",
+  "browser_snapshot", "browser_snapshot",
+  "browser_navigate", "browser_snapshot",
+  "browser_navigate", "browser_snapshot",
+  "write_file", "done",
+] as const;
+
+const T1_NAV_URLS = [
+  "https://httpbin.org/forms/post",
+  "https://example.com",
+  "https://www.wikipedia.org",
+] as const;
+
+function t1NativeLog(opts: { sharedId?: boolean; live?: boolean } = {}): Array<{
+  kind: string;
+  body: Record<string, unknown>;
+  created_at: string;
+}> {
+  const steps: Array<{ kind: string; body: Record<string, unknown>; created_at: string }> = [];
+  let second = 10;
+  let nav = 0;
+  for (const [i, name] of T1_CALLS.entries()) {
+    const startId = `step_s${i}`;
+    const doneId = opts.sharedId === false ? `step_f${i}` : startId;
+    steps.push({
+      kind: "native_tool",
+      body: { id: startId, name, type: "mcp_tool_call", status: "started" },
+      created_at: ts(3, second++),
+    });
+    const callBody: Record<string, unknown> = { name };
+    if (opts.sharedId !== false) callBody.id = startId;
+    if (opts.live && name === "browser_navigate") {
+      callBody.arguments = { url: T1_NAV_URLS[nav] ?? T1_NAV_URLS[2] };
+      nav += 1;
+    }
+    steps.push({ kind: "tool.call", body: callBody, created_at: ts(3, second++) });
+    if (name === "write_file") {
+      steps.push({
+        kind: "download.promoted",
+        body: { path: "out/dogfood-autonomy-2.md", bytes: 2228 },
+        created_at: ts(3, second++),
+      });
+      steps.push({
+        kind: "tool.result",
+        body: { name, result: { ok: true } },
+        created_at: ts(3, second++),
+      });
+    }
+    if (name !== "done") {
+      steps.push({
+        kind: "native_tool",
+        body: { id: doneId, name, type: "mcp_tool_call", status: "completed" },
+        created_at: ts(3, second++),
+      });
+    }
+  }
+  return steps;
+}
+
+function t1ActionLabels(live = false): string[] {
+  let nav = 0;
+  return T1_CALLS.map((name) => {
+    if (name === "browser_navigate") {
+      if (!live) return "Opened a site";
+      const host = ["httpbin.org/forms/post", "example.com", "www.wikipedia.org"][nav] ?? "www.wikipedia.org";
+      nav += 1;
+      return `Opened ${host}`;
+    }
+    if (name === "browser_snapshot") return "Read the page";
+    if (name === "browser_type") return "Typed on the page";
+    if (name === "browser_click") return "Clicked something on the page";
+    if (name === "write_file") return "Saved dogfood-autonomy-2.md (2 KB)";
+    return "Wrapped up";
+  });
+}
+
+const T1_ACTION_LABELS = t1ActionLabels();
+const T1_LIVE_ACTION_LABELS = t1ActionLabels(true);
+
+function actionLabels(root: FakeElement): string[] {
+  return root.querySelectorAll(".feed .step.do")
+    .map((node) => node.querySelector(".what")!.textContent)
+    .filter((text) => text !== "Opened its computer");
+}
+
 describe("task view, driven by synthetic events", () => {
   it("shows this task's saved model and executor, and names missing historical models honestly", async () => {
     assert.equal(taskModelLabel({ adapter: "codex" }), "Codex · Model not recorded");
@@ -598,6 +790,32 @@ describe("task view, driven by synthetic events", () => {
     } finally { globalThis.fetch = original; t.restore(); }
   });
 
+  it("sets a neutral page title on the next task before its record arrives", async () => {
+    const t = await mountWith(completed(null, [
+      { kind: "task.started", body: {}, created_at: ts(2) },
+      { kind: "task.completed", body: { summary: "All set." }, created_at: ts(4) },
+    ]));
+    const original = globalThis.fetch;
+    let finish!: (response: Response) => void;
+    globalThis.fetch = (async (path, init) => {
+      if (String(path) === "/api/v1/tasks/t_2") {
+        return new Promise<Response>(resolve => { finish = resolve; });
+      }
+      return original(path, init);
+    }) as typeof fetch;
+    try {
+      assert.equal(document.title, "Done — BotHearth");
+      t.view.update("t_2");
+      assert.equal(document.title, "Task — BotHearth");
+      finish(Response.json({
+        task: { ...RUNNING["/api/v1/tasks/t_1"].task, id: "t_2", goal: "A fresh run", status: "running" },
+        steps: [],
+      }));
+      await new Promise(setImmediate);
+      assert.equal(document.title, "Working — BotHearth");
+    } finally { globalThis.fetch = original; t.restore(); }
+  });
+
   it("replays the durable feed, then folds live steps into the same timeline", async () => {
     const t = await mountRunning();
     try {
@@ -650,6 +868,126 @@ describe("task view, driven by synthetic events", () => {
     }
   });
 
+  it("merges live steps with their durable replay without inflating the count", async () => {
+    const t = await mountRunning();
+    const original = globalThis.fetch;
+    const steps = [3, 4].map(second => ({
+      kind: "tool.call", body: { name: "browser_navigate" }, created_at: ts(second),
+    }));
+    try {
+      for (const step of steps) t.view.onEvent(event(step.kind, {
+        ...step.body, arguments: { url: "https://example.com/mail" },
+      }, step.created_at));
+      globalThis.fetch = (async (path, init) => String(path) === "/api/v1/tasks/t_1"
+        ? Response.json({ ...RUNNING["/api/v1/tasks/t_1"], steps })
+        : original(path, init)) as typeof fetch;
+      t.view.onEvent(event("task.step", { message: true }, ts(5)));
+      await new Promise(setImmediate);
+      assert.equal(feedText(t.root).filter(text => text.startsWith("Opened example.com/mail")).join(),
+        "Opened example.com/mail×2", "richer live labels and distinct calls survive replay");
+      assert.ok(!feedText(t.root).includes("Opened a site"), "replay must not add generic duplicates");
+      assert.ok(t.root.querySelectorAll(".facts .r").some(node => node.textContent === "Steps so far2"));
+    } finally { globalThis.fetch = original; t.restore(); }
+  });
+
+  it("keeps one row when a live native step, tool call, takeover or stop is later replayed from durable history", async () => {
+    const t = await mountRunning();
+    const original = globalThis.fetch;
+    const native = { id: "step_nav1", name: "browser_navigate", type: "mcp_tool_call", status: "started" };
+    const takeover = { takeover_id: "tk_signin", reason: "GitHub’s sign-in page is open. Please sign in there." };
+    const replay = [
+      ...RUNNING["/api/v1/tasks/t_1"].steps,
+      { kind: "native_tool", body: native, created_at: ts(3, 7) },
+      { kind: "tool.call", body: { name: "browser_navigate" }, created_at: ts(4) },
+      { kind: "takeover.requested", body: takeover, created_at: ts(5, 7) },
+      { kind: "task.cancelled", body: {}, created_at: ts(6, 7) },
+    ];
+    try {
+      t.view.onEvent(event("native_tool", native, ts(3)));
+      t.view.onEvent(event("tool.call", { name: "browser_navigate", arguments: { url: "https://github.com/login" } }, ts(4)));
+      t.view.onEvent(event("takeover.requested", takeover, ts(5)));
+      globalThis.fetch = (async (path, init) => String(path) === "/api/v1/tasks/t_1"
+        ? Response.json({ ...RUNNING["/api/v1/tasks/t_1"], steps: replay })
+        : original(path, init)) as typeof fetch;
+      t.view.onEvent(event("task.cancelled", {}, ts(6)));
+      await new Promise(setImmediate);
+      const lines = feedText(t.root);
+      assert.deepEqual(
+        lines.filter(text => text.startsWith("Opened") && text !== "Opened its computer"),
+        ["Opened github.com/login"],
+      );
+      assert.equal(lines.filter(text => text.includes("sign-in page is open")).join(),
+        takeover.reason);
+      assert.equal(lines.filter(text => text.startsWith("You stopped the task")).join(),
+        "You stopped the task");
+    } finally { globalThis.fetch = original; t.restore(); }
+  });
+
+  it("renders one action row per native call from a 19-call started/finished/tool.call log, with no ×", async () => {
+    const t = await mountWith({
+      "/api/v1/tasks/t_1": {
+        ...RUNNING["/api/v1/tasks/t_1"],
+        task: { ...RUNNING["/api/v1/tasks/t_1"].task, status: "completed", calls: 19 },
+        steps: [
+          { kind: "assistant", body: { content: "I’ll submit sample values." }, created_at: ts(0, 1) },
+          ...t1NativeLog({ sharedId: false }),
+        ],
+      },
+    });
+    try {
+      const stepsBtn = t.root.querySelectorAll("button")
+        .find((button) => /^All \d+ steps$/.test(button.textContent ?? ""));
+      assert.equal(stepsBtn?.textContent, "All 19 steps");
+      stepsBtn!.click();
+      assert.deepEqual(actionLabels(t.root), T1_ACTION_LABELS);
+      assert.equal(t.root.querySelectorAll(".feed .step.do .rep").length, 0);
+    } finally { t.restore(); }
+  });
+
+  it("keeps those 19 rows when live events are later replayed from durable history", async () => {
+    const t = await mountRunning();
+    const original = globalThis.fetch;
+    const live = t1NativeLog({ sharedId: true, live: true });
+    const durable = [
+      ...RUNNING["/api/v1/tasks/t_1"].steps,
+      ...t1NativeLog({ sharedId: true }),
+    ];
+    try {
+      for (const step of live) t.view.onEvent(event(step.kind, step.body, step.created_at));
+      assert.deepEqual(actionLabels(t.root), T1_LIVE_ACTION_LABELS);
+      assert.equal(t.root.querySelectorAll(".feed .step.do .rep").length, 0);
+      globalThis.fetch = (async (path, init) => String(path) === "/api/v1/tasks/t_1"
+        ? Response.json({ ...RUNNING["/api/v1/tasks/t_1"], steps: durable })
+        : original(path, init)) as typeof fetch;
+      t.view.onEvent(event("task.step", { message: true }, ts(2)));
+      await new Promise(setImmediate);
+      assert.deepEqual(actionLabels(t.root), T1_LIVE_ACTION_LABELS);
+      assert.equal(t.root.querySelectorAll(".feed .step.do .rep").length, 0);
+    } finally { globalThis.fetch = original; t.restore(); }
+  });
+
+  it("marks the in-flight action until its finished event arrives", async () => {
+    const t = await mountRunning();
+    try {
+      t.view.onEvent(event("native_tool", {
+        id: "step_nav", name: "browser_navigate", type: "mcp_tool_call", status: "started",
+      }, ts(3)));
+      const inflight = t.root.querySelectorAll(".feed .step.do")
+        .find(node => node.querySelector(".what")!.textContent === "Opened a site");
+      assert.ok(inflight);
+      assert.equal(inflight!.classList.contains("now"), true);
+      t.view.onEvent(event("native_tool", {
+        id: "step_nav", name: "browser_navigate", type: "mcp_tool_call", status: "completed",
+      }, ts(3, 1)));
+      const done = t.root.querySelectorAll(".feed .step.do")
+        .find(node => node.querySelector(".what")!.textContent === "Opened a site");
+      assert.ok(done);
+      assert.equal(done!.classList.contains("now"), false);
+      assert.equal(t.root.querySelectorAll(".feed .step.do")
+        .filter(node => node.querySelector(".what")!.textContent === "Opened a site").length, 1);
+    } finally { t.restore(); }
+  });
+
   it("shows a single live total without a budget meter or limit", async () => {
     const t = await mountRunning();
     try {
@@ -698,6 +1036,77 @@ describe("task view, driven by synthetic events", () => {
         feedText(t.root).filter((line) => line.startsWith("Saved")),
         ["Saved today.md (227 bytes)"],
       );
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("lists saved files while the task is still running, with Download and Open", async () => {
+    const t = await mountRunning();
+    try {
+      assert.equal(t.root.querySelector(".task-left > .artifacts")!.hidden, true);
+      t.view.onEvent(
+        event("download.promoted", { path: "out/today.md", item_name: "today.md", bytes: 227 }, ts(6)),
+      );
+      const artifacts = t.root.querySelector(".task-left > .artifacts")!;
+      assert.equal(artifacts.hidden, false);
+      assert.match(artifacts.textContent, /Files it saved/);
+      assert.deepEqual(artifacts.querySelectorAll(".file .n").map((n) => n.textContent), ["today.md"]);
+      assert.match(artifacts.querySelector(".file .w")!.textContent, /227 bytes/);
+      const download = artifacts.querySelector(".file a")!;
+      assert.equal(download.textContent, "Download");
+      assert.equal(download.className, "btn sm");
+      assert.equal(
+        download.href,
+        "/api/v1/computers/cmp_1/files?path=out%2Ftoday.md",
+      );
+      assert.equal(download.download, "today.md");
+      assert.equal(download.target, "");
+      assert.equal(artifacts.querySelector(".file button")!.textContent, "Open");
+      const zip = artifacts.querySelector(".artifacts-head a")!;
+      assert.equal(zip.textContent, "Download all");
+      assert.equal(zip.className, "btn sm");
+      assert.equal(zip.href, "/api/v1/tasks/t_1/files.zip");
+      assert.equal(zip.download, "t_1-files.zip");
+      assert.doesNotMatch(artifacts.textContent, /On this computer/);
+      const posted = bridgeSpy();
+      const opened: unknown[][] = [];
+      const win = window as unknown as { open: (...args: unknown[]) => null };
+      const origOpen = win.open;
+      win.open = (...args: unknown[]) => {
+        opened.push(args);
+        return null;
+      };
+      try {
+        download.click();
+        zip.click();
+        assert.equal(posted.length, 0, "Download is a link, not a bridge call");
+        assert.deepEqual(opened, [], "Download does not window.open");
+        artifacts.querySelector(".file button")!.click();
+        assert.match(String((posted[0]!.args as { url: string }).url), /inline=1/);
+      } finally {
+        win.open = origOpen;
+        posted.restore();
+      }
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("offers the host workspace path on this computer, and a way to copy it", async () => {
+    const t = await mountWith({
+      "/api/v1/tasks/t_1": {
+        ...RUNNING["/api/v1/tasks/t_1"],
+        task: {
+          ...RUNNING["/api/v1/tasks/t_1"].task,
+          workspace_dir: "/Users/me/ModelBot/computers/cmp_1/workspace",
+        },
+      },
+    });
+    try {
+      const note = t.root.querySelector(".workspace-path")!;
+      assert.match(note.textContent, /On this computer: \/Users\/me\/ModelBot\/computers\/cmp_1\/workspace/);
+      assert.equal(note.querySelector("button")!.textContent, "Copy path");
     } finally {
       t.restore();
     }
@@ -754,6 +1163,98 @@ async function mountWith(
     },
   };
 }
+
+describe("task view tabs", () => {
+  function selectedTab(root: FakeElement): string | undefined {
+    return root
+      .querySelectorAll('[role="tab"]')
+      .find((node) => node.getAttribute("aria-selected") === "true")?.dataset.tab;
+  }
+
+  it("opens a running task on Computer so the picture is first on a narrow viewport", async () => {
+    const t = await mountRunning();
+    try {
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "computer");
+      assert.equal(selectedTab(t.root), "computer");
+      assert.ok(t.root.querySelector(".task-side"), "the live panel is in the tree");
+      const take = t.root
+        .querySelectorAll(".view-acts button")
+        .find((node) => node.textContent.includes("Take control"));
+      assert.ok(take);
+      assert.equal(take.disabled, false);
+      assert.equal(take.hidden, false);
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("opens a paused-without-takeover task on Task so Resume is visible", async () => {
+    const current = RUNNING["/api/v1/tasks/t_1"];
+    const t = await mountWith({
+      "/api/v1/tasks/t_1": { ...current, task: { ...current.task, status: "paused" } },
+    });
+    try {
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "task");
+      assert.equal(selectedTab(t.root), "task");
+      const resume = t.root
+        .querySelectorAll(".done-acts button")
+        .find((node) => node.textContent === "Resume");
+      assert.ok(resume, "Resume lives on the Task pane");
+      assert.equal(resume.hidden, false);
+      assert.match(resume.className, /\bprimary\b/);
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("opens a paused takeover on Computer so Take control is first", async () => {
+    const current = RUNNING["/api/v1/tasks/t_1"];
+    const t = await mountWith({
+      "/api/v1/tasks/t_1": { ...current, task: { ...current.task, status: "paused" } },
+      "/api/v1/takeovers": {
+        takeovers: [
+          { id: "tk_1", computer_id: "cmp_1", task_id: "t_1", state: "takeover_requested" },
+        ],
+      },
+    });
+    try {
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "computer");
+      assert.equal(selectedTab(t.root), "computer");
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("keeps a finished task on the Task tab", async () => {
+    const t = await mountWith(completed(null, [
+      { kind: "task.started", body: {}, created_at: ts(2) },
+      { kind: "task.completed", body: { summary: "All set." }, created_at: ts(4) },
+    ]));
+    try {
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "task");
+      assert.equal(selectedTab(t.root), "task");
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("keeps the tab the person picked across a refresh", async () => {
+    const t = await mountRunning();
+    try {
+      const taskTab = t.root
+        .querySelectorAll('[role="tab"]')
+        .find((node) => node.dataset.tab === "task")!;
+      taskTab.click();
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "task");
+      t.view.onEvent(event("task.step", { message: true }, ts(4)));
+      await new Promise(setImmediate);
+      assert.equal(t.root.querySelector(".task-grid")!.getAttribute("data-tab"), "task");
+      assert.equal(selectedTab(t.root), "task");
+    } finally {
+      t.restore();
+    }
+  });
+});
 
 describe("task view — waiting for you", () => {
   it("restores the review instruction on reload and updates it without removing chat", async () => {
@@ -839,6 +1340,37 @@ describe("task view — you’re driving", () => {
       // No "Take control" while you already have it (audit P2-15).
       const take = t.root.querySelectorAll(".view-acts button")[0]!;
       assert.equal(take.hidden, true);
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("offers Use a different Google account while this window is driving, and posts", async () => {
+    const t = await mountWith({
+      "/api/v1/takeovers": {
+        takeovers: [
+          { id: "tk_1", computer_id: "cmp_1", task_id: "t_1", state: "human", holder: "dev_me" },
+        ],
+      },
+      "/api/v1/takeover/tk_1/google-account": { ok: true },
+    });
+    const inner = globalThis.fetch;
+    const posts: string[] = [];
+    globalThis.fetch = (async (path: string, init?: RequestInit) => {
+      const key = String(path).split("?")[0]!;
+      if ((init?.method ?? "GET") === "POST") posts.push(key);
+      return inner(path, init);
+    }) as typeof fetch;
+    try {
+      const google = t.root
+        .querySelector(".driving")!
+        .querySelectorAll("button")
+        .find((node) => node.textContent === "Use a different Google account");
+      assert.ok(google, "the driving card is missing Use a different Google account");
+      assert.equal(google.disabled, false);
+      google.click();
+      await new Promise(setImmediate);
+      assert.deepEqual(posts, ["/api/v1/takeover/tk_1/google-account"]);
     } finally {
       t.restore();
     }
@@ -1016,21 +1548,20 @@ describe("task view — finished", () => {
       assert.match(t.root.textContent, /Files it saved/);
       const names = t.root.querySelectorAll(".artifacts .file .n").map((n) => n.textContent);
       assert.deepEqual(names, ["boarding-pass.pdf", "flights.csv"]);
-      assert.equal(
-        t.root.querySelectorAll(".artifacts .file a").length,
-        0,
-        "Open is never an anchor at the API — that is what bricked the window",
+      assert.deepEqual(
+        t.root.querySelectorAll(".artifacts .file a").map((a) => a.textContent),
+        ["Download", "Download"],
       );
-      const open = t.root.querySelectorAll(".artifacts .file button");
-      assert.equal(open[0]!.textContent, "Open");
+      const rowBtns = t.root.querySelectorAll(".artifacts .file button");
+      assert.deepEqual(rowBtns.map((b) => b.textContent), ["Open", "Open"]);
       const posted = bridgeSpy();
       try {
-        open[0]!.click();
+        rowBtns[0]!.click();
         assert.deepEqual(posted.map((m) => m.method), ["revealFile"]);
         const args = posted[0]!.args as Record<string, unknown>;
         assert.match(
           String(args["url"]),
-          /\/api\/v1\/computers\/cmp_1\/files\?path=%2Fworkspace%2Fout%2Fboarding-pass\.pdf$/,
+          /\/api\/v1\/computers\/cmp_1\/files\?path=%2Fworkspace%2Fout%2Fboarding-pass\.pdf&inline=1$/,
           "the shell still gets the existing /files route",
         );
         assert.equal(args["path"], "/workspace/out/boarding-pass.pdf");
@@ -1330,13 +1861,16 @@ describe("task view — a dead Open button says so", () => {
     const posted = bridgeSpy();
     const toasts = toastSpy();
     try {
-      const open = t.root.querySelectorAll(".artifacts .file button")[0]!;
+      const open = t.root.querySelectorAll(".artifacts .file button").find((b) => b.textContent === "Open")!;
+      const download = t.root.querySelector(".artifacts .file a")!;
       assert.equal(open.textContent, "Open");
       open.click();
       // The reveal fires on the gesture; the answer about the file arrives a
       // tick later.
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal((open as unknown as { disabled?: boolean }).disabled, true, "no second dead click");
+      assert.equal(download.getAttribute("href"), null);
+      assert.equal(download.getAttribute("aria-disabled"), "true");
       assert.match(
         t.root.querySelector(".artifacts .file .w")!.textContent,
         /Not on its computer any more/,
@@ -1355,7 +1889,7 @@ describe("task view — a dead Open button says so", () => {
     );
     const posted = bridgeSpy();
     try {
-      const open = t.root.querySelectorAll(".artifacts .file button")[0]!;
+      const open = t.root.querySelectorAll(".artifacts .file button").find((b) => b.textContent === "Open")!;
       open.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal((open as unknown as { disabled?: boolean }).disabled ?? false, false);
@@ -1483,7 +2017,7 @@ describe("task view — nothing is written as markup", () => {
 describe("a long goal cannot swallow the task view", () => {
   // The real one from the Gmail run: 3,348 characters rendered as a 1,620px
   // `h1`, which pushed the approval buttons and Take control off the column.
-  const GIANT = `Organise the Gmail inbox for sanjay@aspirant.academy. ${"Label the noise, keep the invoices, archive the rest. ".repeat(65)}`;
+  const GIANT = `Organise the Gmail inbox for owner@example.com. ${"Label the noise, keep the invoices, archive the rest. ".repeat(65)}`;
   const GIANT_TASK = {
     task: { id: "t_1", computer_id: "cmp_1", goal: GIANT, status: "running", created_at: ts(2) },
     steps: [{ kind: "task.started", body: {}, created_at: ts(2) }],
@@ -1780,7 +2314,14 @@ describe("failure_kind — the daemon's own verdict, never a guess", () => {
       status: "failed", reason: "stall", budget: null, took: null,
       terminal: { failure_kind: "stalled" },
     });
-    assert.match(stalled.lede, /stopped responding/);
+    assert.match(stalled.lede, /Resume to continue/);
+    const pausedStall = terminalCopy({
+      status: "paused", reason: "stall", budget: null, took: null,
+      terminal: { failure_kind: "stalled" },
+    });
+    assert.equal(pausedStall.kind, "paused");
+    assert.equal(pausedStall.limitReached, null);
+    assert.match(pausedStall.lede, /Resume to continue/);
 
     const loop = terminalCopy({
       status: "failed", reason: "loop_detected", budget: null, took: null,
@@ -1807,6 +2348,35 @@ describe("failure_kind — the daemon's own verdict, never a guess", () => {
     });
     assert.match(copy.lede, /arriving back at the same step/);
     assert.equal(copy.limitReached, null);
+  });
+
+  it("names who stopped the task without changing the sentence that follows", () => {
+    const follow = "It stopped where it was. Anything it had already done stays done.";
+    const ui = terminalCopy({
+      status: "cancelled", reason: "cancelled", budget: null, took: null, cancelledBy: "ui",
+    });
+    assert.equal(ui.heading, "You stopped it");
+    assert.equal(ui.lede, "You stopped it, and it stopped where it was.");
+
+    const api = terminalCopy({
+      status: "cancelled", reason: "cancelled", budget: null, took: null, cancelledBy: "api",
+    });
+    assert.equal(api.heading, "Stopped through the API");
+    assert.equal(api.lede, follow);
+    assert.doesNotMatch(api.heading, /You stopped it/);
+    assert.doesNotMatch(api.lede, /You stopped it/);
+
+    const system = terminalCopy({
+      status: "cancelled", reason: "cancelled", budget: null, took: null, cancelledBy: "system",
+    });
+    assert.equal(system.heading, "BotHearth stopped it");
+    assert.equal(system.lede, follow);
+    assert.doesNotMatch(system.heading, /You stopped it/);
+
+    const legacy = terminalCopy({
+      status: "cancelled", reason: "cancelled", budget: null, took: null,
+    });
+    assert.equal(legacy.heading, "You stopped it");
   });
 });
 

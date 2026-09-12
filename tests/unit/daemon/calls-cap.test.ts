@@ -52,3 +52,24 @@ test("a harness run's ceiling is whichever of its two budgets runs out first", a
     assert.equal(detail.task.calls_cap, expected, `$${spend_cap_usd} / ${max_steps} steps`);
   }
 });
+
+test("a standalone run with a zero spend cap names no ceiling", async () => {
+  const task = daemon.store.insertTask({ computer_id: "c1", goal: "uncapped", max_steps: 0, spend_cap_usd: 0 });
+  const detail = (await (await fetch(`${daemon.baseUrl}/api/v1/tasks/${task.id}`, { headers })).json()) as {
+    task: { spend_cap_usd: number | null; calls_cap: number | null };
+  };
+  assert.equal(detail.task.spend_cap_usd, null);
+  assert.equal(detail.task.calls_cap, null);
+});
+
+test("a native-style binding with no cap names no tool-call ceiling", async () => {
+  daemon.store.insertHarnessTaskBinding({
+    task_id: "task_native_unlimited", computer_id: "h0",
+    spend_cap_usd: 0, max_steps: 0, proxy_usd_per_tool_call: 0.01,
+  });
+  const detail = (await (await fetch(`${daemon.baseUrl}/api/v1/tasks/task_native_unlimited`, { headers })).json()) as {
+    task: { spend_cap_usd: number | null; calls_cap: number | null };
+  };
+  assert.equal(detail.task.spend_cap_usd, null);
+  assert.equal(detail.task.calls_cap, null);
+});

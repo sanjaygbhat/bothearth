@@ -106,6 +106,10 @@ export class ExecComputerClient extends EventEmitter implements ComputerClient {
           header, payload, bytes: encodeLiveFrame(header, payload),
         } satisfies LiveFrameEvent);
       } : undefined,
+      onNotification: role === "browser" ? (method, params) => {
+        if (method === "live.producer" && this.liveWanted && !this.closed && params && typeof params === "object")
+          this.emit("mode", params);
+      } : undefined,
     });
     })().then(async (client) => {
       if (this.closed) { await client.close(); throw new Error("computer client closed"); }
@@ -133,6 +137,9 @@ export class ExecComputerClient extends EventEmitter implements ComputerClient {
   async call(method: string, params?: unknown, context?: ComputerCallContext): Promise<ToolResult> {
     if (this.closed) return toolError("E_SANDBOX_DEAD");
     try {
+      if (method === "takeover.sync") {
+        return this.both(method, (params ?? {}) as Record<string, unknown>);
+      }
       const client = await this.rpc(this.roleFor(method));
       const result = context
         ? await client.request("policy.call", { method, params, navigation_origins: context.navigationOrigins,

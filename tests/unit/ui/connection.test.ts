@@ -65,6 +65,9 @@ test("plain-English copy is what a row says; identifiers stay behind Details", (
   assert.equal(providerRowCopy("claude", null, true), "Found");
   assert.equal(providerRowCopy("claude", { status: "signed_out", provider: "claude", model: "",
     execution_location: "computer" }, true), "In the bot’s computer · not signed in");
+  assert.equal(providerRowCopy("codex", { status: "unknown", provider: "codex", model: "gpt-6-astra",
+    execution_location: "computer" }, true), "Can’t check while you have control");
+  assert.equal(statusWord("unknown"), "Can’t check while you have control");
   assert.equal(lastCheckedLabel(1_000), "a moment ago");
   assert.equal(lastCheckedLabel(120_000), "2 minutes ago");
   assert.equal(lastCheckedLabel(3 * 3_600_000), "3 hours ago");
@@ -184,6 +187,63 @@ test("opening Settings never signs in; one click signs in, polls, then connects 
     dispose();
     dom.restore();
   }
+});
+
+test("a hold that blocks the connection check is not a sign-out and is rechecked", async () => {
+  let status = "unknown";
+  const scenario: Scenario = {
+    posts: [],
+    connection: () => ({
+      status, provider: "codex", model: "gpt-6-astra", login_mode: "device",
+      execution_location: "computer", message: status === "unknown" ? "Can’t check while you have control" : "",
+    }),
+  };
+  const { pane, dispose, dom } = await mountAi(scenario);
+  try {
+    assert.match(pane.textContent, /Can’t check while you have control/);
+    assert.doesNotMatch(pane.textContent, /not signed in|Sign in with ChatGPT/);
+    assert.equal(actionButton(pane).textContent, "Check again");
+    status = "connected";
+    dom.runTimers();
+    await settle();
+    await settle();
+    assert.match(pane.querySelector(".set-state")?.textContent ?? pane.textContent, /Connected/);
+    assert.notEqual(actionButton(pane).textContent, "Check again");
+  } finally { dispose(); dom.restore(); }
+});
+
+test("an empty error message still tells the person to check again", async () => {
+  const scenario: Scenario = {
+    posts: [],
+    connection: () => ({ status: "error", provider: "codex", model: "", message: "" }),
+  };
+  const { pane, dispose, dom } = await mountAi(scenario);
+  try {
+    const msg = pane.querySelector(".set-msg")!;
+    assert.ok(msg.textContent.length > 0);
+    assert.match(msg.textContent, /could not be checked|Check again/i);
+    assert.equal(actionButton(pane).textContent, "Check again");
+  } finally { dispose(); dom.restore(); }
+});
+
+test("a stopped computer offers Start computer and posts start then rechecks", async () => {
+  const scenario: Scenario = {
+    posts: [],
+    connection: () => ({
+      status: "error", provider: "codex", model: "", computer_id: "cmp_1",
+      message: "The bot’s computer is not running",
+      recovery: { action: "start_computer", label: "Start computer" },
+    }),
+  };
+  const { pane, dispose, dom } = await mountAi(scenario);
+  try {
+    const action = actionButton(pane);
+    assert.equal(action.textContent, "Start computer");
+    assert.match(pane.querySelector(".set-msg")!.textContent, /not running/);
+    action.fire("click");
+    await settle(6);
+    assert.ok(scenario.posts.includes("/api/v1/computers/cmp_1/start"));
+  } finally { dispose(); dom.restore(); }
 });
 
 test("a sign-in that lives in a terminal only offers Check again, and posts nothing", async () => {

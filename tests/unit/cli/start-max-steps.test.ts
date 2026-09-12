@@ -59,7 +59,7 @@ describe("buildProductionComposition agent.max_steps", () => {
 
       // init pins no limits, so a fresh install runs on the daemon default and
       // picks up any later change to it.
-      assert.equal(shipped.config.agent.max_steps, 400);
+      assert.equal(shipped.config.agent.max_steps, 0);
 
       const cfg = configPath(home);
       const raw = readFileSync(cfg, "utf8");

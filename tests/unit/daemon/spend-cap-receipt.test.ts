@@ -3,19 +3,19 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { until } from "../../helpers/until.ts";
 
+isolateModelbotHome();
+
 /**
- * The budget the harness enforces is the budget the task detail reports, and a
- * task that dies on it says so. Both attempts at the Gmail task read
- * "$0.00 of your $2.00 budget" while the proxy estimate silently reached $2.00
- * and killed them, and the receipt blamed the machine.
+ * Native tasks still report the proxy estimate on every counted call. That
+ * figure is not a cap: the task is not stopped by it, and the receipt names it
+ * as spend without a ceiling.
  */
 
-const CAP_USD = 0.05;
 const PER_CALL_USD = 0.01;
-const CALLS = CAP_USD / PER_CALL_USD;
+const CALLS = 7;
 
 /** A model CLI that reads the page until the budget refuses it, then gives up. */
 function fixture() {
@@ -29,10 +29,12 @@ let input=''; for await (const chunk of process.stdin) input+=chunk;
 const client=new Client({name:'spend-cap-fixture',version:'1'});
 await client.connect(new StreamableHTTPClientTransport(new URL(url),
   {requestInit:{headers:{authorization:'Bearer '+process.env.MODELBOT_SCOPED_TOKEN}}}));
-for(let i=0;i<20;i+=1){
+console.log(JSON.stringify({type:'thread.started',thread_id:'00000000-0000-0000-0000-0000000000bb'}));
+for(let i=0;i<6;i+=1){
   const result=await client.callTool({name:'browser_snapshot',arguments:{}});
   if(result.isError) break;
 }
+await client.callTool({name:'done',arguments:{summary:'read the page',status:'success'}});
 await client.close().catch(()=>{});
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));
 `, "codex-spend-cap.mjs");
@@ -65,42 +67,28 @@ async function withDaemon(fn: (ctx: {
   }
 }
 
-test("the task detail counts the calls the cap counted, and the failure names the cap", async () => {
+test("the task detail counts the proxy estimate without a ceiling", async () => {
   await withDaemon(async ({ daemon, api }) => {
     const created = await api("/api/v1/tasks",
-      { computer_id: "c1", goal: "read the page until the budget stops it", spend_cap_usd: CAP_USD });
+      { computer_id: "c1", goal: "read the page", spend_cap_usd: 0.05 });
     assert.equal(created.status, 201);
     const { task } = (await created.json()) as { task: { id: string } };
 
-    await until(() => daemon.store.getTask(task.id)?.status === "paused",
-      "the task never stopped on its cap", 20_000);
+    await until(() => daemon.store.getTask(task.id)?.status === "completed",
+      "the native task never finished", 20_000);
 
     const detail = (await (await api(`/api/v1/tasks/${task.id}`)).json()) as {
-      task: { spend_usd: number; spend_cap_usd: number; calls: number; calls_cap: number };
+      task: { spend_usd: number; spend_cap_usd: number | null; calls: number; calls_cap: number | null };
       steps: Array<{ kind: string; body: Record<string, unknown> }>;
     };
-    assert.deepEqual(detail.task, {
-      ...detail.task,
-      spend_usd: CAP_USD,
-      spend_cap_usd: CAP_USD,
-      calls: CALLS,
-      calls_cap: CALLS,
-    });
+    assert.equal(detail.task.spend_cap_usd, null);
+    assert.equal(detail.task.calls_cap, null);
+    assert.equal(detail.task.calls, CALLS);
+    assert.equal(detail.task.spend_usd, Number((CALLS * PER_CALL_USD).toFixed(12)));
 
-    // The live meter read the same counter all the way up, not only at the end.
     const spends = detail.steps.filter((s) => s.kind === "usage").map((s) => s.body.usd_est);
     assert.deepEqual(spends, [0, ...Array.from({ length: CALLS }, (_, i) => Number(((i + 1) * PER_CALL_USD).toFixed(12)))]);
-
-    // The cap stopped it; it did not go wrong. A bigger budget resumes it, so
-    // the stop is a pause carrying the same reason the standalone loop gives.
-    const stopped = detail.steps.find((s) => s.kind === "task.step" && s.body.status === "paused");
-    assert.ok(stopped, "no paused step");
-    assert.equal(stopped!.body.failure_kind, "spend_cap");
-    assert.equal(stopped!.body.reason, "spend_cap");
-
-    // And once the person stops it for good, the receipt says what it cost
-    // instead of $0.00.
-    assert.equal((await api(`/api/v1/tasks/${task.id}/cancel`, {})).status, 200);
-    assert.equal(daemon.store.getTask(task.id)!.summary?.cost_usd, CAP_USD);
+    assert.equal(detail.steps.some((s) => s.body.reason === "spend_cap"), false);
+    assert.equal(daemon.store.getTask(task.id)!.summary?.cost_usd, Number((CALLS * PER_CALL_USD).toFixed(12)));
   });
 });

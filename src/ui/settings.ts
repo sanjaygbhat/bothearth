@@ -17,6 +17,7 @@ import { renderAiConnection } from "./connection.ts";
 import { renderDevices } from "./devices.ts";
 import { renderLicence } from "./licence.ts";
 import { appendTextChild } from "./safe.ts";
+import { refreshSession } from "./session.ts";
 import {
   navigate,
   registerOverlay,
@@ -42,6 +43,7 @@ type Computer = {
   capabilities: string[];
   persistent: boolean;
   status: string;
+  state?: string;
   created_at: string;
 };
 
@@ -91,6 +93,12 @@ function computerStateCopy(computer: Computer, busyWith: Task | undefined): stri
 
 const BUSY_MESSAGE =
   "A task is already using this browser. Let it finish or stop it before starting another.";
+const HOLD_MESSAGE =
+  "This computer is under Take control. Return control before forgetting its logins.";
+const FORGET_BUSY_MESSAGE =
+  "This computer has a task in progress. Stop or finish it before forgetting its logins.";
+const FORGET_CONFIRM =
+  "This forgets saved logins on this computer. The bot will need to sign in again on those sites.";
 
 function renderComputers(pane: HTMLElement): () => void {
   let disposed = false;
@@ -101,6 +109,12 @@ function renderComputers(pane: HTMLElement): () => void {
     pane,
     "p",
     "Each computer has a separate browser profile and shares its workspace with BotHearth’s host.",
+    "set-lede",
+  );
+  appendTextChild(
+    pane,
+    "p",
+    "Each computer has its own Chromium. Signing in there does not sign in Arc or Chrome, and your everyday browser stays private from the model.",
     "set-lede",
   );
 
@@ -138,6 +152,25 @@ function renderComputers(pane: HTMLElement): () => void {
     if (!live()) return;
     const computers = inventory.computers ?? [];
     const tasks = history.tasks ?? [];
+    const signedById = new Map<string, string[]>();
+    await Promise.all(
+      computers.map(async (computer) => {
+        try {
+          const signed = (await apiGet(
+            `/api/v1/computers/${encodeURIComponent(computer.id)}/signed-in`,
+          )) as { domains?: unknown };
+          signedById.set(
+            computer.id,
+            Array.isArray(signed.domains)
+              ? signed.domains.filter((domain): domain is string => typeof domain === "string")
+              : [],
+          );
+        } catch {
+          signedById.set(computer.id, []);
+        }
+      }),
+    );
+    if (!live()) return;
     const nicknames = readNicknames();
     const defaultId = inventory.default_computer_id ?? null;
     list.replaceChildren();
@@ -189,6 +222,13 @@ function renderComputers(pane: HTMLElement): () => void {
         ].join(" · "),
         "set-w",
       );
+      const domains = signedById.get(computer.id) ?? [];
+      appendTextChild(
+        text,
+        "span",
+        domains.length > 0 ? `Signed-in sites: ${domains.join(", ")}` : "Signed-in sites: None",
+        "set-w",
+      );
 
       const controls = document.createElement("div");
       controls.className = "set-actions";
@@ -225,6 +265,48 @@ function renderComputers(pane: HTMLElement): () => void {
             });
         });
         controls.append(makeDefault);
+      }
+
+      if (computer.capabilities.includes("browser")) {
+        const forget = document.createElement("button");
+        forget.type = "button";
+        forget.className = "btn sm danger";
+        forget.textContent = "Forget this computer's logins";
+        let forgetArmed = false;
+        forget.addEventListener("click", () => {
+          if (forget.disabled) return;
+          if (busyWith) {
+            message.dataset.tone = "warn";
+            message.textContent = FORGET_BUSY_MESSAGE;
+            return;
+          }
+          if (computer.state === "human-hold") {
+            message.dataset.tone = "warn";
+            message.textContent = HOLD_MESSAGE;
+            return;
+          }
+          if (!forgetArmed) {
+            forgetArmed = true;
+            forget.textContent = "Yes, forget logins";
+            message.dataset.tone = "warn";
+            message.textContent = FORGET_CONFIRM;
+            return;
+          }
+          forget.disabled = true;
+          void apiPost(`/api/v1/computers/${encodeURIComponent(computer.id)}/forget-logins`)
+            .then(async () => {
+              if (!live()) return;
+              message.dataset.tone = "ok";
+              message.textContent =
+                "Saved logins on this computer are gone. The bot will need to sign in again on those sites.";
+              await refresh();
+            })
+            .catch((error) => {
+              forget.disabled = false;
+              fail(error);
+            });
+        });
+        controls.append(forget);
       }
 
       const fresh = document.createElement("button");
@@ -270,6 +352,276 @@ function renderComputers(pane: HTMLElement): () => void {
   };
 
   void refresh().catch(fail);
+  return () => {
+    disposed = true;
+  };
+}
+
+const ASK_BEFORE_LABEL = "Ask before sensitive actions";
+const ASK_BEFORE_WHY =
+  "Ask before detected sends, uploads, deletes, checkout steps and new-site form submits made through BotHearth’s browser tools. The bot pauses only when it asks, or when you enable Ask before sensitive actions.";
+const KILL_SWITCH_LABEL = "Stop the bot from taking any action (kill switch)";
+const KILL_SWITCH_WHY =
+  "When this is on, every tool call is refused until you turn it off.";
+
+const OPTIONAL_GATES = [
+  "external_send",
+  "payment",
+  "upload",
+  "delete",
+  "secret_entry",
+  "new_domain",
+] as const;
+type SettingsGate = (typeof OPTIONAL_GATES)[number];
+
+const GATE_LABELS: Record<SettingsGate, string> = {
+  external_send: "Sending email or messages",
+  payment: "Checkout steps (card entry always pauses for you)",
+  upload: "Uploading files",
+  delete: "Deleting files or data",
+  secret_entry: "Entering passwords or secrets",
+  new_domain: "Submitting forms on a new site",
+};
+
+function renderSensitive(pane: HTMLElement): () => void {
+  let disposed = false;
+  const live = () => !disposed && pane.isConnected;
+
+  appendTextChild(pane, "h3", ASK_BEFORE_LABEL);
+  const row = document.createElement("label");
+  row.className = "set-toggle";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.setAttribute("aria-describedby", "set-ask-why");
+  const text = document.createElement("span");
+  text.className = "set-grow";
+  appendTextChild(text, "span", ASK_BEFORE_LABEL, "set-n");
+  const why = appendTextChild(text, "span", ASK_BEFORE_WHY, "set-w");
+  why.id = "set-ask-why";
+  row.append(input, text);
+  pane.append(row);
+
+  const gateInputs: HTMLInputElement[] = [];
+  for (const gate of OPTIONAL_GATES) {
+    const sub = document.createElement("label");
+    sub.className = "set-toggle set-toggle-sub";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.dataset.gate = gate;
+    const label = document.createElement("span");
+    label.className = "set-grow";
+    appendTextChild(label, "span", GATE_LABELS[gate], "set-n");
+    sub.append(box, label);
+    pane.append(sub);
+    gateInputs.push(box);
+  }
+
+  appendTextChild(pane, "h3", KILL_SWITCH_LABEL);
+  const killRow = document.createElement("label");
+  killRow.className = "set-toggle";
+  const killInput = document.createElement("input");
+  killInput.type = "checkbox";
+  killInput.dataset.killSwitch = "1";
+  killInput.setAttribute("aria-describedby", "set-kill-why");
+  const killText = document.createElement("span");
+  killText.className = "set-grow";
+  appendTextChild(killText, "span", KILL_SWITCH_LABEL, "set-n");
+  const killWhy = appendTextChild(killText, "span", KILL_SWITCH_WHY, "set-w");
+  killWhy.id = "set-kill-why";
+  killRow.append(killInput, killText);
+  pane.append(killRow);
+
+  appendTextChild(pane, "h3", "Limits");
+  appendTextChild(
+    pane,
+    "p",
+    "These apply to API-adapter tasks you start after saving. Native Codex and Claude Code tasks run until the provider’s own plan limit.",
+    "set-w",
+  );
+
+  const stepsField = document.createElement("label");
+  stepsField.className = "set-field";
+  stepsField.append("Maximum tool calls");
+  const stepsInput = document.createElement("input");
+  stepsInput.type = "number";
+  stepsInput.min = "0";
+  stepsInput.step = "1";
+  stepsInput.dataset.limit = "max_steps";
+  stepsField.append(stepsInput);
+  appendTextChild(stepsField, "span", "0 = no limit", "set-w");
+  pane.append(stepsField);
+
+  const spendField = document.createElement("label");
+  spendField.className = "set-field";
+  spendField.append("Spend cap (USD)");
+  const spendInput = document.createElement("input");
+  spendInput.type = "number";
+  spendInput.min = "0";
+  spendInput.step = "0.01";
+  spendInput.dataset.limit = "spend_cap_usd";
+  spendField.append(spendInput);
+  appendTextChild(spendField, "span", "0 = no limit", "set-w");
+  pane.append(spendField);
+
+  const message = document.createElement("p");
+  message.className = "set-msg";
+  pane.append(message);
+
+  const setGateEnabled = (on: boolean) => {
+    for (const box of gateInputs) box.disabled = !on;
+  };
+
+  const selectedGates = (): SettingsGate[] =>
+    OPTIONAL_GATES.filter((_, index) => gateInputs[index]?.checked);
+
+  const fail = (error: unknown, revert?: () => void) => {
+    if (!live()) return;
+    revert?.();
+    message.dataset.tone = "danger";
+    message.textContent = humanApiError(
+      error,
+      "This setting could not be saved just now. Check that BotHearth is running, then try again.",
+    );
+  };
+
+  const saveGates = (on: boolean, previous: { master: boolean; gates: boolean[] }) => {
+    message.textContent = "";
+    delete message.dataset.tone;
+    const gates = on ? selectedGates() : [];
+    void apiPost(
+      "/api/v1/session",
+      on ? { ask_before_sensitive: true, policy_gates: gates } : { ask_before_sensitive: false },
+    )
+      .then((body) => {
+        if (!live()) return;
+        const armed = Boolean((body as { ask_before_sensitive?: unknown }).ask_before_sensitive);
+        input.checked = armed;
+        setGateEnabled(armed);
+        message.dataset.tone = "ok";
+        message.textContent = armed
+          ? "On. BotHearth will ask before those actions."
+          : "Off. Tasks will not stop for those actions.";
+      })
+      .catch((error) => {
+        fail(error, () => {
+          input.checked = previous.master;
+          for (const [index, box] of gateInputs.entries())
+            box.checked = previous.gates[index] === true;
+          setGateEnabled(previous.master);
+        });
+      });
+  };
+
+  void apiGet("/api/v1/session")
+    .then((body) => {
+      if (!live()) return;
+      const session = body as {
+        ask_before_sensitive?: unknown;
+        policy_gates?: unknown;
+        kill_switch?: unknown;
+        limits?: { max_steps?: unknown; spend_cap_usd?: unknown } | null;
+      };
+      const on = Boolean(session.ask_before_sensitive);
+      input.checked = on;
+      killInput.checked = session.kill_switch === true;
+      const listed = Array.isArray(session.policy_gates)
+        ? session.policy_gates.filter(
+            (item): item is SettingsGate =>
+              typeof item === "string" && (OPTIONAL_GATES as readonly string[]).includes(item),
+          )
+        : on
+          ? [...OPTIONAL_GATES]
+          : [];
+      for (const [index, gate] of OPTIONAL_GATES.entries()) {
+        const box = gateInputs[index];
+        if (box) box.checked = listed.includes(gate);
+      }
+      setGateEnabled(on);
+      const limits = session.limits;
+      if (typeof limits?.max_steps === "number") stepsInput.value = String(limits.max_steps);
+      else stepsInput.value = "0";
+      if (typeof limits?.spend_cap_usd === "number")
+        spendInput.value = String(limits.spend_cap_usd);
+      else spendInput.value = "0";
+    })
+    .catch((error) => {
+      if (!live()) return;
+      message.dataset.tone = "danger";
+      message.textContent = humanApiError(
+        error,
+        "This setting could not be read just now. Check that BotHearth is running, then try again.",
+      );
+    });
+
+  killInput.addEventListener("change", () => {
+    const on = killInput.checked;
+    const previous = !on;
+    message.textContent = "";
+    delete message.dataset.tone;
+    void apiPost("/api/v1/session", { kill_switch: on })
+      .then((body) => {
+        void refreshSession();
+        if (!live()) return;
+        const armed = (body as { kill_switch?: unknown }).kill_switch === true;
+        killInput.checked = armed;
+        message.dataset.tone = "ok";
+        message.textContent = armed
+          ? "On. The bot will refuse every action."
+          : "Off. The bot can take actions again.";
+      })
+      .catch((error) => {
+        fail(error, () => {
+          killInput.checked = previous;
+        });
+      });
+  });
+
+  input.addEventListener("change", () => {
+    const on = input.checked;
+    const previous = { master: !on, gates: gateInputs.map((box) => box.checked) };
+    if (on && selectedGates().length === 0) {
+      for (const box of gateInputs) box.checked = true;
+    }
+    setGateEnabled(on);
+    saveGates(on, previous);
+  });
+
+  for (const box of gateInputs) {
+    box.addEventListener("change", () => {
+      const previous = {
+        master: input.checked,
+        gates: gateInputs.map((item) => (item === box ? !item.checked : item.checked)),
+      };
+      saveGates(true, previous);
+    });
+  }
+
+  const saveLimits = () => {
+    const steps = Number(stepsInput.value);
+    const spend = Number(spendInput.value);
+    message.textContent = "";
+    delete message.dataset.tone;
+    if (!Number.isInteger(steps) || steps < 0) {
+      message.dataset.tone = "danger";
+      message.textContent = "Maximum tool calls must be 0 or a whole number.";
+      return;
+    }
+    if (!Number.isFinite(spend) || spend < 0) {
+      message.dataset.tone = "danger";
+      message.textContent = "Spend cap must be 0 or a number.";
+      return;
+    }
+    void apiPost("/api/v1/session", { max_steps: steps, spend_cap_usd: spend })
+      .then(() => {
+        if (!live()) return;
+        message.dataset.tone = "ok";
+        message.textContent = "Saved. New API-adapter tasks use these limits.";
+      })
+      .catch((error) => fail(error));
+  };
+  stepsInput.addEventListener("change", saveLimits);
+  spendInput.addEventListener("change", saveLimits);
+
   return () => {
     disposed = true;
   };
@@ -340,6 +692,7 @@ function renderAbout(pane: HTMLElement): () => void {
 const SECTIONS: Section[] = [
   { id: "ai", label: "Model connection", render: renderAiConnection },
   { id: "computers", label: "Computers", render: renderComputers },
+  { id: "sensitive", label: "Sensitive actions", render: renderSensitive },
   { id: "devices", label: "Devices", render: renderDevices },
   { id: "usage", label: "Usage", render: renderUsage },
   { id: "licence", label: "Licence", render: renderLicence },

@@ -27,6 +27,7 @@ export const PING_ECHO_NODE = [
 
 export interface ExecTransportOpts {
   onLiveFrame?: Parameters<typeof createJsonRpcClient>[3];
+  onNotification?: Parameters<typeof createJsonRpcClient>[4];
   cli?: DockerCli;
   entry?: string[];
 }
@@ -44,5 +45,5 @@ export async function execTransport(
   if (!child.stdin || !child.stdout) {
     throw new Error("failed to spawn docker exec stdio");
   }
-  return createJsonRpcClient(child.stdin, child.stdout, child, opts.onLiveFrame);
+  return createJsonRpcClient(child.stdin, child.stdout, child, opts.onLiveFrame, opts.onNotification);
 }

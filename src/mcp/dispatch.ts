@@ -1,8 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { TOOL_CATALOGUE } from "../tools/catalog.ts";
-import { TOOL_NAMES, type ToolName, type ToolResult } from "../types/contracts.ts";
 import { toolError } from "../protocol/errors.ts";
 import { isTakeoverExemptTool } from "../protocol/takeover.ts";
+import { TOOL_CATALOGUE } from "../tools/catalog.ts";
+import { TOOL_NAMES, type ToolName, type ToolResult } from "../types/contracts.ts";
 import type { McpToolBackend } from "./types.ts";
 
 export function catalogueAsMcpTools(): Array<{
@@ -29,6 +29,15 @@ function stripImagePayload(data: unknown): unknown {
   delete obj.base64;
   delete obj.bytes;
   return obj;
+}
+
+function isMcpToolTimeoutReason(reason: unknown): boolean {
+  if (reason === "mcp_tool_timeout") return true;
+  return Boolean(
+    reason &&
+      typeof reason === "object" &&
+      (reason as { cause?: unknown }).cause === "mcp_tool_timeout",
+  );
 }
 
 function extractImage(
@@ -100,26 +109,40 @@ export async function dispatchToolCall(
 
   const timeoutMs = opts.toolTimeoutMs;
   const ac = new AbortController();
-  const onAbort = () => ac.abort();
-  opts.signal?.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let timedOut = false;
+  const abortChild = (reason: unknown) => {
+    if (!ac.signal.aborted) ac.abort(reason);
+  };
+  const onAbort = () => abortChild({ cause: "abort" });
+  if (opts.signal?.aborted) onAbort();
+  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abortChild({ cause: "mcp_tool_timeout", timeout_ms: timeoutMs });
+  }, timeoutMs);
+
+  const timeoutResult = () =>
+    toolError("E_TIMEOUT", `tool exceeded ${timeoutMs}ms`, {
+      cause: "mcp_tool_timeout",
+      timeout_ms: timeoutMs,
+    });
+  const abortResult = () => toolError("E_TIMEOUT", "tool call aborted", { cause: "abort" });
 
   try {
-    let result = await Promise.race([
-      backend.callTool(name, args, ac.signal),
-      new Promise<ToolResult>((_, reject) => {
-        ac.signal.addEventListener(
-          "abort",
-          () =>
-            reject(
-              Object.assign(new Error("tool timeout"), { code: "E_TIMEOUT" }),
-            ),
-          { once: true },
+    const timeoutWait = new Promise<ToolResult>((resolve) => {
+      const fail = () => {
+        resolve(
+          timedOut || isMcpToolTimeoutReason(ac.signal.reason) ? timeoutResult() : abortResult(),
         );
-      }),
-    ]);
+      };
+      if (ac.signal.aborted) fail();
+      else ac.signal.addEventListener("abort", fail, { once: true });
+    });
 
-    if (name === "request_takeover" && result.ok) {
+    let result = await Promise.race([backend.callTool(name, args, ac.signal), timeoutWait]);
+
+    if (timedOut) result = timeoutResult();
+    else if (name === "request_takeover" && result.ok) {
       const data = enrichTakeoverResult(
         result.data as Record<string, unknown>,
         backend.uiControlUrl ?? `${backend.uiBaseUrl.replace(/\/$/, "")}/#/live`,
@@ -135,13 +158,14 @@ export async function dispatchToolCall(
     return toolResultToMcp(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (timedOut || isMcpToolTimeoutReason(ac.signal.reason))
+      return toolResultToMcp(timeoutResult());
     if (
-      msg.includes("timeout") ||
+      opts.signal?.aborted ||
+      ac.signal.aborted ||
       (e as { code?: string }).code === "E_TIMEOUT"
     ) {
-      return toolResultToMcp(
-        toolError("E_TIMEOUT", `tool exceeded ${timeoutMs}ms`),
-      );
+      return toolResultToMcp(abortResult());
     }
     return toolResultToMcp(toolError("E_IO", msg));
   } finally {

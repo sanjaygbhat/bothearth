@@ -162,9 +162,9 @@ describe("computer-server browser tools (Playwright)", () => {
       userAgent: navigator.userAgent,
       languages: [...navigator.languages],
     }));
+    assert.equal(fingerprint.webdriver, false);
     assert.match(fingerprint.userAgent, /Chrome/);
     assert.ok(fingerprint.languages.length);
-    assert.ok(!LAUNCH_ARGS.some(arg => /AutomationControlled|user-agent|no-sandbox/.test(arg)));
 
     // Chrome's own password manager, off in the profile it just ran on — read
     // after the shutdown that rewrites Preferences, so this is Chromium's copy,
@@ -197,6 +197,26 @@ describe("computer-server browser tools (Playwright)", () => {
     assert.equal(prefs.profile.name, "Person 1");
     assert.ok(prefs.extensions);
     assert.ok(LAUNCH_ARGS.includes("--password-store=basic"));
+    assert.ok(
+      LAUNCH_ARGS.includes("--disable-blink-features=AutomationControlled"),
+      "LAUNCH_ARGS must keep --disable-blink-features=AutomationControlled",
+    );
+    assert.ok(
+      !LAUNCH_ARGS.some((arg) => /--user-agent|--no-sandbox|--enable-automation/.test(arg)),
+    );
+    const guestNative = readFileSync(
+      join(import.meta.dirname, "../../docker-int/daemon/guest-native.test.ts"),
+      "utf8",
+    );
+    const forbidLine = guestNative
+      .split("\n")
+      .find((line) => line.includes("assert.doesNotMatch(browserCommand,"));
+    assert.ok(forbidLine, "guest-native live argv forbid must exist");
+    assert.equal(
+      forbidLine.includes("AutomationControlled"),
+      false,
+      "guest-native live argv must allow AutomationControlled",
+    );
   });
 
   it("starts under a POSIX TZ the container may inherit", { skip: !hasChromium && "Host Chromium unavailable" }, async (t) => {

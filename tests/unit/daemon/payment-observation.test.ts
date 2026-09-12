@@ -5,13 +5,14 @@ import { createToolDispatcher } from "../../../src/daemon/dispatcher.ts";
 import { Store } from "../../../src/daemon/store.ts";
 import type { ToolResult } from "../../../src/types/contracts.ts";
 
-test("observed mail remains actionable while real payment controls stop dispatch", async () => {
+test("observed mail remains actionable and real payment controls do not mint a takeover", async () => {
   const store = new Store();
   let yaml = '- row "Example Vendor, Invoice Payment Confirmation" [ref=e1]\n- paragraph: https://shop.example/checkout';
   const acts: string[] = [];
   class ObservedComputer extends FakeComputer {
-    override async call(method: string): Promise<ToolResult> {
+    override async call(method: string, params?: unknown): Promise<ToolResult> {
       if (method === "browser_snapshot") return { ok: true, data: { url: "https://mail.example/inbox", yaml } };
+      if (method === "request_takeover") return super.call(method, params);
       acts.push(method);
       return { ok: true, data: {} };
     }
@@ -28,10 +29,13 @@ test("observed mail remains actionable while real payment controls stop dispatch
     assert.deepEqual(acts, ["browser_click", "browser_navigate"]);
     assert.equal(store.listApprovals().length, 0);
     yaml = '- textbox "Card number" [ref=e2]';
-    const denied = await dispatcher.dispatch("browser_click", { ref: "e2", snapshot_id: "s2" }, context);
-    assert.equal(!denied.ok && denied.error.code, "E_POLICY_PENDING");
-    assert.equal(!denied.ok && denied.error.message, "payment_field");
-    assert.equal(acts.length, 2, "payment action must not reach the computer");
-    assert.equal(store.listApprovals("pending")[0]?.gate, "payment");
+    const clicked = await dispatcher.dispatch("browser_click", { ref: "e2", snapshot_id: "s2" }, context);
+    assert.equal(clicked.ok, true);
+    assert.deepEqual(acts, ["browser_click", "browser_navigate", "browser_click"]);
+    assert.equal(store.activeTakeoverForComputer(computer.computerId), undefined);
+    assert.equal(store.listApprovals().length, 0);
+    const asked = await dispatcher.dispatch("request_takeover", { reason: "payment" }, context);
+    assert.equal(asked.ok, true);
+    assert.ok(store.activeTakeoverForComputer(computer.computerId));
   } finally { await computer.close(); store.close(); }
 });

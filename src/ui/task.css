@@ -956,9 +956,34 @@
 }
 
 .artifacts > .caps,
+.artifacts-head > .caps,
 .sofar > .caps {
   display: block;
   margin-bottom: var(--space-3xs);
+}
+
+.artifacts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.task-left > .artifacts {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-path {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  margin-top: var(--space-sm);
+  font-size: var(--text-caption);
+  line-height: var(--leading-caption);
+  color: var(--color-muted);
+  word-break: break-all;
 }
 
 .artifacts .file {

@@ -97,13 +97,26 @@ export function createProviderLimits(now: () => number = Date.now): ProviderLimi
   };
 }
 
-/** Additive `task.failed` fields, so the UI can say why instead of guessing. */
+/** Additive `task.failed` / pause fields, so the UI can say why instead of guessing. */
 export function providerLimitFields(limit: ProviderLimit | null): Record<string, string> {
   if (!limit) return {};
   return {
     provider_limit_reason: limit.reason,
     ...(limit.resets_at ? { provider_limit_resets_at: limit.resets_at } : {}),
   };
+}
+
+/** Pause copy for a native task the provider refused for quota or rate. */
+export function providerLimitPauseDetail(
+  provider: "codex" | "claude",
+  limit: ProviderLimit,
+): string {
+  const plan = provider === "codex" ? "Codex" : "Claude";
+  const reset = limit.resets_at ? `; resets at ${limit.resets_at}` : "";
+  if (limit.reason === "rate_limited") {
+    return `Your ${plan} plan is rate-limited${reset}.`;
+  }
+  return `Your ${plan} plan’s usage limit is reached${reset}.`;
 }
 
 /**

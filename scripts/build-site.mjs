@@ -56,7 +56,8 @@ for (const page of pages) {
     ENTERPRISECONTACT: `<a class="button" href="${escape(site.pathname)}contact/">Contact us</a>`,
     CONTACTACTION: contact ? `action="${escape(contact.href)}"` : '',
     CONTACTSTATE: contact ? '' : 'disabled',
-    CONTACTNOTICE: contact ? '<p>We’ll reply to the email you provide.</p>' : '<p role="status">Contact submission is not open yet. This form cannot send a message. The free business permission is available without contacting us.</p>',
+    CONTACTHIDDEN: contact ? '' : 'hidden',
+    CONTACTNOTICE: contact ? '<p class="lead">We’ll reply to the email you provide.</p>' : `<p class="lead" role="status">The contact form isn’t live yet. For licence questions, open an issue in the <a href="${escape(repo)}/issues">project repository</a>. One business bot needs no contact at all.</p>`,
     NAV: nav.map(([slug, label]) => `<a href="${escape(`${site.pathname}${slug}/`)}"${slug === page.slug ? ' aria-current="page"' : ""}>${label}</a>`).join(""),
     SCHEMA: JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c") };
   const render = (html) => html.replace(/\{\{([A-Z]+)\}\}/g, (_, key) => {

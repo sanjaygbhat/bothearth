@@ -4,6 +4,7 @@ import { createFakeComputerClient, type FakeComputerOpts } from "./fake.ts";
 import { createFakeSandbox } from "./fake-sandbox.ts";
 import { createExecComputerClient } from "./exec-client.ts";
 import {
+  computerContainerStatus,
   createSandboxRuntime,
   defaultSeccompPath,
   refreshComputerImage,
@@ -62,6 +63,12 @@ export function createDefaultSandbox(opts?: { workspaceRoot?: string }) {
     /** Recreate the containers when their tag now points at a newer image. */
     async refreshImage(computerId: string, capabilities: ComputerCapability[]): Promise<boolean> {
       return await refreshComputerImage(computerId, capabilities, {
+        seccompPath: resolveSeccompPath(),
+        workspaceRoot: opts?.workspaceRoot,
+      });
+    },
+    async inspectStatus(computerId: string, capabilities: ComputerCapability[] = ["browser", "shell"]) {
+      return computerContainerStatus(computerId, capabilities, {
         seccompPath: resolveSeccompPath(),
         workspaceRoot: opts?.workspaceRoot,
       });

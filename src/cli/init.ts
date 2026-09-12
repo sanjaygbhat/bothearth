@@ -14,15 +14,19 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify as stringifyYaml } from "yaml";
+import {
+  CONFIG_VERSION,
+  loadConfigDoc,
+  loadModelbotSchema,
+  validateModelbotConfig,
+} from "../config/load.ts";
+import { detectRuntime } from "../sandbox/detect.ts";
 import { createVault } from "../vault/index.ts";
 import {
   deleteStoredOsKey,
   vaultKeyAccount,
 } from "../vault/providers.ts";
 import { VAULT_KEYCHAIN_SERVICE } from "../vault/types.ts";
-import { detectRuntime } from "../sandbox/detect.ts";
-import { assertValid } from "../schema/validate.ts";
-import { loadConfigDoc, loadModelbotSchema, withDefaults } from "../config/load.ts";
 import {
   configPath,
   defaultDataDir,
@@ -195,6 +199,7 @@ export async function runInit(argv: string[] = []): Promise<void> {
   // keeps a limit the daemon has since raised.
   const doc: Record<string, unknown> = {
     version: 1,
+    config_version: CONFIG_VERSION,
     data_dir: dataDir,
     adapters: {
       default: "openai_compat",
@@ -208,7 +213,7 @@ export async function runInit(argv: string[] = []): Promise<void> {
   if (opts.bind) doc.bind = opts.bind;
   if (opts.port) doc.port = opts.port;
 
-  assertValid(loadModelbotSchema(), withDefaults(doc));
+  validateModelbotConfig(doc, loadModelbotSchema());
 
   const vaultPath = join(dataDir, "vault.enc");
   if (opts.resetVaultKey) {

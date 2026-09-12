@@ -124,7 +124,7 @@ describe("local handoff for the app shell", () => {
   it("prints the link and the pair hint when no parent is listening", async () => {
     const { line, lines } = await startChild([], /^Open http:/, false);
     assert.match(line, /^Open http:\/\/127\.0\.0\.1:\d+\/#bootstrap=.+/);
-    assert.ok(lines.includes("This link works for 10 minutes. Lost it? Run: modelbot pair"));
+    assert.ok(lines.includes("This link works for 10 minutes. Lost it? Run: bothearth pair"));
     assert.deepEqual(lines.filter((l) => l.includes("#bootstrap=")), [line]);
   });
 

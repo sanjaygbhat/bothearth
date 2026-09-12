@@ -39,7 +39,7 @@ export async function runImageCli(
         return;
       }
     }
-    console.log("Workspaces built. Run: modelbot start");
+    console.log("Workspaces built. Restart the daemon to apply, or run: modelbot start");
     return;
   }
   if (sub === "pull") {

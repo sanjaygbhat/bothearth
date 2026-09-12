@@ -29,7 +29,7 @@ RUN set -eux; \
       curl \
       xz-utils \
       tini \
-      xvfb xauth xdotool openbox xterm pcmanfm ffmpeg \
+      xvfb xauth xdotool scrot openbox xterm pcmanfm ffmpeg \
       tzdata \
       locales \
       fonts-liberation \
@@ -79,7 +79,7 @@ RUN set -eux; \
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-# Unprivileged users: browser (1001) owns profile; agent (1002) owns /workspace.
+# Unprivileged users: browser (1001) owns profile and /home/agent; agent (1002) is the shell-tool user.
 RUN groupadd --gid 1001 browser \
  && useradd --uid 1001 --gid 1001 --create-home --home-dir /home/browser --shell /bin/bash browser \
  && groupadd --gid 1002 agent \
@@ -90,6 +90,8 @@ RUN groupadd --gid 1001 browser \
  && chmod 0700 /home/browser/profile \
  && chown agent:agent /workspace \
  && chmod 755 /workspace \
+ && chown -R browser:browser /home/agent \
+ && chmod 0700 /home/agent \
  && touch /home/browser/profile/.keep \
  && chown browser:browser /home/browser/profile/.keep \
  && chmod 0600 /home/browser/profile/.keep
@@ -110,13 +112,14 @@ RUN apt-get update \
 # Run the same stock binary directly to retain the container's dedicated /dev/shm.
 ENV MODELBOT_CHROMIUM_EXECUTABLE=/usr/lib/chromium/chromium
 
-# Official, unmodified native CLIs execute as agent inside this computer.
-# Authentication and sessions belong to its separate persistent agent home.
+# Official, unmodified native CLIs execute as uid 1001 inside this computer.
+# Authentication and sessions belong to /home/agent (owned by the computer user).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl procps \
  && npm install --global "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/* \
+ && chown browser:browser /home/agent \
  && chmod 0700 /home/agent \
  && codex --version && claude --version
 

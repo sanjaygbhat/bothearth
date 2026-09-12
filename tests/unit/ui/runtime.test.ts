@@ -173,6 +173,7 @@ describe("runtime — the status pill", () => {
     for (const [connectionStatus, message] of [
       ["signed_out", "sign-in required"], ["signing_in", "finish sign-in"],
       ["missing", "setup needed"], ["error", "connection check failed"],
+      ["unknown", "can’t check while you have control"],
     ] as const) {
       const pill = aiIdentity({ status: status({ task_start_available: false }),
         model: "gpt-6-astra", executionMode: "codex", connectionStatus });

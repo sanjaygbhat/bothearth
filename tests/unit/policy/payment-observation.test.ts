@@ -28,7 +28,7 @@ test("mail prose, message controls and field values do not describe payment cont
   }).decision, "allow");
 });
 
-test("named card entry and explicit payment confirmation controls retain the payment gate", () => {
+test("named card entry and explicit payment confirmation controls reach observation without forcing takeover", () => {
   for (const yaml of [
     '- textbox "Card number" [ref=e1]',
     '- textbox "Card details" [ref=e1]',
@@ -45,9 +45,9 @@ test("named card entry and explicit payment confirmation controls retain the pay
     assert.equal(signals.payment_field, true, yaml);
     const result = evaluateGate({ call: { tool: "browser_click", args: { ref: "e1" } },
       signals, origin: mailUrl, mode: "supervised",
-      origin_sets: { readable: ["mail.example"], writable: ["mail.example"] } });
-    assert.equal(result.decision, "require_approval", yaml);
-    assert.equal(result.reason, "payment_field", yaml);
+      origin_sets: { readable: ["mail.example"], writable: ["mail.example"] },
+      enabled_gates: [] });
+    assert.equal(result.decision, "allow", yaml);
   }
 });
 

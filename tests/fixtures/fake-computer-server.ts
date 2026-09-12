@@ -348,6 +348,8 @@ export class FakeComputerServer {
         return { ok: true, data: this.screenshot() };
       case "browser_wait":
         return { ok: true, data: { waited: true } };
+      case "browser_restart":
+        return { ok: true, data: { url: this.pages[this.page].url } };
       case "computer_mouse":
       case "computer_key":
       case "computer_type":

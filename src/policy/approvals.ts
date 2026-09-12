@@ -25,14 +25,87 @@ export interface StoredApproval {
 
 export type ApprovalActor = "human" | "agent";
 
+export interface SnapshotTarget {
+  role: string;
+  name: string;
+  nth: number;
+}
+
+const SNAPSHOT_TARGET_LINE = /^\s*-\s*(\w+)(?:\s+"([^"]*)")?.*\[ref=(e\d+)\]/;
+
+function isSnapshotTarget(value: unknown): value is SnapshotTarget {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const target = value as Record<string, unknown>;
+  return (
+    typeof target.role === "string" &&
+    typeof target.name === "string" &&
+    typeof target.nth === "number" &&
+    Number.isInteger(target.nth) &&
+    target.nth >= 0
+  );
+}
+
+/** Role/name/nth of `ref` in an aria snapshot. Same binding computer-server uses to click. */
+export function snapshotTarget(yaml: string | undefined, ref: string): SnapshotTarget | undefined {
+  if (!yaml || !ref) return undefined;
+  const counts = new Map<string, number>();
+  for (const line of yaml.split("\n")) {
+    const match = SNAPSHOT_TARGET_LINE.exec(line);
+    if (!match) continue;
+    const role = match[1]!;
+    const name = match[2] ?? "";
+    const key = `${role}\0${name}`;
+    const nth = counts.get(key) ?? 0;
+    counts.set(key, nth + 1);
+    if (match[3] === ref) return { role, name, nth };
+  }
+  return undefined;
+}
+
+/**
+ * Stable action identity: tool args without per-observation ids, with a ref
+ * replaced by the resolved control when the snapshot can name it. A stored
+ * `target` wins so a later hash does not re-resolve an old ref against a new page.
+ */
+export function actionIdentity(
+  args: Record<string, unknown>,
+  snapshotYaml?: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key === "snapshot_id" || key === "image_id") continue;
+    if (key === "action" && value && typeof value === "object" && !Array.isArray(value)) {
+      out.action = actionIdentity(value as Record<string, unknown>, snapshotYaml);
+      continue;
+    }
+    out[key] = value;
+  }
+  if (isSnapshotTarget(out.target)) {
+    delete out.ref;
+    return out;
+  }
+  if (typeof out.ref === "string" && out.ref) {
+    const target = snapshotTarget(snapshotYaml, out.ref);
+    if (target) {
+      delete out.ref;
+      out.target = target;
+    }
+  }
+  return out;
+}
+
 export function computeActionHash(input: {
   tool: ToolName;
   args: Record<string, unknown>;
   gate: PolicyGate;
   origin: string;
+  /** Submit / navigation destination. Omitted for action-scoped gates. */
+  dest?: string;
+  snapshotYaml?: string;
 }): string {
   const payload = canonicalJson({
-    args: input.args,
+    args: actionIdentity(input.args, input.snapshotYaml),
+    dest: input.dest,
     gate: input.gate,
     origin: input.origin,
     tool: input.tool,
@@ -47,18 +120,22 @@ export function createApproval(opts: {
   task_id: string;
   control_epoch: number;
   origin: string;
+  dest?: string;
   now?: Date;
   ttl_sec?: number;
   approval_id?: string;
+  snapshotYaml?: string;
 }): ApprovalRequest {
   const now = opts.now ?? new Date();
   const ttl = opts.ttl_sec ?? APPROVAL_TTL_SEC;
   const expires = new Date(now.getTime() + ttl * 1000).toISOString();
+  const args = actionIdentity(opts.args, opts.snapshotYaml);
   const action_hash = computeActionHash({
     tool: opts.tool,
-    args: opts.args,
+    args,
     gate: opts.gate,
     origin: opts.origin,
+    dest: opts.dest,
   });
   const bind: ApprovalBind = {
     task_id: opts.task_id,
@@ -70,7 +147,7 @@ export function createApproval(opts: {
   return {
     approval_id: opts.approval_id ?? `ap_${randomUUID()}`,
     tool: opts.tool,
-    args: opts.args,
+    args,
     gate: opts.gate,
     bind,
     created_at: now.toISOString(),

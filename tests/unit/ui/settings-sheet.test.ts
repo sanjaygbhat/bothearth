@@ -39,7 +39,7 @@ async function openSheet(startHash = "#/settings", overrides: Record<string, unk
   return { dom, module, view, gear, sheet: dom.root.querySelector(".set-sheet") as FakeElement };
 }
 
-test("the sheet is one dialog with six sections and the Model connection open first", async () => {
+test("the sheet is one dialog with seven sections and the Model connection open first", async () => {
   const { dom, sheet, view } = await openSheet();
   try {
     assert.equal(sheet.getAttribute("role"), "dialog");
@@ -47,7 +47,7 @@ test("the sheet is one dialog with six sections and the Model connection open fi
     const rail = sheet.querySelector(".set-rail") as FakeElement;
     assert.deepEqual(
       rail.children.map((b) => b.textContent),
-      ["Model connection", "Computers", "Devices", "Usage", "Licence", "About"],
+      ["Model connection", "Computers", "Sensitive actions", "Devices", "Usage", "Licence", "About"],
     );
     assert.equal(rail.querySelector('[aria-current="page"]')?.textContent, "Model connection");
     assert.ok(byText(sheet, "Model connection"), "the pane names the section it is showing");

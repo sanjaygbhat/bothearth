@@ -67,6 +67,19 @@ export interface LiveModeMsg {
   mode: LiveMode;
   epoch: number;
   reason?: string;
+  expires_at?: string | null;
+}
+
+export interface LiveHeartbeat {
+  v: 1;
+  t: "ping" | "pong";
+}
+
+export interface LiveInputAck {
+  v: 1;
+  t: "input_ack";
+  epoch: number;
+  expires_at?: string | null;
 }
 
 /** Server-to-client failure; clients must invalidate local screen authority. */
@@ -77,6 +90,14 @@ export interface LiveError {
   message: string;
 }
 
+/** Desktop capture child died or could not produce a first frame. */
+export interface LiveProducer {
+  v: 1;
+  t: "producer";
+  status: "restarting" | "failed";
+  reason?: string;
+}
+
 export type LiveControlMessage =
   | LiveHello
   | LiveFrameAck
@@ -84,7 +105,10 @@ export type LiveControlMessage =
   | LiveKey
   | LiveText
   | LiveModeMsg
-  | LiveError;
+  | LiveHeartbeat
+  | LiveInputAck
+  | LiveError
+  | LiveProducer;
 
 export function encodeLiveFrame(
   header: ScreencastFrameHeader,

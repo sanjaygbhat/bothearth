@@ -233,14 +233,23 @@ export interface HardeningLimits {
 }
 
 export const DEFAULT_LIMITS: HardeningLimits = {
-  browserMemory: "2g",
+  browserMemory: "4g",
   browserCpus: 2,
   browserPids: 512,
-  browserShm: "1g",
+  browserShm: "2g",
   shellMemory: "512m",
   shellCpus: 1,
   shellPids: 512,
 };
+
+const MEMORY_UNIT: Record<string, number> = { k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
+
+/** Docker-style `512m` / `4g` / `1GiB` → bytes. */
+export function parseDockerMemoryBytes(spec: string): number | undefined {
+  const m = /^(\d+(?:\.\d+)?)\s*([kmg])i?b?$/i.exec(spec.trim());
+  if (!m) return undefined;
+  return Number(m[1]) * MEMORY_UNIT[m[2]!.toLowerCase()]!;
+}
 
 export interface FlagBuildOpts {
   name: string;

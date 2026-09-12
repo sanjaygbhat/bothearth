@@ -23,12 +23,14 @@ import type {
   NativeProvider,
   NativeTaskSettings,
   EventType,
+  PolicyGate,
   ProviderAdapter,
   SandboxRuntime,
   ToolName,
   ToolResult,
   UiEvent,
 } from "../types/contracts.ts";
+import { OPTIONAL_POLICY_GATES } from "../types/contracts.ts";
 import {
   CSRF_HEADER,
   SESSION_COOKIE,
@@ -39,12 +41,14 @@ import {
   canonicalHttpsOrigin,
   deviceId,
   isMcpToken,
+  mintToken,
   parseCookies,
   sessionCookieHeader,
 } from "./auth.ts";
 import { EventBus, makeEvent } from "./events.ts";
 import { logError, logInfo } from "./log.ts";
-import { harnessCapReason, MAX_TASK_ORIGIN_GRANTS, RECEIPT_REPAIR_VERSION, STALE_TAKEOVER_VERSION, Store, type TaskRow, type ComputerRow, takeoverEpochFromData, isTakeoverPending } from "./store.ts";
+import { harnessCapReason, MAX_TASK_ORIGIN_GRANTS, RECEIPT_REPAIR_VERSION, STALE_TAKEOVER_VERSION, Store, taskSummaryFromEvents, type TaskRow, type ComputerRow, type TakeoverRow, takeoverEpochFromData, isTakeoverPending } from "./store.ts";
+import { zipStore } from "./zip-store.ts";
 import {
   acceptWebSocket,
   rejectUpgrade,
@@ -66,17 +70,18 @@ import {
   type McpServerOptions,
   type McpToolBackend,
 } from "../mcp/index.ts";
-import { DEFAULT_MAX_STEPS, DEFAULT_SPEND_CAP_MAX_USD, DEFAULT_SPEND_CAP_USD, browserUnavailableDetail, maxRuntimeStopDetail, maxStepsStopDetail, runAgentLoop, spendCapStopDetail, type AgentLoopOptions } from "./agent-loop.ts";
+import { BROWSER_RELAUNCH_ACTIVITY, BROWSER_TIMEOUT_RELAUNCH_AFTER, DEFAULT_MAX_STEPS, DEFAULT_SPEND_CAP_MAX_USD, DEFAULT_SPEND_CAP_USD, browserToolTimedOut, browserUnavailableDetail, maxRuntimeStopDetail, maxStepsStopDetail, runAgentLoop, spendCapStopDetail, type AgentLoopOptions } from "./agent-loop.ts";
 import { taskActivity, taskBudget, taskResult, takeoverContext } from "./task-view.ts";
 import { MAX_RUNTIME_STOP, runCodexTask, type CodexRunnerConfig } from "./codex-runner.ts";
 import { getNativeModelCatalog, resolveNativeTaskSettings } from "./native-models.ts";
-import { GUEST_CLAUDE_HOME, GUEST_CODEX_HOME, guestSpawn, setGuestComputerPaused } from "./guest-native.ts";
+import { GUEST_CLAUDE_HOME, GUEST_CODEX_HOME, forceAgentHomeOwner, guestSpawn, setGuestComputerPaused } from "./guest-native.ts";
 import { activateLicence, licenceState, type LicencePolicy } from "./licence.ts";
 import {
   createA11yDriver,
   createHybridDriver,
   createVisionDriver,
 } from "../drivers/index.ts";
+import { VERSION } from "../index.ts";
 import { startRoutines } from "./routines.ts";
 import {
   ConnectorBroker,
@@ -86,20 +91,33 @@ import {
 import type { Vault } from "../vault/types.ts";
 import { AuditLog } from "../audit/log.ts";
 import { persistedAuditKey } from "../audit/key.ts";
-import { createToolDispatcher, enforceHarnessMcpSpendCap, recordTakeover } from "./dispatcher.ts";
+import {
+  createToolDispatcher,
+  enforceHarnessMcpSpendCap,
+  markTakeoverComputerPending,
+  markTakeoverComputerSynced,
+  recordTakeover,
+  syncAndGrantTakeover,
+  takeoverNeedsComputerSync,
+} from "./dispatcher.ts";
+import { parse } from "tldts";
 import { approvalGrantOrigins, decideApproval as decideBoundApproval } from "../policy/approvals.ts";
+import { writePolicyGates } from "../config/load.ts";
 import type { ApprovalBind, ApprovalRequest, ApprovalStatus } from "../types/contracts.ts";
 import { createUiStaticHandler } from "../ui/static.ts";
 import { TOOL_CATALOGUE } from "../tools/catalog.ts";
 import { createIdlePauseController } from "../sandbox/idle-pause.ts";
-import { pauseComputer, unpauseComputer } from "../sandbox/lifecycle.ts";
+import { computerImageDrifted, ensureAgentHomeOwner, forgetComputerLogins, pauseComputer, reconcileComputerLimits, unpauseComputer } from "../sandbox/lifecycle.ts";
+import { createDockerCli } from "../sandbox/docker.ts";
+import { detectRuntime } from "../sandbox/detect.ts";
 import {
   createDockerBuildRunner,
   createImagePreparer,
   createRuntimeProbe,
+  type PrepareDeps,
   type RuntimeStatus,
 } from "./runtime.ts";
-import { classifyFailureKind, classifyProviderLimit, createProviderLimits, providerLimitFields, type FailureKind } from "./provider-limit.ts";
+import { classifyFailureKind, classifyProviderLimit, createProviderLimits, providerLimitFields, providerLimitPauseDetail, type FailureKind } from "./provider-limit.ts";
 import { resolveTool } from "./resolve-tool.ts";
 
 export interface StandaloneAgentConfig {
@@ -126,6 +144,7 @@ export interface StandaloneAgentConfig {
   tokenCapIn?: number | null;
   declaredOrigins?: AgentLoopOptions["declaredOrigins"];
   mode?: AgentLoopOptions["mode"];
+  enabledGates?: PolicyGate[];
   policyGate?: AgentLoopOptions["policyGate"];
   stopAndAsk?: AgentLoopOptions["stopAndAsk"];
   createDriver?: (kind: DriverKind, computer: ComputerClient) => Driver;
@@ -144,7 +163,15 @@ export interface DaemonOptions {
   sandbox?: SandboxRuntime & {
     start?(computerId: string): Promise<void>;
     refreshImage?(computerId: string, capabilities: ComputerCapability[]): Promise<boolean>;
+    imageDrifted?(computerId: string, capabilities?: ComputerCapability[]): Promise<boolean>;
+    inspectStatus?(computerId: string, capabilities?: ComputerCapability[]): Promise<"running" | "paused" | "stopped" | undefined>;
+    reconcileLimits?(
+      computerId: string,
+      capabilities: ComputerCapability[],
+      opts: { allowRecreate: boolean },
+    ): Promise<"updated" | "recreated" | false>;
     get?(computerId: string): { workspaceRoot?: string } | undefined;
+    forgetLogins?(computerId: string, capabilities?: ComputerCapability[]): Promise<void>;
   };
   allowedHosts?: string[];
   /** Canonical HTTPS proxy origin; transport stays on loopback. */
@@ -169,8 +196,16 @@ export interface DaemonOptions {
   auditLog?: AuditLog;
   mode?: "supervised" | "strict";
   declaredOrigins?: AgentLoopOptions["declaredOrigins"];
+  /** Schema `policy.gates`. Omitted = none armed. Tests that need gates pass an explicit list. */
+  enabledGates?: PolicyGate[];
+  /** Schema `policy.kill_switch`. True → evaluateGate denies every tool call. */
+  killSwitch?: boolean;
+  /** `modelbot.yaml` path, so Settings can persist `policy.gates`. */
+  configPath?: string;
   /** Minutes of no tool/resume activity before `pauseComputer`. 0 disables. Default 10. */
   idlePauseMin?: number;
+  /** Schema `sandbox.max_computers`. Create cap when set; production always sets it. */
+  maxComputers?: number;
   /** Harness budget proxy only; this is not measured provider spend. Default $0.01/call. */
   mcpToolCallProxyUsd?: number;
   /** Schema `policy.approval_ttl_sec`. Seconds an approval stays answerable. */
@@ -195,11 +230,15 @@ export interface DaemonOptions {
    * CLI that happens to be installed on the machine running them.
    */
   autoConnectProvider?: boolean;
+  dockerReady?: () => boolean | Promise<boolean>;
+  /** Tests: POST /runtime/prepare without spawning docker. */
+  runBuild?: PrepareDeps["runBuild"];
 }
 
 const DEFAULT_MCP_TOOL_CALL_PROXY_USD = 0.01;
 const DEFAULT_TAKEOVER_TTL_SEC = 600;
 export const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+const GOOGLE_ACCOUNT_CHOOSER = "https://accounts.google.com/AccountChooser";
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -251,10 +290,97 @@ export async function restoreTakeoverExpiries(
  * string, so the filename is reduced to its last segment and encoded per RFC
  * 5987 — a header value can never carry a quote, a newline, or a directory.
  */
-export function contentDisposition(rel: string): string {
+export function contentDisposition(rel: string, kind: "attachment" | "inline" = "attachment"): string {
   const base = rel.split(/[\\/]/).pop() ?? "";
   const safe = base.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "file";
-  return `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+  return `${kind}; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+}
+
+/**
+ * Workspace-relative path the files route will open. Strips a container
+ * `/workspace/` prefix, then refuses `..`, NUL, and host-absolute paths.
+ */
+export function workspaceFileRel(rel: string): string | null {
+  if (!rel || rel.includes("\0")) return null;
+  const stripped = rel.replace(/^\/+workspace\/+/, "");
+  if (!stripped) return null;
+  if (stripped.startsWith("/") || stripped.startsWith("\\") || /^[a-zA-Z]:[\\/]/.test(stripped)) return null;
+  if (stripped.split(/[\\/]/).includes("..")) return null;
+  return stripped;
+}
+
+const INLINE_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  pdf: "application/pdf",
+  txt: "text/plain; charset=utf-8",
+  md: "text/plain; charset=utf-8",
+  csv: "text/plain; charset=utf-8",
+  json: "text/plain; charset=utf-8",
+  log: "text/plain; charset=utf-8",
+  html: "text/plain; charset=utf-8",
+  htm: "text/plain; charset=utf-8",
+  svg: "text/plain; charset=utf-8",
+  xml: "text/plain; charset=utf-8",
+};
+
+function inlineType(rel: string): string {
+  const base = rel.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return "application/octet-stream";
+  return INLINE_TYPES[base.slice(dot + 1).toLowerCase()] ?? "application/octet-stream";
+}
+
+export function localWorkspaceVisible(publicOrigin: string | undefined): boolean {
+  if (!publicOrigin) return true;
+  try {
+    const host = new URL(publicOrigin).hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+type JailedFile =
+  | { handle: Awaited<ReturnType<typeof open>>; size: number; rel: string }
+  | { error: "jail" | "gone" };
+
+/** Open a regular file under `workspace`. Follows the same jail as GET /files. */
+export async function openWorkspaceFile(workspace: string, rel: string): Promise<JailedFile> {
+  const cleaned = workspaceFileRel(rel);
+  if (cleaned === null) return { error: "jail" };
+  try {
+    const lexicalBase = resolve(workspace);
+    const bare = !cleaned.includes("/") && !cleaned.includes("\\");
+    let lexicalTarget = resolve(lexicalBase, cleaned);
+    if (lexicalTarget !== lexicalBase && !lexicalTarget.startsWith(lexicalBase + sep)) return { error: "jail" };
+    if (bare && !statSync(lexicalTarget, { throwIfNoEntry: false })?.isFile()) {
+      const fallback = resolve(lexicalBase, "out", cleaned);
+      if (fallback === lexicalBase || !fallback.startsWith(lexicalBase + sep)) return { error: "jail" };
+      lexicalTarget = fallback;
+    }
+    if (lexicalTarget === lexicalBase) return { error: "jail" };
+    const base = await realpath(lexicalBase);
+    const target = await realpath(lexicalTarget);
+    if (target !== base && !target.startsWith(base + sep)) return { error: "jail" };
+    const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        await handle.close();
+        return { error: "gone" };
+      }
+      return { handle, size: stat.size, rel: cleaned };
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  } catch {
+    return { error: "gone" };
+  }
 }
 
 /**
@@ -372,6 +498,73 @@ export interface DaemonHandle {
   auditLog: AuditLog;
 }
 
+function harnessMcpAbortResult(signal: AbortSignal): ToolResult {
+  const reason = signal.reason;
+  if (reason === "mcp_tool_timeout") {
+    return toolError("E_TIMEOUT", "tool call aborted", { cause: "mcp_tool_timeout" });
+  }
+  if (reason && typeof reason === "object") {
+    const details = reason as { cause?: unknown; timeout_ms?: unknown };
+    if (details.cause === "mcp_tool_timeout") {
+      return toolError(
+        "E_TIMEOUT",
+        "tool call aborted",
+        typeof details.timeout_ms === "number"
+          ? { cause: "mcp_tool_timeout", timeout_ms: details.timeout_ms }
+          : { cause: "mcp_tool_timeout" },
+      );
+    }
+  }
+  return toolError("E_TIMEOUT", "tool call aborted", { cause: "abort" });
+}
+
+/** First-wins abort vs dispatcher; occupancy is released when `dispatch` settles. */
+export async function raceHarnessMcpToolCall(opts: {
+  dispatch: Promise<ToolResult>;
+  signal: AbortSignal;
+  emitError: (result: ToolResult) => void | Promise<void>;
+  onDispatchSettled: () => void;
+}): Promise<ToolResult> {
+  void opts.dispatch.finally(opts.onDispatchSettled);
+  let fromDispatch = false;
+  const raced = await new Promise<ToolResult>((resolve) => {
+    let settled = false;
+    const finish = (value: ToolResult, dispatched: boolean) => {
+      if (settled) return;
+      settled = true;
+      fromDispatch = dispatched;
+      opts.signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const onAbort = () => finish(harnessMcpAbortResult(opts.signal), false);
+    if (opts.signal.aborted) onAbort();
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
+    void opts.dispatch.then(
+      (value) => finish(value, true),
+      (error) =>
+        finish(toolError("E_IO", error instanceof Error ? error.message : String(error)), true),
+    );
+  });
+  if (!fromDispatch && !raced.ok && raced.error.code === "E_TIMEOUT") {
+    await opts.emitError(raced);
+  }
+  return raced;
+}
+
+/** eTLD+1 cookie hosts for the operator UI. Never logs, never cookie values. */
+export function signedInSiteDomains(hosts: unknown): string[] {
+  if (!Array.isArray(hosts)) return [];
+  const out = new Set<string>();
+  for (const item of hosts) {
+    if (typeof item !== "string") continue;
+    if (item.includes("=") || item.includes(" ") || item.includes(";")) continue;
+    const host = item.replace(/^\./, "").trim().toLowerCase();
+    if (!host || host.length > 253) continue;
+    out.add(parse(host, { allowPrivateDomains: true }).domain ?? host);
+  }
+  return [...out].sort();
+}
+
 export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const host = opts.host ?? "127.0.0.1";
   const wantPort = opts.port ?? 7777;
@@ -384,6 +577,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   }
 
   const store = new Store(opts.sqlitePath ?? ":memory:");
+  for (const computer of store.listComputers()) {
+    const binding = store.getHarnessTaskBinding(computer.id);
+    if (!binding) continue;
+    const adapter = store.getTask(binding.task_id)?.adapter;
+    if (adapter !== "codex" && adapter !== "claude") continue;
+    if (binding.spend_cap_usd === 0 && binding.max_steps === 0) continue;
+    store.setTaskSpendCap(binding.task_id, 0);
+    store.setTaskMaxSteps(binding.task_id, 0);
+  }
+  const enabledGates: PolicyGate[] = [...(opts.enabledGates ?? [])];
+  let killSwitch = opts.killSwitch === true;
+  const currentControlEpoch = (computerId: string): number =>
+    store.latestTakeoverForComputer(computerId)?.epoch ?? 0;
   const savedConnection = store.getCodexConnection();
   if (!opts.codexRunner && savedConnection) opts.codexRunner = { codexHome: savedConnection.home, model: savedConnection.model, provider: savedConnection.provider };
   // A model name alone is not a working configuration: the shipped example
@@ -394,25 +600,33 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
    * budget field a lie. `agent.spend_cap_usd` is what a task gets when nobody
    * chooses; `agent.spend_cap_max_usd` is the most anyone may choose. A request
    * above the maximum is refused by name rather than silently clamped.
+   *
+   * Native Codex / Claude Code tasks have no BotHearth spend cap: the $0.01/call
+   * figure is a proxy estimate, not a bill. These numbers apply to the
+   * API-adapter loop only.
    */
-  const spendCapDefault = (): number => opts.agentLoop?.spendCapUsd ?? DEFAULT_SPEND_CAP_USD;
+  let defaultSpendCapUsd = opts.agentLoop?.spendCapUsd ?? DEFAULT_SPEND_CAP_USD;
+  const spendCapDefault = (): number => defaultSpendCapUsd;
   // An operator who named a per-task figure and no maximum named both: raising
-  // their ceiling to the built-in $100 spends real money they never authorised.
+  // past that figure spends money they never authorised. 0 = no maximum.
   const spendCapMax = (): number => opts.spendCapMaxUsd ??
     (opts.agentLoop?.spendCapUsd !== undefined ? spendCapDefault() : DEFAULT_SPEND_CAP_MAX_USD);
-  const spendCap = (requested?: number | null): number =>
-    Math.min(requested ?? spendCapDefault(), spendCapMax());
+  const spendCap = (requested?: number | null): number => {
+    const want = requested ?? spendCapDefault();
+    const max = spendCapMax();
+    return max > 0 ? Math.min(want, max) : want;
+  };
   const perCallUsd = opts.mcpToolCallProxyUsd ?? DEFAULT_MCP_TOOL_CALL_PROXY_USD;
-  /** Steps a task gets when the request names none: `agent.max_steps`, else the built-in. */
-  const defaultMaxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
+  /** API-adapter steps when the request names none: `agent.max_steps`, else the built-in. 0 = no cap. Native tasks do not use this. */
+  let defaultMaxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
   const executionInfo = {
     standalone_available: standaloneAvailable,
     task_start_available: Boolean(opts.codexRunner) || standaloneAvailable,
     execution_mode: opts.codexRunner ? opts.codexRunner.provider ?? "codex" : standaloneAvailable ? "standalone" : null,
     model: opts.codexRunner?.model ?? (standaloneAvailable ? opts.agentLoop!.model : null),
-    spend_cap_usd: opts.codexRunner || standaloneAvailable ? spendCap() : null,
+    spend_cap_usd: opts.codexRunner ? null : standaloneAvailable ? (spendCap() > 0 ? spendCap() : null) : null,
     budget_kind: opts.codexRunner ? "tool_proxy" : standaloneAvailable ? "provider_estimate" : null,
-    budget: { default_usd: spendCapDefault(), max_usd: spendCapMax(), per_call_usd: perCallUsd },
+    budget: opts.codexRunner ? null : { default_usd: spendCapDefault() > 0 ? spendCapDefault() : null, max_usd: spendCapMax() > 0 ? spendCapMax() : null, per_call_usd: perCallUsd },
   };
   const providerLimits = createProviderLimits();
   const guestExecution = opts.nativeExecutionLocation === "computer";
@@ -445,8 +659,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           ...(loginOptions?.binary ? { binary: loginOptions.binary } : {}) };
         store.setCodexConnection(loginHome, model, provider);
         Object.assign(executionInfo, { task_start_available: true, execution_mode: provider, model,
-          spend_cap_usd: spendCap(), budget_kind: "tool_proxy",
-          budget: { default_usd: spendCapDefault(), max_usd: spendCapMax(), per_call_usd: perCallUsd } });
+          spend_cap_usd: null, budget_kind: "tool_proxy", budget: null });
         return true;
       },
     })];
@@ -458,10 +671,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     const key = `${computerId}:${provider}`;
     let connection = guestConnections.get(key);
     if (!connection) {
+      const loginOptions = provider === "codex" ? opts.codexLogin : opts.claudeLogin;
       connection = createCodexConnection({ provider,
         codexHome: provider === "codex" ? GUEST_CODEX_HOME : GUEST_CLAUDE_HOME,
         loginMode: provider === "codex" ? "device" : "terminal",
-        spawn: args => guestSpawn(computerId, provider, args),
+        spawn: loginOptions?.spawn ?? (args => guestSpawn(computerId, provider, args)),
+        repairAgentHome: loginOptions?.repairAgentHome ?? (() => useFakeComputer() ? Promise.resolve() : forceAgentHomeOwner(computerId)),
         authorized: owner => Boolean(store.getSession(owner)),
         model: () => nativeRunnerConfig(provider).model,
         configured: () => Boolean(opts.codexRunner) && (opts.codexRunner?.provider ?? "codex") === provider,
@@ -472,7 +687,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           opts.codexRunner = { ...nativeRunnerConfig(provider), model };
           store.setCodexConnection(opts.codexRunner.codexHome, model, provider);
           Object.assign(executionInfo, { task_start_available: true, execution_mode: provider, model,
-            spend_cap_usd: spendCap(), budget_kind: "tool_proxy" });
+            spend_cap_usd: null, budget_kind: "tool_proxy", budget: null });
           return true;
         },
       });
@@ -486,19 +701,127 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
    * connection is not the same as a usable one: a remembered refusal rides
    * along on the status the UI reads.
    */
+  function computerFailure(error: unknown): { message: string; recovery: { action: string; label: string } } {
+    const text = `${(error as NodeJS.ErrnoException).code ?? ""} ${error instanceof Error ? error.message : error}`;
+    if (/ENOENT|ECONNREFUSED|cannot connect|daemon is not running|Is the docker daemon running/i.test(text)) {
+      return { message: "Docker is not reachable", recovery: { action: "check_again", label: "Check again" } };
+    }
+    return { message: "The bot’s computer is not running", recovery: { action: "start_computer", label: "Start computer" } };
+  }
+  function unavailableProbeLog(computer: string | undefined, state: { status?: unknown; message?: unknown; stale?: unknown }) {
+    return {
+      path: "/api/v1/tasks",
+      computer,
+      status: state.status,
+      message: state.message,
+      cause: state.stale === true ? "stale" : state.status,
+    };
+  }
+  function providerStartMessage(adapter: NativeProvider, state: { status?: unknown; message?: unknown }, executor = false): string {
+    if (state.status === "signed_out") {
+      return executor
+        ? "Connect the selected executor before starting orchestration."
+        : `Connect ${adapter === "codex" ? "Codex" : "Claude Code"} before starting.`;
+    }
+    if (typeof state.message === "string" && state.message) return state.message;
+    return "The connection could not be checked. Choose Check again in a moment.";
+  }
+  const START_PROBE_WAIT_MS = 15_000;
+  function providerReady(status: unknown): boolean {
+    return status === "connected" || status === "signed_in";
+  }
+  async function awaitProviderForStart(
+    adapter: NativeProvider, sessionId: string, computerId?: string,
+  ) {
+    const deadline = Date.now() + START_PROBE_WAIT_MS;
+    const starting = { status: "starting", message: "BotHearth is still starting its runtime." };
+    for (;;) {
+      let state: Awaited<ReturnType<typeof connectionStatus>> | undefined;
+      const probe = connectionStatus(adapter, sessionId, computerId).then((s) => { state = s; });
+      while (state === undefined && Date.now() < deadline) {
+        await Promise.race([probe, new Promise((resolve) => setTimeout(resolve, 50))]);
+      }
+      if (state === undefined) return starting;
+      if (providerReady(state.status) || state.status !== "signed_out") return state;
+      if (Date.now() >= deadline) return state;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500, deadline - Date.now())));
+      if (Date.now() >= deadline) return state;
+    }
+  }
+  function humanHoldBlocksProbe(computerId: string): boolean {
+    const hold = store.activeTakeoverForComputer(computerId);
+    if (!hold) return false;
+    return hold.state === "human" || hold.state === "resume_validating"
+      || Boolean(hold.granted_to && (hold.state === "paused" || hold.state === "takeover_requested"));
+  }
   async function connectionStatus(provider: NativeProvider = opts.codexRunner?.provider ?? "codex", audience?: string, computerId = defaultComputer()?.id) {
+    const computer = computerId ? store.getComputer(computerId) : undefined;
+    const location = { execution_location: guestExecution ? "computer" as const : "host" as const, ...(computerId ? { computer_id: computerId } : {}) };
+    const base = { provider, model: nativeRunnerConfig(provider).model,
+      login_mode: provider === "codex" ? "device" as const : "terminal" as const };
+    if (guestExecution && computer) {
+      if (computer.status === "stopped") {
+        return { ...base, status: "error", message: "The bot’s computer is not running",
+          recovery: { action: "start_computer", label: "Start computer" }, ...location };
+      }
+      if (humanHoldBlocksProbe(computer.id)) {
+        if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider)
+          executionInfo.task_start_available = false;
+        return { ...base, status: "unknown", message: "Can’t check while you have control", ...location };
+      }
+      const held = store.activeTakeoverForComputer(computer.id);
+      let inspect: "running" | "paused" | "stopped" | undefined;
+      if (!held && sandbox.inspectStatus) {
+        try {
+          inspect = await sandbox.inspectStatus(
+            computer.id,
+            JSON.parse(computer.capabilities) as ComputerCapability[],
+          );
+        } catch { /* Docker down: start still reports that. */ }
+      }
+      if (!held && inspect !== "paused" && inspect !== "running" && sandbox.start) {
+        try { await sandbox.start(computer.id); }
+        catch (error) { return { ...base, status: "error", ...computerFailure(error), ...location }; }
+        if (!await awaitComputerReady(computer.id)) {
+          return { ...base, status: "error", message: "The bot’s computer is not running",
+            recovery: { action: "start_computer", label: "Start computer" }, ...location };
+        }
+      }
+    }
     const connection = connectionFor(provider, computerId);
     const state = connection ? await connection.status(audience) : {
-      status: "signed_out", provider, model: nativeRunnerConfig(provider).model,
-      login_mode: provider === "codex" ? "device" as const : "terminal" as const,
+      ...base, status: "signed_out",
       message: "Sign in to your model account. BotHearth will prepare your computer first.",
     };
+    if (guestExecution && computer && humanHoldBlocksProbe(computer.id)
+      && state.status !== "connected" && state.status !== "signed_in" && state.status !== "signing_in") {
+      if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider)
+        executionInfo.task_start_available = false;
+      return { ...state, status: "unknown", message: "Can’t check while you have control", ...location };
+    }
     if (opts.codexRunner && (opts.codexRunner.provider ?? "codex") === provider)
       executionInfo.task_start_available = state.status === "connected" || state.status === "signed_in";
     const limit = providerLimits.get(provider);
-    return { ...state, ...(limit ? { limit } : {}), execution_location: guestExecution ? "computer" : "host", ...(computerId ? { computer_id: computerId } : {}) };
+    const recovery = state.status === "error" && guestExecution && computer && !("recovery" in state)
+      ? { recovery: { action: "check_again", label: "Check again" } } : {};
+    return { ...state, ...((state.status === "connected" || state.status === "signed_in") ? { message: "" } : {}),
+      ...(limit ? { limit } : {}), ...recovery, ...location };
   }
-  if (opts.codexRunner) await connectionStatus();
+  async function awaitComputerReady(computerId: string): Promise<boolean> {
+    if (!sandbox.inspectStatus) return true;
+    const deadline = Date.now() + 5_000;
+    const row = store.getComputer(computerId);
+    const capabilities = row ? JSON.parse(row.capabilities) as ComputerCapability[] : undefined;
+    const running = async () => {
+      try { return await sandbox.inspectStatus!(computerId, capabilities) === "running"; }
+      catch { return false; }
+    };
+    while (Date.now() < deadline) {
+      if (await running()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return running();
+  }
 
   const dataDir = opts.dataDir
     ?? (opts.sqlitePath && opts.sqlitePath !== ":memory:" ? dirname(opts.sqlitePath) : join(homedir(), "ModelBot"));
@@ -514,7 +837,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const withoutBuildLog = (status: RuntimeStatus): RuntimeStatus =>
     ({ ...status, images: { ...status.images, prepare: redactPrepare(status.images.prepare) } });
   const imagePreparer = createImagePreparer({
-    runBuild: createDockerBuildRunner({ logPath: imageBuildLogPath }),
+    runBuild: opts.runBuild ?? createDockerBuildRunner({ logPath: imageBuildLogPath }),
     logPath: imageBuildLogPath,
   });
   /** One prepare attempt per cooldown, counted from the last attempt. */
@@ -578,14 +901,42 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   /**
    * A browser that will not start blocks every task on its computer, and the
    * model cannot restart one. Remember which computer said so, and clear it
-   * only when a browser call on that computer works again.
+   * only when a browser call on that computer works again. Repeated `browser_*`
+   * `E_TIMEOUT`s or crash `E_IO`s (`BROWSER_TIMEOUT_RELAUNCH_AFTER`) also mark
+   * it down so the
+   * existing snapshot probe can relaunch Chromium: closing the stdio client
+   * ends computer-server, which runs `closeBrowser`, and the next snapshot
+   * starts a new session. Never relaunch while a human hold or takeover request
+   * owns the picture; the next probe after the hold ends does it then.
    */
   let browserDown: { computer_id: string; detail: string } | null = null;
   let browserRetry: Promise<unknown> | undefined;
-  function noteBrowserHealth(computerId: string, tool: string, result: ToolResult): void {
+  const browserTimeouts = new Map<string, number>();
+  let browserRelaunch: { computer_id: string; task_id?: string } | null = null;
+  function noteBrowserHealth(computerId: string, tool: string, result: ToolResult, taskId?: string): void {
     const detail = browserUnavailableDetail(result);
-    if (detail) browserDown = { computer_id: computerId, detail };
-    else if (result.ok && tool.startsWith("browser_") && browserDown?.computer_id === computerId) browserDown = null;
+    if (detail) {
+      browserDown = { computer_id: computerId, detail };
+      if (browserRelaunch?.computer_id === computerId) browserRelaunch = null;
+      return;
+    }
+    if (result.ok && tool.startsWith("browser_")) {
+      if (taskId) browserTimeouts.delete(taskId);
+      browserTimeouts.delete(computerId);
+      if (browserDown?.computer_id === computerId) browserDown = null;
+      if (browserRelaunch?.computer_id === computerId) browserRelaunch = null;
+      return;
+    }
+    if (!browserToolTimedOut(tool, result)) return;
+    const key = taskId ?? computerId;
+    const n = (browserTimeouts.get(key) ?? 0) + 1;
+    if (n < BROWSER_TIMEOUT_RELAUNCH_AFTER) {
+      browserTimeouts.set(key, n);
+      return;
+    }
+    browserTimeouts.set(key, 0);
+    browserDown = { computer_id: computerId, detail: BROWSER_RELAUNCH_ACTIVITY };
+    browserRelaunch = { computer_id: computerId, ...(taskId ? { task_id: taskId } : {}) };
   }
   /** Reports the blocker and, while it stands, retries the launch in the background. */
   function browserBlocked(): string | null {
@@ -595,13 +946,36 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     // cannot start, and probing it would keep the blocker up forever.
     if (store.getComputer(down.computer_id)?.status !== "running") {
       browserDown = null;
+      browserRelaunch = null;
       return null;
     }
-    browserRetry ??= getClient(down.computer_id)
-      .call("browser_snapshot", {})
-      .then((result) => noteBrowserHealth(down.computer_id, "browser_snapshot", result))
-      .catch(() => undefined)
-      .finally(() => { browserRetry = undefined; });
+    // The human owns the picture: do not kill Chromium or advertise a blocker.
+    if (store.activeTakeoverForComputer(down.computer_id)) return null;
+    browserRetry ??= (async () => {
+      const pending = browserRelaunch?.computer_id === down.computer_id ? browserRelaunch : null;
+      if (pending) {
+        if (store.activeTakeoverForComputer(down.computer_id)) return;
+        browserRelaunch = null;
+        const client = clients.get(down.computer_id);
+        if (client) {
+          await client.close().catch(() => undefined);
+          clients.delete(down.computer_id);
+        }
+        if (pending.task_id && store.getTask(pending.task_id)) {
+          store.insertStep(pending.task_id, 0, "assistant", {
+            role: "assistant",
+            content: BROWSER_RELAUNCH_ACTIVITY,
+          });
+          await emit("task.step", { status: "running", message: true }, {
+            task_id: pending.task_id,
+            computer_id: down.computer_id,
+          });
+        }
+      }
+      const result = await getClient(down.computer_id).call("browser_snapshot", {});
+      // A probe timeout must not count toward another relaunch; success clears.
+      if (result.ok) noteBrowserHealth(down.computer_id, "browser_snapshot", result, pending?.task_id);
+    })().catch(() => undefined).finally(() => { browserRetry = undefined; });
     return down.detail;
   }
 
@@ -627,8 +1001,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     (createDefaultSandbox({ workspaceRoot }) as SandboxRuntime & {
       start?(computerId: string): Promise<void>;
       refreshImage?(computerId: string, capabilities: ComputerCapability[]): Promise<boolean>;
+      imageDrifted?(computerId: string, capabilities?: ComputerCapability[]): Promise<boolean>;
+      inspectStatus?(computerId: string, capabilities?: ComputerCapability[]): Promise<"running" | "paused" | "stopped" | undefined>;
+      reconcileLimits?(
+        computerId: string,
+        capabilities: ComputerCapability[],
+        opts: { allowRecreate: boolean },
+      ): Promise<"updated" | "recreated" | false>;
       get?(computerId: string): { workspaceRoot?: string } | undefined;
+      forgetLogins?(computerId: string, capabilities?: ComputerCapability[]): Promise<void>;
     });
+  if (opts.codexRunner) await connectionStatus();
 
   // Receipts written before the receipt was taught to read outcomes
   // instead of requests still name files that were never written, and those
@@ -656,6 +1039,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   }
 
   let closing = false;
+  let computerImagesReconcile: Promise<void> = Promise.resolve();
+  function enqueueComputerImagesReconcile(): void {
+    const previous = computerImagesReconcile;
+    computerImagesReconcile = (async () => {
+      await Promise.allSettled([previous]);
+      await Promise.allSettled([reconcileComputerImages()]);
+    })();
+  }
   const clients = new Map<string, ComputerClient>();
   const controlChanges = new Map<string, Promise<unknown>>();
   async function changeControl<T>(computerId: string, action: () => Promise<T>): Promise<T> {
@@ -668,7 +1059,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     task.computer_id === computerId && task.execution_location === "computer");
   const taskControllers = new Map<string, AbortController>();
   const taskRuns = new Map<string, Promise<unknown>>();
+  /** Open native tool ids keyed by task then catalog name, so started/finished/`tool.call` share one id. */
+  const nativeCallIds = new Map<string, Map<string, string[]>>();
   const liveSubs = new Map<string, Set<WsSocket>>();
+  const liveFrameAcks = new Map<WsSocket, number | null>();
   const eventSubs = new Set<WsSocket>();
   const socketSessions = new Map<WsSocket, string>();
   function authorizeSocket(ws: WsSocket): boolean {
@@ -717,6 +1111,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   const harnessCallsInFlight = new Map<string, number>();
   const computersCancelling = new Set<string>();
+  /** Same bound computer-server uses on SIGTERM (`rpc-loop.ts` `SHUTDOWN_MS`). */
+  const BROWSER_CLOSE_MS = 5_000;
+  /** Cancel HTTP must not wait on a wedged leftover decline (ledger 92). */
+  const CANCEL_DECLINE_MS = 3_000;
+  const cancelTeardowns = new Map<string, Promise<void>>();
+  const maxComputers = opts.maxComputers ?? 2;
 
   let defaultProvision: Promise<ComputerRow> | undefined;
   function defaultComputer(): ComputerRow | undefined {
@@ -727,7 +1127,69 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       (browsers.length === 1 ? browsers[0] : undefined);
   }
 
+  function occupancyState(computerId: string, containerStatus: string): "idle" | "running" | "paused" | "human-hold" | "stopped" {
+    if (store.activeTakeoverForComputer(computerId)) return "human-hold";
+    const live = store.listTasks().find((task) => task.computer_id === computerId && (task.status === "running" || task.status === "paused"));
+    if (live?.status === "running") return "running";
+    if (live?.status === "paused") return "paused";
+    if (containerStatus === "stopped") return "stopped";
+    if (containerStatus === "paused") return "paused";
+    return "idle";
+  }
+
+  /** Recreate on drift only when idle: no running/paused task, no takeover. */
+  function imageRefreshBlocked(computerId: string): boolean {
+    return Boolean(store.activeTakeoverForComputer(computerId))
+      || store.listTasks().some((task) =>
+        task.computer_id === computerId && ["running", "paused"].includes(task.status));
+  }
+
+  async function listComputerPublic() {
+    return Promise.all(store.listComputers().map(async (c) => {
+      const capabilities = JSON.parse(c.capabilities) as ComputerCapability[];
+      let status = c.status;
+      if (sandbox.inspectStatus) {
+        try { status = await sandbox.inspectStatus(c.id, capabilities) ?? c.status; }
+        catch { /* Docker unreachable: keep the durable row. */ }
+      }
+      let image_drifted = false;
+      if (sandbox.imageDrifted) {
+        try { image_drifted = await sandbox.imageDrifted(c.id, capabilities); }
+        catch { /* Docker unreachable: list the computer without a drift flag. */ }
+      } else if (!useFakeComputer()) {
+        try { image_drifted = await computerImageDrifted(c.id, { workspaceRoot }); }
+        catch { /* Docker unreachable: list the computer without a drift flag. */ }
+      }
+      return {
+        id: c.id,
+        name: c.name,
+        capabilities,
+        persistent: Boolean(c.persistent),
+        status,
+        state: occupancyState(c.id, status),
+        image_drifted,
+        created_at: c.created_at,
+      };
+    }));
+  }
+
+  async function occupancyConflict(computerId: string, activeTask?: TaskRow) {
+    const computers = (await listComputerPublic()).map(({ id, name, state }) => ({ id, name, state }));
+    const hold = store.activeTakeoverForComputer(computerId);
+    const extra = { computers, max_computers: maxComputers };
+    if (hold) return { ...holdConflictBody(hold, computerId), ...extra };
+    return {
+      error: "E_TASK_ACTIVE",
+      message: "Your current task is still working. Open it to continue or stop it before starting another.",
+      ...(activeTask?.id ? { task_id: activeTask.id } : {}),
+      ...extra,
+    };
+  }
+
   async function provisionComputer(body: CreateComputerBody): Promise<ComputerRow> {
+    if (opts.maxComputers !== undefined && store.listComputers().length >= maxComputers) {
+      throw Object.assign(new Error(`You already have ${maxComputers} computers, the maximum.`), { code: "E_LIMIT" });
+    }
     const handle = await sandbox.create(body);
     if (closing) { await sandbox.stop(handle.computer_id); throw new Error("daemon is shutting down"); }
     const computer = store.insertComputer({ id: handle.computer_id, name: handle.name,
@@ -788,22 +1250,62 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
    * boot and after a successful image build.
    */
   async function reconcileComputerImages(): Promise<void> {
-    if (useFakeComputer() || !sandbox.refreshImage) return;
+    if (closing) return;
+    let homeCli: ReturnType<typeof createDockerCli> | undefined;
     for (const computer of store.listComputers()) {
-      // A paused task or private handoff still owns its browser session.
-      if (store.activeTakeoverForComputer(computer.id) || store.listTasks().some((task) =>
-        task.computer_id === computer.id && ["running", "paused"].includes(task.status))) continue;
+      if (closing) return;
+      const capabilities = JSON.parse(computer.capabilities) as ComputerCapability[];
+      const idle = !imageRefreshBlocked(computer.id);
       try {
-        const refreshed = await sandbox.refreshImage(
-          computer.id,
-          JSON.parse(computer.capabilities) as ComputerCapability[],
-        );
+        let limitsChanged: "updated" | "recreated" | false = false;
+        if (sandbox.reconcileLimits) {
+          limitsChanged = await sandbox.reconcileLimits(computer.id, capabilities, {
+            allowRecreate: idle,
+          });
+        } else if (!opts.sandbox && !useFakeComputer()) {
+          limitsChanged = await reconcileComputerLimits(computer.id, capabilities, {
+            allowRecreate: idle,
+            workspaceRoot,
+          });
+        }
+        if (closing) return;
+        if (limitsChanged) {
+          logInfo("computer limits updated", { computer_id: computer.id });
+          if (limitsChanged === "recreated") {
+            const client = clients.get(computer.id);
+            if (client) { await client.close().catch(() => undefined); clients.delete(computer.id); }
+            computerMethods.delete(computer.id);
+          }
+        }
+      } catch (err) {
+        if (closing) return;
+        logInfo("computer limits refresh failed", { computer_id: computer.id, err: String(err) });
+      }
+      if (closing) return;
+      if (!sandbox.refreshImage) continue;
+      // A running or paused task, or an active takeover, still owns its browser.
+      // pauseNativeForRestart flips native running → paused before this runs, so
+      // those must be skipped too. Idle Docker-paused computers (no task, no hold)
+      // are recreated; a paused task is left so resume still has its session.
+      if (!useFakeComputer() && !opts.sandbox) {
+        try {
+          homeCli ??= createDockerCli(await detectRuntime());
+          await ensureAgentHomeOwner(homeCli, computer.id);
+        } catch (err) {
+          logInfo("agent home migrate failed", { computer_id: computer.id, err: String(err) });
+        }
+      }
+      if (imageRefreshBlocked(computer.id)) continue;
+      try {
+        if (imageRefreshBlocked(computer.id)) continue;
+        const refreshed = await sandbox.refreshImage(computer.id, capabilities);
         if (!refreshed) continue;
         logInfo("computer recreated on a newer image", { computer_id: computer.id });
         const client = clients.get(computer.id);
         if (client) { await client.close().catch(() => undefined); clients.delete(computer.id); }
         computerMethods.delete(computer.id);
       } catch (err) {
+        if (closing) return;
         logInfo("computer image refresh failed", { computer_id: computer.id, err: String(err) });
       }
     }
@@ -826,7 +1328,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           return call(...args);
         };
       }
-      c.call = withWake(c.call.bind(c), (method) => method !== "takeover_status");
+      c.call = withWake(
+        c.call.bind(c),
+        (method) => method !== "takeover_status" && method !== "profile.signed-in",
+      );
       const grant = c.grantTakeover.bind(c), release = c.releaseTakeover.bind(c), decline = c.declineTakeover.bind(c);
       const thawIfAgent = async () => {
         const state = await c!.call("takeover_status", {});
@@ -838,7 +1343,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         const native = hasGuestComputer(computerId);
         try {
           if (native) await setGuestComputerPaused(computerId, true);
-          const result = await grant(id);
+          let result = await grant(id);
+          if (!result.ok && takeoverNeedsComputerSync(id)) {
+            result = await syncAndGrantTakeover(c!, id, grant);
+          } else if (result.ok) {
+            markTakeoverComputerSynced(id);
+          }
           if (native && result.ok && (result.data as { state?: string })?.state === "human") {
             for (const { scope } of scopedMcp.values())
               if (scope.active && scope.computerId === computerId) scope.waitGeneration++;
@@ -888,10 +1398,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         const set = liveSubs.get(computerId);
         if (!set) return;
         const { mode, epoch } = liveControlState(computerId);
-        if (ev.header.mode !== mode) return;
+        if (mode === "validating" || ev.header.mode !== mode) return;
         const bytes = encodeLiveFrame({ ...ev.header, mode, epoch }, ev.payload);
         for (const ws of set) {
           if (ws.readyState === "open") {
+            if (liveFrameAcks.get(ws) != null) continue;
+            if (liveFrameAcks.has(ws)) liveFrameAcks.set(ws, ev.header.seq);
             ws.send(bytes);
           }
         }
@@ -908,15 +1420,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   function liveControlState(computerId: string): LiveModeMsg {
     const takeover = store.latestTakeoverForComputer(computerId);
-    const mode = takeover?.state === "human" ? "human"
+    const expired = takeover?.expires_at != null && Date.parse(takeover.expires_at) <= Date.now();
+    const mode = takeover?.state === "human" ? expired ? "validating" : "human"
       : takeover?.state === "resume_validating" || takeover?.state === "paused" ? "validating" : "agent";
-    return { v: 1, t: "mode", mode, epoch: takeover?.epoch ?? 1 };
+    return { v: 1, t: "mode", mode, epoch: takeover?.epoch ?? 1, expires_at: takeover?.expires_at ?? null };
   }
 
   function sendLiveControl(computerId: string): void {
     const message = JSON.stringify(liveControlState(computerId));
     for (const ws of liveSubs.get(computerId) ?? []) {
       if (ws.readyState === "open") ws.send(message);
+      if (liveFrameAcks.has(ws)) liveFrameAcks.set(ws, null);
     }
     // The computer may emit its first static frame before the durable transition commits.
     if (liveSubs.get(computerId)?.size) {
@@ -998,7 +1512,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           inputSchema: tool.inputSchema,
         }));
       },
-      async callTool(name: ToolName, args: Record<string, unknown>, _signal: AbortSignal) {
+      async callTool(name: ToolName, args: Record<string, unknown>, signal: AbortSignal) {
         const selected = resolveMcpComputer(scope);
         if (!selected) {
           return toolError(
@@ -1025,20 +1539,38 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         if (binding && store.getTask(binding.task_id)?.status !== "running") {
           return toolError("E_POLICY", "Harness task has ended; create a new task binding in the operator UI API");
         }
+        const releaseHarnessCall = () => {
+          const remaining = (harnessCallsInFlight.get(computerId) ?? 1) - 1;
+          if (remaining) harnessCallsInFlight.set(computerId, remaining);
+          else harnessCallsInFlight.delete(computerId);
+        };
         harnessCallsInFlight.set(computerId, (harnessCallsInFlight.get(computerId) ?? 0) + 1);
+        let dispatchHeld = false;
         try {
           const spendDenied = await enforceHarnessMcpSpendCap({ store, emit }, computerId);
           if (spendDenied) return spendDenied;
           const taskId = store.getHarnessTaskBinding(computerId)?.task_id ?? `mcp:${computerId}`;
-          const result = await toolDispatcher.dispatch(name, args, {
-            taskId,
-            computerId,
-            mode: opts.mode,
-            originSets: opts.declaredOrigins,
+          dispatchHeld = true;
+          const result = await raceHarnessMcpToolCall({
+            dispatch: toolDispatcher.dispatch(name, args, {
+              taskId,
+              computerId,
+              mode: opts.mode,
+              originSets: opts.declaredOrigins,
+              controlEpoch: currentControlEpoch(computerId),
+            }),
+            signal,
+            emitError: (raced) =>
+              emit(
+                "tool.error",
+                { name, result: raced },
+                { task_id: taskId, computer_id: computerId },
+              ),
+            onDispatchSettled: releaseHarnessCall,
           });
           // The harness is the shipping execution mode: without this a dead
           // browser never raises `browser_unavailable` and never gets relaunched.
-          noteBrowserHealth(computerId, name, result);
+          noteBrowserHealth(computerId, name, result, taskId);
           if (scope && ((!result.ok && ["E_TAKEOVER_BUSY", "E_POLICY_PENDING"].includes(result.error.code))
             || (name === "request_takeover" && result.ok))) scope.waitGeneration++;
           if (
@@ -1052,7 +1584,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
             if (takeoverId) {
               emit(
                 "takeover.requested",
-                { takeover_id: takeoverId, reason: String(args.reason ?? "mcp") },
+                { takeover_id: takeoverId, reason: String(args.reason ?? "mcp"), field: data.field },
                 { task_id: taskId, computer_id: computerId },
               );
               scheduleTakeoverExpiry(takeoverId);
@@ -1074,9 +1606,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           }
           return result;
         } finally {
-          const remaining = (harnessCallsInFlight.get(computerId) ?? 1) - 1;
-          if (remaining) harnessCallsInFlight.set(computerId, remaining);
-          else harnessCallsInFlight.delete(computerId);
+          if (!dispatchHeld) releaseHarnessCall();
         }
       },
       async releaseTakeover(takeoverId: string) {
@@ -1148,28 +1678,231 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       || store.listApprovals("pending").some((approval) => approval.task_id === taskId);
   }
 
+  function holdConflictBody(hold: TakeoverRow, computerId: string) {
+    const task = (hold.task_id ? store.getTask(hold.task_id) : undefined)
+      ?? store.listTasks().find((row) => row.computer_id === computerId && ["running", "paused"].includes(row.status));
+    const goal = task?.goal?.trim();
+    const named = goal ? `“${goal.length > 120 ? `${goal.slice(0, 117)}…` : goal}”` : "A task";
+    return {
+      error: "E_STATE",
+      message: `${named} still has this computer. Open it to resume, stop it, or return control before starting another.`,
+      ...(hold.task_id ?? task?.id ? { task_id: hold.task_id ?? task!.id } : {}),
+      takeover_id: hold.id,
+      ...(task?.status ? { task_status: task.status } : {}),
+    };
+  }
+
+  function blockedByFrom(data: unknown): { kind: string } {
+    const field = data && typeof data === "object" ? (data as { field?: { kind?: unknown } }).field : undefined;
+    const kind = typeof field?.kind === "string" && field.kind ? field.kind : "password";
+    return { kind };
+  }
+
+  async function returnPausedHold(row: TakeoverRow, actor: string) {
+    const client = getClient(row.computer_id);
+    const observation = await client.call("takeover.masked-observation", {});
+    if (!observation.ok || (observation.data as { still_sensitive?: unknown })?.still_sensitive !== false) {
+      return { ok: false as const, status: 409, body: { error: "E_TAKEOVER_BUSY",
+        message: "Take control, finish or clear any private input, then return control.",
+        blocked_by: blockedByFrom(observation.ok ? observation.data : undefined) } };
+    }
+    const current = store.getTakeover(row.id);
+    if (!current || current.state !== "paused") {
+      return { ok: false as const, status: 409, body: { error: "E_TAKEOVER_BUSY",
+        message: "Control changed while returning it. Check the computer and try again." } };
+    }
+    const released = await client.declineTakeover(row.id);
+    if (!released.ok) return { ok: false as const, status: 409, body: released };
+    store.updateTakeoverState(row.id, "agent");
+    clearTimeout(takeoverTimers.get(row.id));
+    takeoverTimers.delete(row.id);
+    takeoverGapStarts.delete(row.id);
+    await emit("takeover.released", { takeover_id: row.id, actor },
+      { task_id: row.task_id ?? undefined, computer_id: row.computer_id });
+    return { ok: true as const, takeover: released.data };
+  }
+
   async function pauseNativeForRestart(task: TaskRow): Promise<void> {
     if (!["running", "paused"].includes(task.status) || !["codex", "claude"].includes(task.adapter ?? "")) return;
-    // The replacement computer-server has a fresh input epoch. Keep capture
-    // blocked, and require a fresh operator grant instead of replaying input.
+    // Human holds are reconciled against the computer after bind. Other native
+    // takeovers stay paused so capture remains blocked without a fresh grant.
     const takeover = store.activeTakeoverForComputer(task.computer_id, task.id);
-    if (takeover) store.updateTakeoverState(takeover.id, "paused");
+    if (takeover && takeover.state !== "human") store.updateTakeoverState(takeover.id, "paused");
     if (task.status !== "running" || !store.pauseTask(task.id)) return;
     await emit("task.step", { status: "paused", reason: "daemon_restart",
       detail: "BotHearth stopped. Your task and conversation are saved. Review the current page, then resume when ready." },
       { task_id: task.id, computer_id: task.computer_id });
   }
 
-  async function cancelTask(id: string) {
+  /**
+   * A replacement computer-server starts AGENT. Re-apply each durable HUMAN
+   * hold onto that gate (same id/epoch, native freeze kept) so live can
+   * re-acknowledge the holder. A missing container becomes paused.
+   */
+  async function reconcileHumanHolds(): Promise<void> {
+    for (const hold of store.listTakeovers()) {
+      if (hold.state !== "human") continue;
+      const computer = store.getComputer(hold.computer_id);
+      if (!computer || (hold.expires_at && Date.parse(hold.expires_at) <= Date.now())) {
+        store.updateTakeoverState(hold.id, "paused");
+        continue;
+      }
+      if (sandbox.inspectStatus) {
+        let inspect: "running" | "paused" | "stopped" | undefined;
+        try {
+          inspect = await sandbox.inspectStatus(
+            hold.computer_id,
+            JSON.parse(computer.capabilities) as ComputerCapability[],
+          );
+        } catch {
+          store.updateTakeoverState(hold.id, "paused");
+          continue;
+        }
+        if (inspect === "stopped" && sandbox.start) {
+          try {
+            await sandbox.start(hold.computer_id);
+            inspect = "running";
+          } catch {
+            inspect = undefined;
+          }
+        }
+        if (inspect !== "running" && inspect !== "paused") {
+          store.updateTakeoverState(hold.id, "paused");
+          continue;
+        }
+      }
+      try {
+        const client = getClient(hold.computer_id);
+        const status = await client.call("takeover_status", { takeover_id: hold.id });
+        const data = status.ok ? status.data as { state?: string; takeover_id?: string } : undefined;
+        if (!status.ok || (data?.takeover_id && data.takeover_id !== hold.id && data.state !== "agent")) {
+          store.updateTakeoverState(hold.id, "paused");
+          continue;
+        }
+        if (data?.state !== "human" || (data.takeover_id && data.takeover_id !== hold.id)) {
+          const synced = await client.call("takeover.sync", {
+            takeover_id: hold.id,
+            expires_at: hold.expires_at,
+            state: "human",
+            epoch: hold.epoch,
+          });
+          if (!synced.ok) {
+            store.updateTakeoverState(hold.id, "paused");
+            continue;
+          }
+          const epoch = takeoverEpochFromData(synced.data);
+          if (epoch > 0) store.updateTakeoverEpoch(hold.id, epoch);
+        } else {
+          const epoch = takeoverEpochFromData(status.data);
+          if (epoch > 0) store.updateTakeoverEpoch(hold.id, epoch);
+        }
+        if (hasGuestComputer(hold.computer_id)) await setGuestComputerPaused(hold.computer_id, true);
+      } catch {
+        store.updateTakeoverState(hold.id, "paused");
+      }
+    }
+  }
+
+  function withCloseBound<T>(work: Promise<T>, ms = BROWSER_CLOSE_MS): Promise<T | undefined> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(undefined), ms);
+      work.then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        () => { clearTimeout(timer); resolve(undefined); },
+      );
+    });
+  }
+
+  const OPEN_HOLD_STATES = new Set(["takeover_requested", "human", "resume_validating", "paused"]);
+
+  function settleTaskHold(row: TakeoverRow, reason: string): void {
+    const releasing = row.state === "human" || row.state === "resume_validating";
+    if (releasing) store.updateTakeoverState(row.id, "agent");
+    else store.declineTakeover(row.id);
+    clearTimeout(takeoverTimers.get(row.id));
+    takeoverTimers.delete(row.id);
+    takeoverGapStarts.delete(row.id);
+    void emit(releasing ? "takeover.released" : "takeover.declined",
+      { takeover_id: row.id, reason },
+      { task_id: row.task_id ?? undefined, computer_id: row.computer_id });
+  }
+
+  function settleTaskHolds(task: TaskRow, reason: string): void {
+    for (const hold of store.listTakeovers()) {
+      if (hold.task_id !== task.id || !OPEN_HOLD_STATES.has(hold.state)) continue;
+      settleTaskHold(hold, reason);
+    }
+  }
+
+  async function returnTaskTakeoverGate(task: TaskRow, allowHuman: boolean): Promise<void> {
+    const computerId = task.computer_id;
+    const latest = store.latestTakeoverForComputer(computerId);
+    if (!latest || latest.task_id !== task.id) return;
+    const client = getClient(computerId);
+    const status = await withCloseBound(client.call("takeover_status", { takeover_id: latest.id }), CANCEL_DECLINE_MS);
+    const wire = status?.ok ? String((status.data as { state?: string })?.state ?? "") : "";
+    if (wire === "agent" || wire === "terminated") return;
+    if (wire === "human" || wire === "validating") {
+      if (!allowHuman) return;
+      await withCloseBound(client.call("takeover.blank", { takeover_id: latest.id }), CANCEL_DECLINE_MS);
+      const released = await withCloseBound(client.releaseTakeover(latest.id), CANCEL_DECLINE_MS);
+      if (released?.ok) return;
+      logError("cancel could not return a human hold", {
+        task_id: task.id, computer_id: computerId, ok: released?.ok ?? false, timed_out: released === undefined,
+      });
+      return;
+    }
+    const result = await withCloseBound(client.declineTakeover(latest.id), CANCEL_DECLINE_MS);
+    if (result?.ok) return;
+    logError("cancel could not clear an unanswered freeze", {
+      task_id: task.id, computer_id: computerId, ok: result?.ok ?? false, timed_out: result === undefined,
+    });
+    if (!hasGuestComputer(computerId)) return;
+    await setGuestComputerPaused(computerId, false).catch((error) => {
+      logError("cancel could not thaw native pause after a failed decline", {
+        task_id: task.id, computer_id: computerId, error: String(error),
+      });
+    });
+  }
+
+  async function declineUnansweredFreeze(task: TaskRow): Promise<void> {
+    await returnTaskTakeoverGate(task, false);
+  }
+
+  async function beginCancel(id: string): Promise<TaskRow | undefined> {
     const before = store.getTask(id);
     if (!before || ["completed", "failed", "cancelled"].includes(before.status)) return before;
     const task = store.cancelTask(id)!;
-    if (task.status !== "cancelled") return task;
+    if (task.status === "cancelled") {
+      taskControllers.get(id)?.abort();
+      settleTaskHolds(task, "task cancelled");
+      await declineUnansweredFreeze(task);
+    }
+    return task;
+  }
+
+  function startCancelTeardown(task: TaskRow): Promise<void> {
+    const pending = cancelTeardowns.get(task.id);
+    if (pending) return pending;
+    const tracked = runCancelTeardown(task)
+      .catch((error) => {
+        logError("task cancel teardown failed", { task_id: task.id, error: String(error) });
+      })
+      .finally(() => {
+        store.freezeTaskSummary(task.id);
+        if (cancelTeardowns.get(task.id) === tracked) cancelTeardowns.delete(task.id);
+      });
+    cancelTeardowns.set(task.id, tracked);
+    return tracked;
+  }
+
+  async function runCancelTeardown(task: TaskRow): Promise<void> {
+    const id = task.id;
     const computerId = task.computer_id;
-    taskControllers.get(id)?.abort();
-    if (computersCancelling.has(computerId)) { await revokeRunner(id); return task; }
+    if (computersCancelling.has(computerId)) { await revokeRunner(id); return; }
     computersCancelling.add(computerId);
     try {
+      await declineUnansweredFreeze(task);
       await changeControl(computerId, async () => {
         await revokeRunner(id);
         // Return control must not thaw a cancelled child before it is killed.
@@ -1180,22 +1913,43 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         // while another active task still uses it.
         if (store.listTasks().some((other) => other.id !== id && other.computer_id === computerId
           && !["completed", "failed", "cancelled"].includes(other.status))) return;
-        // Cancelling work does not cancel a person's control of the desktop.
         if (store.activeTakeoverForComputer(computerId)) return;
         const client = clients.get(computerId);
-        const state = await client?.call("takeover_status", {});
+        const state = await withCloseBound(client?.call("takeover_status", {}) ?? Promise.resolve(undefined));
         if (state && (!state.ok || !["agent", "requested", "terminated"].includes(String((state.data as { state?: string })?.state)))) return;
         clients.delete(computerId);
-        await client?.close();
+        if (client) await withCloseBound(client.close());
         if (hasGuestComputer(computerId)) {
-          const fresh = await getClient(computerId).call("takeover_status", {
+          const fresh = await withCloseBound(getClient(computerId).call("takeover_status", {
             takeover_id: store.latestTakeoverForComputer(computerId)?.id,
-          });
-          if (fresh.ok && (fresh.data as { state?: string })?.state === "agent") await setGuestComputerPaused(computerId, false);
+          }));
+          if (fresh?.ok && (fresh.data as { state?: string })?.state === "agent") await setGuestComputerPaused(computerId, false);
         }
       });
-      return task;
+      await returnTaskTakeoverGate(task, true);
     } finally { computersCancelling.delete(computerId); }
+  }
+
+  async function cancelTask(id: string) {
+    const before = store.getTask(id);
+    if (!before) return before;
+    if (["completed", "failed", "cancelled"].includes(before.status)) {
+      await cancelTeardowns.get(id);
+      return store.getTask(id) ?? before;
+    }
+    const task = (await beginCancel(id))!;
+    if (task.status !== "cancelled") return task;
+    await emit("task.cancelled", { cancelled_by: "system" }, { task_id: id });
+    await startCancelTeardown(task);
+    return store.getTask(id) ?? task;
+  }
+
+  function cancelledByForRequest(req: IncomingMessage): "ui" | "api" {
+    if (isMcpToken(req.headers.authorization, opts.mcpToken)) return "api";
+    const origin = req.headers.origin;
+    const expected = requestOrigin(req);
+    if (typeof origin === "string" && expected && origin === expected) return "ui";
+    return "api";
   }
 
   /**
@@ -1250,25 +2004,42 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         // budget" answer 409 on the one task that needed it.
         // A runtime ceiling is a cap like the other two, not a fault: the run
         // stops where it is, keeps its receipt, and a raised ceiling resumes it.
+        // A provider usage/quota refusal is the subscription ending the task,
+        // not a machine fault: pause it, keep the native thread, and Resume
+        // continues the same conversation once the plan resets.
         const capped = harnessCapStop(task.id)
           ?? (error instanceof Error && error.message === MAX_RUNTIME_STOP
             ? { reason: "max_runtime" as const, detail: maxRuntimeStopDetail(taskMaxRuntimeSec(task)),
               steps: store.harnessBindingForTask(task.id)?.observed_tool_calls ?? 0,
               failure_kind: "max_runtime" as const }
             : null);
-        if (capped) {
+        if (provider && limit) {
+          if (store.pauseTask(task.id)) {
+            await emit("task.step", {
+              status: "paused",
+              reason: "provider_limit",
+              detail: providerLimitPauseDetail(provider, limit),
+              failure_kind: "provider_limit",
+              steps: store.harnessBindingForTask(task.id)?.observed_tool_calls ?? 0,
+              ...providerLimitFields(limit),
+            }, { task_id: task.id, computer_id: task.computer_id });
+          }
+        } else if (capped) {
           if (store.pauseTask(task.id)) {
             await emit("task.step", { status: "paused", ...capped },
               { task_id: task.id, computer_id: task.computer_id });
           }
         } else if (store.finishTask(task.id, "failed")) {
-          await emit("task.failed", { reason: "runner_error", summary: String(error), ...providerLimitFields(limit),
-            failure_kind: classifyFailureKind("runner_error", limit) }, { task_id: task.id, computer_id: task.computer_id });
+          await emit("task.failed", { reason: "runner_error", summary: String(error),
+            failure_kind: classifyFailureKind("runner_error", null) }, { task_id: task.id, computer_id: task.computer_id });
           store.freezeTaskSummary(task.id);
         }
       }
       throw error;
-    }).finally(() => { taskControllers.delete(task.id); taskRuns.delete(task.id); });
+    }).finally(() => {
+      taskControllers.delete(task.id);
+      taskRuns.delete(task.id);
+    });
     taskRuns.set(task.id, run);
     return run;
   }
@@ -1301,8 +2072,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           },
           onActivity(activity) {
             if (controller.signal.aborted || store.getTask(task.id)?.status !== "running") return;
-            store.insertStep(task.id, 0, "native_tool", activity);
-            void emit("native_tool", activity, { task_id: task.id, computer_id: task.computer_id })
+            const name = String(activity.name ?? "").split("__").pop() ?? "";
+            let byName = nativeCallIds.get(task.id);
+            if (!byName) { byName = new Map(); nativeCallIds.set(task.id, byName); }
+            const stack = byName.get(name) ?? [];
+            let id: string;
+            if (activity.status === "started") {
+              id = `step_${mintToken(8)}`;
+              stack.push(id);
+              byName.set(name, stack);
+            } else {
+              id = stack.pop() ?? `step_${mintToken(8)}`;
+              if (stack.length) byName.set(name, stack); else byName.delete(name);
+            }
+            const body = { ...activity, id };
+            store.insertStep(task.id, 0, "native_tool", body);
+            void emit("native_tool", body, { task_id: task.id, computer_id: task.computer_id })
               .catch(error => logError("task event failed", { error: String(error) }));
           },
           hasMessages: () => store.pendingMessages(task.id).length > 0,
@@ -1310,6 +2095,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           onWaitingForMessage(waiting) {
             scope.awaitingMessage = waiting;
             void emit("task.step", { status: "running", message: true }, { task_id: task.id, computer_id: task.computer_id })
+              .catch(error => logError("task event failed", { error: String(error) }));
+          },
+          onTurnEnded({ lastToolError }) {
+            if (taskWaiting(task.id, task.computer_id)) return;
+            if (!store.pauseTask(task.id)) return;
+            void emit("task.step", { status: "paused", reason: "stall", detail: lastToolError,
+              failure_kind: "stalled" }, { task_id: task.id, computer_id: task.computer_id })
               .catch(error => logError("task event failed", { error: String(error) }));
           },
           isWaiting: () => taskWaiting(task.id, task.computer_id),
@@ -1320,7 +2112,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         providerLimits.clear(runnerProvider);
         runtimeProbe.invalidate();
         return { status: store.getTask(task.id)!.status, reason: "completed", steps: 0, usage: { tokens_in: 0, tokens_out: 0, steps: 0 } } as Awaited<ReturnType<typeof runAgentLoop>>;
-      } finally { await revokeRunner(task.id); }
+      } finally { nativeCallIds.delete(task.id); await revokeRunner(task.id); }
     }
     const agent = opts.agentLoop;
     if (!agent) throw new Error("routine execution requires a configured standalone provider");
@@ -1384,6 +2176,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       capabilities,
       declaredOrigins,
       mode: agent.mode,
+      enabledGates,
       maxSteps: task.max_steps,
       resume,
       spendCapUsd: spendCap(task.spend_cap_usd),
@@ -1405,8 +2198,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           signals: context.signals,
           mode: agent.mode,
           originSets: declaredOrigins,
+          controlEpoch: currentControlEpoch(task.computer_id),
         });
-        noteBrowserHealth(task.computer_id, tool, result);
+        noteBrowserHealth(task.computer_id, tool, result, task.id);
         return result;
       },
       stopAndAsk: agent.stopAndAsk,
@@ -1447,6 +2241,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     if (type === "takeover.requested") body = takeoverContext(body);
     if (type.startsWith("takeover.") && ids?.computer_id) sendLiveControl(ids.computer_id);
     if (type === "takeover.requested" && typeof body.takeover_id === "string") scheduleTakeoverExpiry(body.takeover_id);
+    if (type === "tool.call" && ids?.task_id && typeof body.name === "string" && body.id == null) {
+      const name = body.name.split("__").pop() ?? body.name;
+      const id = nativeCallIds.get(ids.task_id)?.get(name)?.at(-1);
+      if (id) body = { ...body, id };
+    }
     const ev = makeEvent(type, body, ids);
     events.emitEvent(ev);
     const payload = JSON.stringify(ev);
@@ -1466,6 +2265,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         hash: sealed.hash,
         task_id: ids?.task_id,
         computer_id: ids?.computer_id,
+        ts: ev.ts,
       });
     });
     auditTail = append.catch(() => undefined);
@@ -1477,6 +2277,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     getClient,
     emit,
     approvalTtlSec: opts.approvalTtlSec,
+    enabledGates,
+    get killSwitch() {
+      return killSwitch;
+    },
     onUnsupportedTool: forgetMethod,
     async execute(client, name, args, context) {
       if (name !== "connector_call") return client.call(name, args, context);
@@ -1559,7 +2363,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     return toolDispatcher.dispatch(
       method as ToolName,
       (params ?? {}) as Record<string, unknown>,
-      { taskId: `direct:${computerId}`, computerId, mode: opts.mode },
+      { taskId: `direct:${computerId}`, computerId, mode: opts.mode, controlEpoch: currentControlEpoch(computerId) },
     );
   }
 
@@ -1714,7 +2518,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     const path = url.pathname;
 
     if (path === "/healthz" && method === "GET") {
-      writeJson(res, 200, { ok: true, version: "0.0.1" });
+      if (url.searchParams.get("deep") === "1") {
+        let docker = false;
+        try {
+          docker = Boolean(
+            await (opts.dockerReady ? opts.dockerReady() : runtimeProbe.dockerLive()),
+          );
+        } catch {
+          writeJson(res, 503, { ok: false, docker: false, version: VERSION });
+          return;
+        }
+        if (!docker) {
+          writeJson(res, 503, { docker: false, version: VERSION });
+          return;
+        }
+        writeJson(res, 200, { ok: true, version: VERSION, docker: true });
+        return;
+      }
+      writeJson(res, 200, { ok: true, version: VERSION });
       return;
     }
 
@@ -1795,7 +2616,97 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const session = requireUiSession(req, res, false);
       if (!session) return;
       if (opts.codexRunner) await connectionStatus();
-      writeJson(res, 200, { ok: true, csrf: session.csrf, public_origin: publicOrigin ?? null, origin: requestOrigin(req), expires_at: store.getSession(session.sessionId)!.expires_at, mode: opts.mode ?? "supervised", ...executionInfo, licence: licenceState(store, opts.licencePolicy) });
+      writeJson(res, 200, { ok: true, csrf: session.csrf, public_origin: publicOrigin ?? null, origin: requestOrigin(req), expires_at: store.getSession(session.sessionId)!.expires_at, mode: opts.mode ?? "supervised", ask_before_sensitive: enabledGates.length > 0, policy_gates: [...enabledGates], kill_switch: killSwitch, limits: { max_steps: defaultMaxSteps, spend_cap_usd: defaultSpendCapUsd }, ...executionInfo, licence: licenceState(store, opts.licencePolicy) });
+      return;
+    }
+
+    if (path === "/api/v1/session" && method === "POST") {
+      if (!gateHttp(req, res)) return;
+      const session = requireUiSession(req, res, true);
+      if (!session) return;
+      let body: { ask_before_sensitive?: unknown; policy_gates?: unknown; max_steps?: unknown; spend_cap_usd?: unknown; kill_switch?: unknown };
+      try { body = JSON.parse(await readBody(req) || "{}"); }
+      catch { writeJson(res, 400, { error: "E_IO", message: "Invalid request." }); return; }
+      const hasAsk = typeof body.ask_before_sensitive === "boolean";
+      const hasGates = body.policy_gates !== undefined;
+      const hasSteps = body.max_steps !== undefined;
+      const hasSpend = body.spend_cap_usd !== undefined;
+      const hasKill = typeof body.kill_switch === "boolean";
+      if (!hasAsk && !hasGates && !hasSteps && !hasSpend && !hasKill) {
+        writeJson(res, 400, { error: "E_IO", message: "ask_before_sensitive must be true or false." });
+        return;
+      }
+      let nextGates: PolicyGate[] | undefined;
+      if (hasAsk || hasGates) {
+        if (hasAsk && !body.ask_before_sensitive) {
+          nextGates = [];
+        } else if (hasGates) {
+          if (!Array.isArray(body.policy_gates)) {
+            writeJson(res, 400, { error: "E_IO", message: "policy_gates must be a list of known optional gates." });
+            return;
+          }
+          const allowed = new Set<string>(OPTIONAL_POLICY_GATES);
+          const chosen: PolicyGate[] = [];
+          for (const item of body.policy_gates) {
+            if (typeof item !== "string" || !allowed.has(item)) {
+              writeJson(res, 400, { error: "E_IO", message: "policy_gates must be a list of known optional gates." });
+              return;
+            }
+            if (!chosen.includes(item as PolicyGate)) chosen.push(item as PolicyGate);
+          }
+          nextGates = OPTIONAL_POLICY_GATES.filter((gate) => chosen.includes(gate));
+        } else {
+          nextGates = [...OPTIONAL_POLICY_GATES];
+        }
+      }
+      let nextSteps: number | undefined;
+      let nextSpend: number | undefined;
+      if (hasSteps) {
+        if (!Number.isInteger(body.max_steps) || (body.max_steps as number) < 0) {
+          writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a non-negative integer" });
+          return;
+        }
+        nextSteps = body.max_steps as number;
+      }
+      if (hasSpend) {
+        if (typeof body.spend_cap_usd !== "number" || !Number.isFinite(body.spend_cap_usd) || body.spend_cap_usd < 0) {
+          writeJson(res, 400, { error: "E_LIMIT", message: "spend_cap_usd must be a non-negative number" });
+          return;
+        }
+        if (spendCapMax() > 0 && body.spend_cap_usd > spendCapMax()) {
+          writeJson(res, 400, { error: "E_LIMIT",
+            message: `spend_cap_usd must not exceed the configured cap of ${spendCapMax()}` });
+          return;
+        }
+        nextSpend = body.spend_cap_usd;
+      }
+      if (opts.configPath && existsSync(opts.configPath)) {
+        try {
+          writePolicyGates(opts.configPath, {
+            ...(nextGates !== undefined ? { gates: nextGates } : {}),
+            ...(hasKill ? { kill_switch: body.kill_switch as boolean } : {}),
+            ...(nextSteps !== undefined ? { max_steps: nextSteps } : {}),
+            ...(nextSpend !== undefined ? { spend_cap_usd: nextSpend } : {}),
+          });
+        } catch (error) {
+          logError("policy.gates persist failed", { error: String(error) });
+          writeJson(res, 500, { error: "E_IO", message: "Could not save this setting." });
+          return;
+        }
+      }
+      if (nextGates !== undefined) enabledGates.splice(0, enabledGates.length, ...nextGates);
+      if (hasKill) killSwitch = body.kill_switch as boolean;
+      if (nextSteps !== undefined) defaultMaxSteps = nextSteps;
+      if (nextSpend !== undefined) {
+        defaultSpendCapUsd = nextSpend;
+        if (!opts.codexRunner && standaloneAvailable) {
+          executionInfo.spend_cap_usd = spendCap() > 0 ? spendCap() : null;
+          if (executionInfo.budget) {
+            executionInfo.budget.default_usd = defaultSpendCapUsd > 0 ? defaultSpendCapUsd : null;
+          }
+        }
+      }
+      writeJson(res, 200, { ok: true, ask_before_sensitive: enabledGates.length > 0, policy_gates: [...enabledGates], kill_switch: killSwitch, limits: { max_steps: defaultMaxSteps, spend_cap_usd: defaultSpendCapUsd } }, { "cache-control": "no-store" });
       return;
     }
 
@@ -1953,26 +2864,23 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       // A rebuilt tag is invisible to a container that already exists, so the
       // build only reaches the owner's computer once it is recreated from it.
       void imagePreparer.settled()?.then(async () => {
-        if (imagePreparer.snapshot().state === "done") await reconcileComputerImages();
-        runtimeProbe.invalidate();
+        if (closing) return;
+        if (imagePreparer.snapshot().state === "done") {
+          enqueueComputerImagesReconcile();
+          await computerImagesReconcile;
+        }
+        if (!closing) runtimeProbe.invalidate();
       });
       writeJson(res, 202, { prepare: redactPrepare(attempt.state) }, { "cache-control": "no-store" });
       return;
     }
 
     if (path === "/api/v1/computers" && method === "GET") {
-      const computers = store.listComputers();
       writeJson(res, 200, {
         default_computer_id: defaultComputer()?.id ?? null,
         will_create_default: !defaultComputer(),
-        computers: computers.map((c) => ({
-          id: c.id,
-          name: c.name,
-          capabilities: JSON.parse(c.capabilities) as ComputerCapability[],
-          persistent: Boolean(c.persistent),
-          status: c.status,
-          created_at: c.created_at,
-        })),
+        max_computers: maxComputers,
+        computers: await listComputerPublic(),
       });
       return;
     }
@@ -1993,9 +2901,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         });
         return;
       }
-      const computer = await provisionComputer(body);
-      writeJson(res, 201, { computer: { id: computer.id, name: computer.name,
-        capabilities: JSON.parse(computer.capabilities), status: computer.status } });
+      try {
+        const computer = await provisionComputer(body);
+        writeJson(res, 201, { computer: { id: computer.id, name: computer.name,
+          capabilities: JSON.parse(computer.capabilities), status: computer.status } });
+      } catch (error) {
+        if (error instanceof Error && (error as { code?: unknown }).code === "E_LIMIT") {
+          writeJson(res, 409, { error: "E_LIMIT", message: error.message, max_computers: maxComputers,
+            computers: (await listComputerPublic()).map(({ id, name, state }) => ({ id, name, state })) });
+          return;
+        }
+        throw error;
+      }
       return;
     }
 
@@ -2022,14 +2939,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       }
       const validCap = typeof body?.spend_cap_usd === "number" &&
         Number.isFinite(body.spend_cap_usd) && body.spend_cap_usd >= 0;
-      const validSteps = Number.isInteger(body?.max_steps) && body.max_steps > 0;
+      const validSteps = Number.isInteger(body?.max_steps) && body.max_steps >= 0;
       if (
         !body?.task_id || !body.computer_id || body.execution !== "harness" ||
         !validCap || !validSteps
       ) {
         writeJson(res, 400, {
           error: "E_IO",
-          message: "task_id, computer_id, execution=harness, non-negative spend_cap_usd, and positive max_steps required",
+          message: "task_id, computer_id, execution=harness, non-negative spend_cap_usd, and non-negative max_steps required",
         });
         return;
       }
@@ -2097,6 +3014,114 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return;
     }
 
+    const computerSignedIn = /^\/api\/v1\/computers\/([^/]+)\/signed-in$/.exec(path);
+    if (computerSignedIn && method === "GET") {
+      const id = decodeURIComponent(computerSignedIn[1]!);
+      const computer = store.getComputer(id);
+      if (!computer) {
+        writeJson(res, 404, { error: "not_found" });
+        return;
+      }
+      let status = computer.status;
+      if (sandbox.inspectStatus) {
+        try { status = await sandbox.inspectStatus(id, JSON.parse(computer.capabilities) as ComputerCapability[]) ?? status; }
+        catch { /* Docker unreachable: keep the durable row. */ }
+      }
+      // Status/list polls must not unpause or reset idle lastActive.
+      if (status !== "running" || idlePause.pausedHas(id)) {
+        writeJson(res, 200, { domains: [] });
+        return;
+      }
+      const client = clients.get(id);
+      let hosts: unknown = [];
+      if (client) {
+        try {
+          const result = await client.call("profile.signed-in");
+          if (result.ok && result.data && typeof result.data === "object") {
+            const data = result.data as { hosts?: unknown; domains?: unknown };
+            hosts = data.hosts ?? data.domains ?? [];
+          }
+        } catch {
+          hosts = [];
+        }
+      }
+      writeJson(res, 200, { domains: signedInSiteDomains(hosts) });
+      return;
+    }
+
+    const computerForgetLogins = /^\/api\/v1\/computers\/([^/]+)\/forget-logins$/.exec(path);
+    if (computerForgetLogins && method === "POST") {
+      const id = decodeURIComponent(computerForgetLogins[1]!);
+      const computer = store.getComputer(id);
+      if (!computer) {
+        writeJson(res, 404, { error: "not_found" });
+        return;
+      }
+      if (computersCancelling.has(id)) {
+        writeJson(res, 409, {
+          error: "E_TASK_ACTIVE",
+          message: "This computer has a task in progress. Stop or finish it before forgetting its logins.",
+        });
+        return;
+      }
+      computersCancelling.add(id);
+      let mutated = false;
+      try {
+        const hold = store.activeTakeoverForComputer(id);
+        if (hold) {
+          writeJson(res, 409, {
+            error: "E_STATE",
+            message: "This computer is under Take control. Return control before forgetting its logins.",
+          });
+          return;
+        }
+        const busy = store.listTasks().find((task) =>
+          task.computer_id === id && ["running", "paused"].includes(task.status));
+        if (busy) {
+          writeJson(res, 409, {
+            error: "E_TASK_ACTIVE",
+            message: "This computer has a task in progress. Stop or finish it before forgetting its logins.",
+          });
+          return;
+        }
+        idlePause.forget(id);
+        const client = clients.get(id);
+        if (client) {
+          await client.close();
+          clients.delete(id);
+        }
+        computerMethods.delete(id);
+        mutated = true;
+        const capabilities = JSON.parse(computer.capabilities) as ComputerCapability[];
+        if (sandbox.forgetLogins) await sandbox.forgetLogins(id, capabilities);
+        else if (useFakeComputer()) {
+          await sandbox.stop(id);
+          if (sandbox.start) await sandbox.start(id);
+        } else {
+          await forgetComputerLogins(id, {
+            capabilities,
+            persistent: Boolean(computer.persistent),
+          }, { workspaceRoot });
+        }
+        store.setComputerStatus(id, "running");
+        idlePause.track(id);
+        getClient(id);
+        void emit("sandbox.started", { computer_id: id }, { computer_id: id });
+        writeJson(res, 200, { ok: true });
+      } catch {
+        store.setComputerStatus(id, mutated ? "stopped" : computer.status);
+        idlePause.track(id);
+        try { getClient(id); } catch { /* recreate best-effort after a failed wipe */ }
+        writeJson(res, 503, {
+          error: "E_SANDBOX",
+          message: "Saved logins could not be forgotten. Check that the computer is available, then try again.",
+        });
+      } finally {
+        computersCancelling.delete(id);
+      }
+      return;
+    }
+
     const computerDel = /^\/api\/v1\/computers\/([^/]+)$/.exec(path);
     if (computerDel && method === "DELETE") {
       const id = decodeURIComponent(computerDel[1]!);
@@ -2123,6 +3148,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     // spellings resolve to the same computer, the same jail and the same 404;
     // only the id is looked up differently.
     const taskFiles = /^\/api\/v1\/tasks\/([^/]+)\/files$/.exec(path);
+    const taskZip = /^\/api\/v1\/tasks\/([^/]+)\/files\.zip$/.exec(path);
     // HEAD answers "is this file still there?" without moving the
     // bytes, so the Open button can say "this isn't here any more" instead of
     // doing nothing at all. Same route, same jail, same 404 — only the body is
@@ -2144,54 +3170,78 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         writeJson(res, 400, { error: "E_POLICY", message: "path required" });
         return;
       }
+      const configuredBase = sandbox.get?.(id)?.workspaceRoot ?? join(workspaceRoot, id);
+      const opened = await openWorkspaceFile(configuredBase, rel);
+      if ("error" in opened) {
+        if (opened.error === "jail") writeJson(res, 403, { error: "E_POLICY", message: "path jail" });
+        else fileGone(req, res);
+        return;
+      }
       try {
-        const configuredBase = sandbox.get?.(id)?.workspaceRoot ?? join(workspaceRoot, id);
-        const lexicalBase = resolve(configuredBase);
-        // Older receipts record a bare filename where newer ones record
-        // `out/today.md`, and a bare name resolves to the
-        // workspace root, where nothing is — so Open on an older receipt 404'd
-        // on a file that is genuinely there. Both spellings are tried, and both
-        // are jailed the same way; the shorthand is only ever `out/`, which is
-        // the one directory a task writes into.
-        const bare = !rel.includes("/") && !rel.includes("\\");
-        const lexicalTarget =
-          bare && !statSync(resolve(lexicalBase, rel), { throwIfNoEntry: false })?.isFile()
-            ? resolve(lexicalBase, "out", rel)
-            : resolve(lexicalBase, rel);
-        if (
-          lexicalTarget !== lexicalBase &&
-          !lexicalTarget.startsWith(lexicalBase + sep)
-        ) {
-          writeJson(res, 403, { error: "E_POLICY", message: "path jail" });
-          return;
-        }
-        const base = await realpath(lexicalBase);
-        const target = await realpath(lexicalTarget);
-        if (target !== base && !target.startsWith(base + sep)) {
-          writeJson(res, 403, { error: "E_POLICY", message: "path jail" });
-          return;
-        }
-        const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try {
-          const stat = await handle.stat();
-          if (!stat.isFile()) throw new Error("not a file");
-          res.writeHead(200, {
-            "content-type": "application/octet-stream",
-            "content-length": stat.size,
-            "content-disposition": contentDisposition(rel),
-            "x-content-type-options": "nosniff",
-          });
-          // Guest-created files can be large. Stream with backpressure and
-          // stop at the advertised length even if the guest appends data.
-          if (method === "HEAD" || stat.size === 0) res.end();
-          else await pipeline(handle.createReadStream({ autoClose: false, end: stat.size - 1 }), res);
-        } finally {
-          await handle.close();
-        }
+        const inline = url.searchParams.get("inline") === "1";
+        res.writeHead(200, {
+          "content-type": inline ? inlineType(opened.rel) : "application/octet-stream",
+          "content-length": opened.size,
+          "content-disposition": contentDisposition(opened.rel, inline ? "inline" : "attachment"),
+          "x-content-type-options": "nosniff",
+        });
+        // Guest-created files can be large. Stream with backpressure and
+        // stop at the advertised length even if the guest appends data.
+        if (method === "HEAD" || opened.size === 0) res.end();
+        else await pipeline(opened.handle.createReadStream({ autoClose: false, end: opened.size - 1 }), res);
       } catch {
         if (res.headersSent) res.destroy();
         else fileGone(req, res);
+      } finally {
+        await opened.handle.close();
       }
+      return;
+    }
+
+    if (taskZip && method === "GET") {
+      const task = store.getTask(decodeURIComponent(taskZip[1]!));
+      if (!task || !store.getComputer(task.computer_id)) {
+        writeJson(res, 404, { error: "not_found" });
+        return;
+      }
+      const computerId = task.computer_id;
+      if (computerId.includes("/") || computerId.includes("\\") || computerId.includes("..")) {
+        writeJson(res, 403, { error: "E_POLICY", message: "invalid computer id" });
+        return;
+      }
+      const configuredBase = sandbox.get?.(computerId)?.workspaceRoot ?? join(workspaceRoot, computerId);
+      const events = store.db.prepare(
+        "SELECT type, body_json FROM audit_refs WHERE task_id = ? ORDER BY seq",
+      ).all(task.id) as Array<{ type: string; body_json: string }>;
+      const listed = (verifiedArtifacts(task, configuredBase).summary?.files_saved
+        ?? taskSummaryFromEvents(events).files_saved).filter((path) => typeof path === "string" && path);
+      const entries: Array<{ name: string; data: Uint8Array }> = [];
+      const used = new Set<string>();
+      for (const path of listed) {
+        const opened = await openWorkspaceFile(configuredBase, path);
+        if ("error" in opened) continue;
+        try {
+          const data = await opened.handle.readFile();
+          let name = opened.rel.replace(/\\/g, "/");
+          if (used.has(name)) name = `${used.size}-${name.split("/").pop() ?? name}`;
+          used.add(name);
+          entries.push({ name, data });
+        } finally {
+          await opened.handle.close();
+        }
+      }
+      if (entries.length === 0) {
+        fileGone(req, res);
+        return;
+      }
+      const zip = zipStore(entries);
+      res.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": zip.length,
+        "content-disposition": contentDisposition(`${task.id}-files.zip`),
+        "x-content-type-options": "nosniff",
+      });
+      res.end(zip);
       return;
     }
 
@@ -2239,7 +3289,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     }
 
     if (path === "/api/v1/tasks" && method === "GET") {
-      writeJson(res, 200, { tasks: store.listTasks() });
+      writeJson(res, 200, {
+        tasks: store.listTasks().map((task) => ({
+          ...task,
+          awaiting_message: scopedMcp.get(task.id)?.scope.awaitingMessage === true,
+        })),
+      });
       return;
     }
 
@@ -2252,12 +3307,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       }
       // Opening the task composer is activity; ordinary status polls still leave idle computers asleep.
       if (guestExecution && computerId && !store.activeTakeoverForComputer(computerId)) await idlePause.wake(computerId);
+      const held = Boolean(computerId && humanHoldBlocksProbe(computerId));
       const providers = await Promise.all((requested ? [requested as NativeProvider] : ["codex", "claude"] as const).map(async (provider) => {
         const config = nativeRunnerConfig(provider);
         const [catalog, state] = await Promise.all([
           getNativeModelCatalog(provider, { home: config.codexHome, binary: config.binary, configuredModel: config.model,
-            ...(guestExecution ? { computerId: computerId ?? "unprepared", spawn: (args: string[]) => computerId
-              ? guestSpawn(computerId, provider, args) : Promise.reject(new Error("Computer not prepared")) } : {}) }),
+            ...(guestExecution ? { computerId: computerId ?? "unprepared", spawn: (args: string[]) => computerId && !held
+              ? guestSpawn(computerId, provider, args) : Promise.reject(new Error("Can’t check while you have control")) } : {}) }),
           connectionStatus(provider, undefined, computerId),
         ]);
         const connected = state.status === "connected" || state.status === "signed_in";
@@ -2299,35 +3355,54 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         const selectedComputer = body.computer_id ?? defaultComputer()?.id;
         if (guestExecution && selectedComputer) {
           if (!store.getComputer(selectedComputer)) { writeJson(res, 404, { error: "not_found", message: "Computer not found." }); return; }
-          if (store.activeTakeoverForComputer(selectedComputer)) { writeJson(res, 409, { error: "E_STATE", message: "Return control of this computer before starting another task." }); return; }
+          const hold = store.activeTakeoverForComputer(selectedComputer);
+          if (hold) { writeJson(res, 409, await occupancyConflict(selectedComputer)); return; }
           if (sandbox.start) await sandbox.start(selectedComputer);
           await idlePause.wake(selectedComputer);
+          if (!await awaitComputerReady(selectedComputer)) {
+            const notReady = { status: "error", message: "The bot’s computer is not running" };
+            logInfo("provider unavailable", unavailableProbeLog(selectedComputer, notReady));
+            writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: notReady.message,
+              provider: nativeSettings.adapter, status: notReady.status }); return;
+          }
         }
-        const state = await connectionStatus(nativeSettings.adapter, session.sessionId, body.computer_id);
-        if (state.status !== "connected" && state.status !== "signed_in") {
-          writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: `Connect ${nativeSettings.adapter === "codex" ? "Codex" : "Claude Code"} before starting.`,
+        const state = await awaitProviderForStart(nativeSettings.adapter, session.sessionId, selectedComputer);
+        if (!providerReady(state.status)) {
+          logInfo("provider unavailable", unavailableProbeLog(selectedComputer, state));
+          if (state.status === "starting") {
+            writeJson(res, 503, { error: "E_RUNTIME_STARTING", message: "BotHearth is still starting its runtime.",
+              provider: nativeSettings.adapter, status: "starting", retry_after_ms: 0 }); return;
+          }
+          writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: providerStartMessage(nativeSettings.adapter, state),
             provider: nativeSettings.adapter, status: state.status }); return;
         }
         if (nativeSettings.executor && nativeSettings.executor.adapter !== nativeSettings.adapter) {
-          const executorState = await connectionStatus(nativeSettings.executor.adapter, session.sessionId, body.computer_id);
-          if (executorState.status !== "connected" && executorState.status !== "signed_in") {
-            writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: "Connect the selected executor before starting orchestration.",
+          const executorState = await awaitProviderForStart(nativeSettings.executor.adapter, session.sessionId, selectedComputer);
+          if (!providerReady(executorState.status)) {
+            logInfo("provider unavailable", unavailableProbeLog(selectedComputer, executorState));
+            if (executorState.status === "starting") {
+              writeJson(res, 503, { error: "E_RUNTIME_STARTING", message: "BotHearth is still starting its runtime.",
+                provider: nativeSettings.executor.adapter, status: "starting", retry_after_ms: 0 }); return;
+            }
+            writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: providerStartMessage(nativeSettings.executor.adapter, executorState, true),
               provider: nativeSettings.executor.adapter, status: executorState.status }); return;
           }
         }
       } else if (!executionInfo.task_start_available) {
         writeJson(res, 503, { error: "E_PROVIDER_UNAVAILABLE", message: "Configure a task runner before starting a task." }); return;
       }
-      if (body.max_steps !== undefined && (!Number.isInteger(body.max_steps) || body.max_steps < 1)) {
-        writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a positive integer" }); return;
+      if (body.max_steps !== undefined && (!Number.isInteger(body.max_steps) || body.max_steps < 0)) {
+        writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a non-negative integer" }); return;
       }
-      if (body.spend_cap_usd !== undefined &&
-          (typeof body.spend_cap_usd !== "number" || !Number.isFinite(body.spend_cap_usd) || body.spend_cap_usd < 0)) {
-        writeJson(res, 400, { error: "E_LIMIT", message: "spend_cap_usd must be a non-negative number" }); return;
-      }
-      if (typeof body.spend_cap_usd === "number" && body.spend_cap_usd > spendCapMax()) {
-        writeJson(res, 400, { error: "E_LIMIT",
-          message: `spend_cap_usd must not exceed the configured cap of ${spendCapMax()}` }); return;
+      if (!native) {
+        if (body.spend_cap_usd !== undefined &&
+            (typeof body.spend_cap_usd !== "number" || !Number.isFinite(body.spend_cap_usd) || body.spend_cap_usd < 0)) {
+          writeJson(res, 400, { error: "E_LIMIT", message: "spend_cap_usd must be a non-negative number" }); return;
+        }
+        if (typeof body.spend_cap_usd === "number" && spendCapMax() > 0 && body.spend_cap_usd > spendCapMax()) {
+          writeJson(res, 400, { error: "E_LIMIT",
+            message: `spend_cap_usd must not exceed the configured cap of ${spendCapMax()}` }); return;
+        }
       }
       // An unvalidated adapter name is later looked up on a plain object,
       // where "constructor" resolves to `Object` — truthy, so it survives every
@@ -2347,7 +3422,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       }
       let computer: ComputerRow | undefined;
       try { computer = automatic ? await resolveDefaultComputer() : store.getComputer(body.computer_id!); }
-      catch {
+      catch (error) {
+        if (error instanceof Error && (error as { code?: unknown }).code === "E_LIMIT") {
+          writeJson(res, 409, { error: "E_LIMIT", message: error.message, max_computers: maxComputers,
+            computers: (await listComputerPublic()).map(({ id, name, state }) => ({ id, name, state })) });
+          return;
+        }
         writeJson(res, 503, { error: "E_SANDBOX", message: "Your workspace could not be prepared. Check the browser setup in Advanced, then try again." }); return;
       }
       if (!computer) { writeJson(res, 404, { error: "not_found", message: "Workspace not found." }); return; }
@@ -2357,18 +3437,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       if (!Array.isArray(capabilities) || !capabilities.length || capabilities.some((cap) => !available.includes(cap))) {
         writeJson(res, 400, { error: "E_CAPABILITY", message: "Task capabilities must belong to the selected computer" }); return;
       }
-      const rejectBusy = () => {
-        const activeTask = store.listTasks().find((task) => task.computer_id === computerId && ["running", "paused"].includes(task.status));
-        if (!computersCancelling.has(computerId) && (!(automatic || native) || (!harnessCallsInFlight.has(computerId) && !activeTask))) return false;
-        writeJson(res, 409, { error: "E_TASK_ACTIVE", message: "Your current task is still working. Open it to continue or stop it before starting another.", task_id: activeTask?.id });
-        return true;
-      };
-      if (rejectBusy()) return;
+      const liveOnComputer = () => store.listTasks().find((task) => task.computer_id === computerId && ["running", "paused"].includes(task.status));
+      const computerBusy = () => computersCancelling.has(computerId)
+        || ((automatic || native) && (harnessCallsInFlight.has(computerId) || Boolean(liveOnComputer())));
+      if (computerBusy()) {
+        writeJson(res, 409, await occupancyConflict(computerId, liveOnComputer()));
+        return;
+      }
       if (computer.status !== "running") {
         try {
           if (!sandbox.start) throw new Error("start unavailable");
           await sandbox.start(computerId); store.setComputerStatus(computerId, "running");
-          if (rejectBusy()) return;
+          if (computerBusy()) {
+            writeJson(res, 409, await occupancyConflict(computerId, liveOnComputer()));
+            return;
+          }
         } catch {
           writeJson(res, 503, { error: "E_SANDBOX", message: "Your workspace could not be started. Check its setup in Advanced, then try again." }); return;
         }
@@ -2378,8 +3461,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       let task: TaskRow;
       if (nativeSettings) {
         const taskId = `task_${randomBytes(12).toString("hex")}`;
+        // 0 / 0 = no BotHearth cap. Native runs until the work is done, the
+        // user stops them, or the provider's own plan limit pauses them.
         store.insertHarnessTaskBinding({ task_id: taskId, computer_id: computerId,
-          spend_cap_usd: spendCap(body.spend_cap_usd), max_steps: body.max_steps ?? defaultMaxSteps,
+          spend_cap_usd: 0, max_steps: 0,
           proxy_usd_per_tool_call: perCallUsd });
         store.db.prepare("UPDATE tasks SET goal = ?, adapter = ?, capabilities = ? WHERE id = ?")
           .run(body.goal, nativeSettings.adapter, JSON.stringify(capabilities), taskId);
@@ -2439,6 +3524,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         task: {
           ...verifiedArtifacts(task, workspace),
           results_dir,
+          ...(localWorkspaceVisible(publicOrigin) ? { workspace_dir: workspace } : {}),
           awaiting_message: scopedMcp.get(task.id)?.scope.awaitingMessage === true,
           ...taskBudget(store, task, spendCapDefault()),
         },
@@ -2483,7 +3569,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
             writeJson(res, 400, { error: "E_LIMIT", message: "spend_cap_usd must be a non-negative number" });
             return;
           }
-          if (body.spend_cap_usd > spendCapMax()) {
+          if (spendCapMax() > 0 && body.spend_cap_usd > spendCapMax()) {
             writeJson(res, 400, { error: "E_LIMIT",
               message: `spend_cap_usd must not exceed the configured cap of ${spendCapMax()}` });
             return;
@@ -2491,8 +3577,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           raise = body.spend_cap_usd;
         }
         if (body.max_steps !== undefined) {
-          if (!Number.isInteger(body.max_steps) || body.max_steps < 1) {
-            writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a positive integer" });
+          if (!Number.isInteger(body.max_steps) || body.max_steps < 0) {
+            writeJson(res, 400, { error: "E_LIMIT", message: "max_steps must be a non-negative integer" });
             return;
           }
           steps = body.max_steps;
@@ -2512,36 +3598,44 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         writeJson(res, 409, { error: "E_STATE", message: "Only a paused task can be resumed.", status: task.status });
         return;
       }
+      const nativeTask = task.adapter === "codex" || task.adapter === "claude";
       // Budget and step count are totals for the task, not an allowance every
       // click re-buys. A task that stopped on one can only go on against a
       // bigger one. `taskBudget` reads whichever counter actually stopped it:
       // the harness path meters in MCP tool calls, the standalone loop in model
       // turns, and a refusal that read the wrong one would let a capped harness
       // task resume with nothing left to spend.
-      const budget = taskBudget(store, task, spendCapDefault());
-      const cap = raise ?? budget.spend_cap_usd;
-      const used = store.taskUsage(id);
-      const spent = budget.spend_usd ?? 0;
-      if (task.status === "paused" && spent >= cap) {
-        writeJson(res, 409, { error: "E_SPEND_CAP",
-          message: `It reached the $${cap.toFixed(2)} budget set for this task, so there is nothing left to spend. Give it a bigger budget to carry on.`,
-          spend_cap_usd: cap, spend_usd: spent });
-        return;
-      }
-      const maxSteps = steps ?? task.max_steps;
-      const usedSteps = store.harnessBindingForTask(id)?.observed_tool_calls ?? used?.steps ?? 0;
-      if (task.status === "paused" && usedSteps >= maxSteps) {
-        writeJson(res, 409, { error: "E_LIMIT",
-          message: `It used every one of the ${maxSteps} steps set for this task. Give it more steps to carry on.`,
-          max_steps: maxSteps, steps: usedSteps });
-        return;
+      // Native tasks have no BotHearth cap: Resume continues the same thread
+      // without a raised budget, including after a provider-limit pause.
+      if (!nativeTask) {
+        const budget = taskBudget(store, task, spendCapDefault());
+        const cap = raise ?? budget.spend_cap_usd;
+        const used = store.taskUsage(id);
+        const spent = budget.spend_usd ?? 0;
+        if (cap != null && cap > 0 && spent >= cap) {
+          writeJson(res, 409, { error: "E_SPEND_CAP",
+            message: `It reached the $${cap.toFixed(2)} budget set for this task, so there is nothing left to spend. Give it a bigger budget to carry on.`,
+            spend_cap_usd: cap, spend_usd: spent });
+          return;
+        }
+        const maxSteps = steps ?? task.max_steps;
+        const usedSteps = store.harnessBindingForTask(id)?.observed_tool_calls ?? used?.steps ?? 0;
+        if (maxSteps > 0 && usedSteps >= maxSteps) {
+          writeJson(res, 409, { error: "E_LIMIT",
+            message: `It used every one of the ${maxSteps} steps set for this task. Give it more steps to carry on.`,
+            max_steps: maxSteps, steps: usedSteps });
+          return;
+        }
       }
       // A host reboot can stop the browser while its durable row still says
       // running. Resume starts the existing containers and retains the profile.
-      if (task.status === "paused" && sandbox.start && (!useFakeComputer() || opts.sandbox)) {
+      if (task.status === "paused") {
         try {
-          await sandbox.start(task.computer_id);
-          store.setComputerStatus(task.computer_id, "running");
+          await idlePause.wake(task.computer_id);
+          if (sandbox.start && (!useFakeComputer() || opts.sandbox)) {
+            await sandbox.start(task.computer_id);
+            store.setComputerStatus(task.computer_id, "running");
+          }
         } catch (error) {
           logError("resume computer start failed", { computer_id: task.computer_id, error: String(error) });
           writeJson(res, 503, { error: "E_RUNTIME", message: "Couldn’t restart this computer. Check that Docker is running on BotHearth’s host, then try Resume again." });
@@ -2554,36 +3648,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           writeJson(res, 409, { error: "E_TAKEOVER_BUSY", message: "Return control of this computer before resuming the task." });
           return;
         }
-        // Resume is an explicit return of this task's expired control. Check
-        // for private input even if the old lease never recorded its holder.
-        const client = getClient(task.computer_id);
-        const observation = await client.call("takeover.masked-observation", {});
-        if (!observation.ok || (observation.data as { still_sensitive?: unknown })?.still_sensitive !== false) {
-          writeJson(res, 409, { error: "E_TAKEOVER_BUSY",
-            message: "Take control, finish or clear any private input, then return control before resuming." });
-          return;
-        }
-        const current = store.activeTakeoverForComputer(task.computer_id);
-        if (current?.id !== takeover.id || current.state !== "paused" || store.getTask(id)?.status !== "paused") {
+        const returned = await returnPausedHold(takeover, deviceId(session.sessionId));
+        if (!returned.ok) { writeJson(res, returned.status, returned.body); return; }
+        if (store.getTask(id)?.status !== "paused") {
           writeJson(res, 409, { error: "E_TAKEOVER_BUSY", message: "Control changed while resuming. Check the computer and try again." });
           return;
         }
-        const released = await client.declineTakeover(takeover.id);
-        if (!released.ok) { writeJson(res, 409, released); return; }
-        // This returns control; it does not declare a sensitive field safe.
-        store.updateTakeoverState(takeover.id, "agent");
-        clearTimeout(takeoverTimers.get(takeover.id));
-        takeoverTimers.delete(takeover.id);
-        takeoverGapStarts.delete(takeover.id);
-        await emit("takeover.released", { takeover_id: takeover.id, actor: deviceId(session.sessionId) },
-          { task_id: id, computer_id: task.computer_id });
       }
       if (!store.resumeTask(id)) {
         writeJson(res, 409, { error: "E_STATE", message: "Only a paused task can be resumed.", status: task.status });
         return;
       }
-      if (raise !== undefined) store.setTaskSpendCap(id, raise);
-      if (steps !== undefined) store.setTaskMaxSteps(id, steps);
+      if (nativeTask) {
+        store.setTaskSpendCap(id, 0);
+        store.setTaskMaxSteps(id, 0);
+      } else {
+        if (raise !== undefined) store.setTaskSpendCap(id, raise);
+        if (steps !== undefined) store.setTaskMaxSteps(id, steps);
+      }
       if (runtimeSec !== undefined) store.setTaskMaxRuntimeSec(id, runtimeSec);
       await emit("task.resumed", {}, { task_id: id, computer_id: task.computer_id });
       void startStoredTask(store.getTask(id)!, undefined, true)
@@ -2597,19 +3679,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const id = decodeURIComponent(taskCancel[1]!);
       const start = Date.now();
       const before = store.getTask(id);
-      const wasActive = before && !["completed", "failed", "cancelled"].includes(before.status);
-      const task = await cancelTask(id);
-      if (!task) {
+      if (!before) {
         writeJson(res, 404, { error: "not_found" });
         return;
       }
+      const wasActive = !["completed", "failed", "cancelled"].includes(before.status);
+      const task = wasActive ? (await beginCancel(id))! : before;
       if (wasActive && task.status === "cancelled") {
-        await emit("task.cancelled", { cancelled_in_ms: Date.now() - start }, { task_id: id });
-        store.freezeTaskSummary(id);
+        const cancelledBy = cancelledByForRequest(req);
+        const tearingDown = startCancelTeardown(task);
+        await emit("task.cancelled", {
+          cancelled_in_ms: Date.now() - start,
+          cancelled_by: cancelledBy,
+          reason: "cancelled",
+        }, { task_id: id });
+        void tearingDown;
       }
       writeJson(res, 200, {
         ok: true,
-        task,
+        task: store.getTask(id) ?? task,
         cancelled_in_ms: Date.now() - start,
       });
       return;
@@ -2799,30 +3887,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         writeJson(res, 409, { error: "E_TAKEOVER_BUSY", message: "Takeover release is being validated" });
         return;
       }
-      const client = getClient(body.computer_id);
-      const result = await client.call("takeover.request", {
-        reason: body.reason ?? "ui",
-      });
-      if (!result.ok) {
-        writeJson(res, 409, result);
-        return;
-      }
-      const data = result.data as { takeover_id: string; epoch?: number };
-      if (prior?.state === "paused") {
-        store.updateTakeoverState(prior.id, "terminated");
-        clearTimeout(takeoverTimers.get(prior.id));
-        takeoverTimers.delete(prior.id);
-        takeoverGapStarts.delete(prior.id);
-      }
-      // A question nobody has answered yet has no deadline of its own: the
-      // lease clock starts at the grant, whatever the computer reported.
+      const takeoverId = `tk_${randomBytes(6).toString("hex")}`;
+      // A question nobody has answered yet has no deadline of its own.
       const takeover = store.insertTakeover({
-        id: data.takeover_id,
+        id: takeoverId,
         computer_id: body.computer_id,
         task_id: body.task_id ?? prior?.task_id ?? null,
         state: "takeover_requested",
         expires_at: null,
-        epoch: takeoverEpochFromData(data),
       });
       if (prior?.state === "paused" && prior.granted_to) {
         // Renewal still covers the previous human's private desktop until a
@@ -2830,13 +3902,43 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         store.grantTakeoverTo(takeover.id, prior.granted_to);
         store.updateTakeoverState(takeover.id, "takeover_requested");
       }
+      const client = getClient(body.computer_id);
+      const computerCall = client.call("takeover.request", {
+        reason: body.reason ?? "ui",
+        takeover_id: takeover.id,
+      });
+      const applyComputer = (result: ToolResult) => {
+        if (!result.ok) return;
+        if (store.getTakeover(takeover.id)?.state !== "takeover_requested") return;
+        const epoch = takeoverEpochFromData(result.data);
+        if (epoch > 0) store.updateTakeoverEpoch(takeover.id, epoch);
+        markTakeoverComputerSynced(takeover.id);
+      };
+      const raced = await withCloseBound(computerCall, 2_000);
+      if (raced !== undefined && !raced.ok) {
+        store.updateTakeoverState(takeover.id, "terminated");
+        writeJson(res, 409, raced);
+        return;
+      }
+      if (prior?.state === "paused") {
+        store.updateTakeoverState(prior.id, "terminated");
+        clearTimeout(takeoverTimers.get(prior.id));
+        takeoverTimers.delete(prior.id);
+        takeoverGapStarts.delete(prior.id);
+      }
       await emit(
         "takeover.requested",
-        { takeover_id: data.takeover_id, reason: body.reason ?? "ui" },
+        { takeover_id: takeover.id, reason: body.reason ?? "ui" },
         { computer_id: body.computer_id, task_id: body.task_id },
       );
-      writeJson(res, 200, { takeover: { takeover_id: takeover.id, state: toWireState(takeover.state),
-        expires_at: takeover.expires_at, epoch: takeover.epoch } });
+      if (raced?.ok) applyComputer(raced);
+      else {
+        markTakeoverComputerPending(takeover.id);
+        void computerCall.then(applyComputer, () => undefined);
+      }
+      const row = store.getTakeover(takeover.id)!;
+      writeJson(res, 200, { takeover: { takeover_id: row.id, state: toWireState(row.state),
+        expires_at: row.expires_at, epoch: row.epoch } });
       return;
     }
 
@@ -2879,23 +3981,116 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return;
     }
 
-    const takeoverRelease = /^\/api\/v1\/takeover\/([^/]+)\/release$/.exec(path);
-    if (takeoverRelease && method === "POST") {
-      const target = takeoverTarget(takeoverRelease, res);
+    const takeoverGoogleAccount = /^\/api\/v1\/takeover\/([^/]+)\/google-account$/.exec(path);
+    if (takeoverGoogleAccount && method === "POST") {
+      const target = takeoverTarget(takeoverGoogleAccount, res);
       if (!target) return;
       const { id, row, client } = target;
-      const result = await client.releaseTakeover(id);
+      if (row.state !== "human" || row.granted_to !== deviceId(session.sessionId)) {
+        writeJson(res, 409, { error: "E_POLICY", message: row.state !== "human"
+          ? "Take control first, then choose a different Google account."
+          : "Only the window that is driving can switch the Google account." });
+        return;
+      }
+      const raw = (await readBody(req)).trim();
+      if (raw) {
+        let body: { url?: unknown };
+        try {
+          body = JSON.parse(raw) as { url?: unknown };
+        } catch {
+          writeJson(res, 400, { error: "E_IO", message: "invalid JSON" });
+          return;
+        }
+        if (body.url !== undefined && body.url !== GOOGLE_ACCOUNT_CHOOSER) {
+          writeJson(res, 409, { error: "E_POLICY", message: "That action can only open Google's account chooser." });
+          return;
+        }
+      }
+      const result = await client.call("takeover.goto", {
+        takeover_id: id,
+        url: GOOGLE_ACCOUNT_CHOOSER,
+      });
       if (!result.ok) {
         writeJson(res, 409, result);
         return;
       }
-      const next = durableStateAfterRelease(result.data);
-      store.updateTakeoverState(id, next);
-      sendLiveControl(row.computer_id);
-      if (next !== "agent") {
-        writeJson(res, 200, { takeover: result.data });
+      writeJson(res, 200, { takeover: result.data });
+      return;
+    }
+
+    const takeoverRelease = /^\/api\/v1\/takeover\/([^/]+)\/(release|clear)$/.exec(path);
+    if (takeoverRelease && method === "POST") {
+      const target = takeoverTarget(takeoverRelease, res);
+      if (!target) return;
+      const { id, row, client } = target;
+      const clear = takeoverRelease[2] === "clear";
+      if (row.state === "agent" || row.state === "terminated") {
+        writeJson(res, 200, { takeover: { takeover_id: id, state: toWireState(row.state),
+          expires_at: row.expires_at, epoch: row.epoch } });
         return;
       }
+      if (clear) {
+        if (row.state !== "human" && row.state !== "paused") {
+          writeJson(res, 409, { error: "E_POLICY",
+            message: "Clear the screen from a window that is driving, then give control back." });
+          return;
+        }
+        const blanked = await client.call("takeover.blank", { takeover_id: id });
+        if (!blanked.ok) {
+          writeJson(res, 409, { error: "E_POLICY",
+            message: "The screen could not be cleared. Navigate the bot’s browser away from the password field, then give control back." });
+          return;
+        }
+      }
+      if (row.state === "paused") {
+        const returned = await returnPausedHold(row, deviceId(session.sessionId));
+        if (!returned.ok) { writeJson(res, returned.status, returned.body); return; }
+        sendLiveControl(row.computer_id);
+        writeJson(res, 200, { takeover: returned.takeover });
+        return;
+      }
+      if (row.state !== "human") {
+        const why = row.state === "takeover_requested"
+          ? "Control has not been taken yet. Decline the request, or take control and then return it."
+          : row.state === "resume_validating"
+            ? "Control is still being checked. Wait a moment, then try again."
+            : "This hold cannot return control from its current state.";
+        writeJson(res, 409, { error: "E_POLICY", message: why });
+        return;
+      }
+      const clearFailed = {
+        error: "E_POLICY",
+        message: "The screen could not be cleared. Navigate the bot’s browser away from the password field, then give control back.",
+      };
+      let cleared: { reason: string } | undefined;
+      if (!clear) {
+        const observation = await client.call("takeover.masked-observation", {});
+        if (!observation.ok || (observation.data as { still_sensitive?: unknown })?.still_sensitive !== false) {
+          const blanked = await client.call("takeover.blank", { takeover_id: id });
+          if (!blanked.ok) { writeJson(res, 409, clearFailed); return; }
+          cleared = { reason: blockedByFrom(observation.ok ? observation.data : undefined).kind };
+        }
+      }
+      let result = await client.releaseTakeover(id);
+      if (!result.ok) {
+        const detail = result.error?.message ?? "invalid takeover release";
+        writeJson(res, 409, detail === "invalid takeover release"
+          ? { error: "E_POLICY", message: "Control cannot be returned from this hold yet. Take control or open the task to return it." }
+          : result);
+        return;
+      }
+      let next = durableStateAfterRelease(result.data);
+      if (next !== "agent") {
+        cleared = { reason: blockedByFrom(result.data).kind };
+        const blanked = await client.call("takeover.blank", { takeover_id: id });
+        if (!blanked.ok) { writeJson(res, 409, clearFailed); return; }
+        result = await client.releaseTakeover(id);
+        if (!result.ok) { writeJson(res, 409, clearFailed); return; }
+        next = durableStateAfterRelease(result.data);
+        if (next !== "agent") { writeJson(res, 409, clearFailed); return; }
+      }
+      store.updateTakeoverState(id, next);
+      sendLiveControl(row.computer_id);
       const timer = takeoverTimers.get(id);
       if (timer) clearTimeout(timer);
       takeoverTimers.delete(id);
@@ -2909,10 +4104,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       );
       await emit(
         "takeover.released",
-        { takeover_id: id, actor: deviceId(session.sessionId) },
+        { takeover_id: id, actor: deviceId(session.sessionId), ...(cleared ? { cleared } : {}) },
         { computer_id: row.computer_id, task_id: row.task_id ?? undefined },
       );
-      writeJson(res, 200, { takeover: result.data });
+      writeJson(res, 200, { takeover: result.data, ...(cleared ? { cleared } : {}) });
       return;
     }
 
@@ -2921,6 +4116,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const target = takeoverTarget(takeoverDecline, res);
       if (!target) return;
       const { id, row, client } = target;
+      if (row.state === "human") {
+        const mine = row.granted_to === deviceId(session.sessionId);
+        writeJson(res, 409, { error: "E_POLICY", message: mine
+          ? "You already have control. Give control back instead of declining."
+          : "Someone already has control of this computer. Give control back from the window that is driving it." });
+        return;
+      }
       const result = await client.declineTakeover(id);
       if (!result.ok) {
         writeJson(res, 409, result);
@@ -3044,9 +4246,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     const ws = acceptWebSocket(req, socket, head);
     if (!ws) return;
     socketSessions.set(ws, session.id);
-    ws.onClose(() => socketSessions.delete(ws));
+    ws.onClose(() => { socketSessions.delete(ws); liveFrameAcks.delete(ws); });
     const send = ws.send.bind(ws);
-    ws.send = (data) => { if (authorizeSocket(ws)) send(data); };
+    ws.send = (data) => {
+      if (!authorizeSocket(ws)) return;
+      if (typeof data !== "string" && socket.writableLength > 0) {
+        if (liveFrameAcks.has(ws)) liveFrameAcks.set(ws, null);
+        return;
+      }
+      send(data);
+    };
 
     if (isEvents) {
       eventSubs.add(ws);
@@ -3076,41 +4285,73 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     set.add(ws);
     ws.send(JSON.stringify(liveControlState(computerId)));
     // A static page may not emit again while another subscriber is still connected.
-    computer.stopLive();
-    computer.startLive();
+    if (set.size === 1 || liveControlState(computerId).mode !== "human") {
+      computer.stopLive();
+      computer.startLive();
+    }
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let lastMessage = Date.now();
     ws.onClose(() => {
+      if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
       set!.delete(ws);
+      const lease = store.activeTakeoverForComputer(computerId);
+      if (!closing && lease && validateLiveRelayFrame(store, computerId, { epoch: lease.epoch }, deviceId(session.id))) {
+        void computer.relayInput({ v: 1, t: "key", epoch: lease.epoch, kind: "reset", key: "", code: "", mods: 0 }).catch(() => {});
+      }
       if (set!.size === 0) {
         computer.stopLive();
         liveSubs.delete(computerId);
       }
     });
     let relayTail = Promise.resolve();
+    let pendingMove: Record<string, unknown> | null = null;
     ws.onMessage((data, isBinary) => {
       if (!authorizeSocket(ws) || isBinary) return;
       try {
         const msg = JSON.parse(data.toString("utf8")) as Record<string, unknown> & {
           t?: string;
         };
+        if (msg.v !== 1) return;
+        lastMessage = Date.now();
+        if (msg.t === "ping") {
+          ws.send(JSON.stringify({ v: 1, t: "pong" }));
+          if (heartbeatTimer === null) {
+            heartbeatTimer = setInterval(() => {
+              if (Date.now() - lastMessage >= 2000) socket.destroy();
+              else ws.send(JSON.stringify({ v: 1, t: "ping" }));
+            }, 500);
+            heartbeatTimer.unref?.();
+          }
+          return;
+        }
+        if (msg.t === "frame_ack" && Number.isSafeInteger(msg.seq)) {
+          if (!liveFrameAcks.has(ws) || liveFrameAcks.get(ws) === msg.seq) liveFrameAcks.set(ws, null);
+          return;
+        }
         if (msg.t === "pointer" || msg.t === "key" || msg.t === "text") {
           const lease = validateLiveRelayFrame(store, computerId, msg, deviceId(session.id))
             ? store.activeTakeoverForComputer(computerId)
             : undefined;
           if (lease) {
             renewTakeoverLease(lease.id);
+            if (msg.t === "pointer" && msg.kind === "move") {
+              if (pendingMove && pendingMove.epoch === msg.epoch) { Object.assign(pendingMove, msg); return; }
+              pendingMove = msg;
+            } else pendingMove = null;
             const sender = ws;
             relayTail = relayTail.then(async () => {
+              if (pendingMove === msg) pendingMove = null;
               const sendFail = (code: string, message: string) => {
                 if (sender.readyState === "open") {
                   sender.send(JSON.stringify({ v: 1, t: "error", code, message }));
                 }
               };
               try {
-                if (!authorizeSocket(sender)) return;
+                if (sender.readyState !== "open" || !authorizeSocket(sender)) return;
                 await idlePause.wake(computerId);
-                if (!authorizeSocket(sender)) return;
+                if (sender.readyState !== "open" || !authorizeSocket(sender)) return;
                 const frame = validateLiveRelayFrame(store, computerId, msg, deviceId(session.id));
-                if (!frame) return;
+                if (!frame) { sender.send(JSON.stringify(liveControlState(computerId))); return; }
                 const result = await getClient(computerId).relayInput(frame);
                 if (
                   result &&
@@ -3118,12 +4359,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
                   result.ok === false
                 ) {
                   sendFail(result.error.code, result.error.message);
+                } else {
+                  sender.send(JSON.stringify({ v: 1, t: "input_ack", epoch: frame.epoch,
+                    expires_at: store.getTakeover(lease.id)?.expires_at ?? null }));
                 }
               } catch (e) {
                 sendFail("E_IO", e instanceof Error ? e.message : String(e));
               }
             });
-          }
+          } else ws.send(JSON.stringify(liveControlState(computerId)));
         }
       } catch {
         // ignore bad control frames
@@ -3177,10 +4421,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   // Recover only after binding: a second start that loses the port must not
   // pause the original daemon's task. A rebooted task needs an explicit Resume.
   for (const task of store.listTasks()) await pauseNativeForRestart(task);
+  await reconcileHumanHolds();
   routines.routines.recoverInterrupted();
   if (opts.schedulerEnabled !== false) routines.scheduler.start();
   // Only the daemon that owns the port may refresh idle computers.
-  void reconcileComputerImages();
+  enqueueComputerImagesReconcile();
+  if (opts.enabledGates?.length) {
+    logInfo("policy.gates armed", { gates: [...opts.enabledGates] });
+  }
   if (server.listening) logInfo("daemon listening", { host, port });
 
   return {
@@ -3225,6 +4473,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       for (const timer of takeoverTimers.values()) clearTimeout(timer);
       clearInterval(approvalExpiryTimer);
       await auditTail;
+      await Promise.allSettled(cancelTeardowns.values());
+      for (;;) {
+        const pending = computerImagesReconcile;
+        await Promise.allSettled([pending]);
+        if (computerImagesReconcile === pending) break;
+      }
       store.close();
       logInfo("daemon closed", {});
     },

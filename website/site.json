@@ -8,19 +8,19 @@
       "slug": "",
       "file": "index.html",
       "title": "BotHearth — your AI agent, your infrastructure",
-      "description": "Self-host an AI agent with its own computer. Choose your infrastructure and model access, watch work, review requests and take human control. Read the privacy boundaries."
+      "description": "Self-host an AI agent with its own computer. Choose your infrastructure and model access, watch work and take human control. Read the privacy boundaries."
     },
     {
       "slug": "quickstart",
       "file": "quickstart.html",
-      "title": "Get BotHearth — set up your AI agent and run a first task",
+      "title": "Install BotHearth from source — set up your AI agent and run a first task",
       "description": "Set up BotHearth on a Mac or Linux computer, connect your model account, and run your first task. This alpha installs from source with Node.js and Docker."
     },
     {
       "slug": "how-it-works",
       "file": "how-it-works.html",
       "title": "How BotHearth works — give it a task, watch it work",
-      "description": "Describe a task, follow your agent’s computer, review requests, and open the files it saves. Learn how to connect your model and take control when needed."
+      "description": "Describe a task, follow your agent’s computer, and open the files it saves. Learn how to connect your model and take control when needed."
     },
     {
       "slug": "security",
@@ -39,6 +39,12 @@
       "file": "faq.html",
       "title": "BotHearth FAQ — licence, costs, compatibility, and limits",
       "description": "Is BotHearth free? What does the usage meter measure? Which platforms work? Clear answers about PolyForm Noncommercial, model costs, and the alpha release."
+    },
+    {
+      "slug": "compare",
+      "file": "compare.html",
+      "title": "Compare BotHearth with Grok Bot and Muse — dated public-page table",
+      "description": "Dated 11 September 2026 table of BotHearth, Grok Bot and Muse: customer-owned computer, model picker, source-available licence, model-blind takeover, 24/7 cloud, ISO-in-FAQ, and consumer apps. Unknowns stay Not found."
     },
     {
       "slug": "about",

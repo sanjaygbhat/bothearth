@@ -13,7 +13,7 @@
  */
 
 import { apiGet } from "./api.ts";
-import { EMPTY_RECENT, recentStatus, relativeTime } from "./home.ts";
+import { EMPTY_RECENT, recentStatus, relativeTime, taskTitle } from "./home.ts";
 import { element } from "./safe.ts";
 import { navigate, registerView, setTitle, type RouteParams } from "./shell.ts";
 import type { TaskRow } from "./task-view.ts";
@@ -36,16 +36,22 @@ export function sortTasks(tasks: TaskRow[]): TaskRow[] {
 /** One row, identical in shape to home’s Recent row so the two read as one list. */
 function taskRow(task: TaskRow): HTMLLIElement {
   const { word, tone } = recentStatus(task.status);
-  const when = relativeTime(task.created_at);
+  const when = relativeTime(task.started_at ?? task.created_at);
+  const ms = task.duration_ms;
+  const seconds = typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? Math.round(ms / 1000) : 0;
+  const lasted = seconds < 1 ? "" : seconds < 60 ? `${seconds} s`
+    : seconds < 3600 ? `${Math.round(seconds / 60)} min`
+    : `${Math.round((seconds / 3600) * 10) / 10} hr`;
+  const metaText = [word, when, lasted].filter(Boolean).join(" · ");
 
   const item = document.createElement("li");
   const link = element("a", "recent-row");
   link.setAttribute("href", `#/tasks/${task.id}`);
-  const title = element("span", "recent-title", task.goal || "Untitled task");
+  const title = element("span", "recent-title", taskTitle(task.goal));
   const meta = element("span", "recent-meta");
   meta.append(
     element("span", tone === "neutral" ? "dot" : `dot ${tone}`),
-    document.createTextNode(when ? `${word} · ${when}` : word),
+    document.createTextNode(metaText),
   );
   link.append(title, meta);
   item.appendChild(link);
@@ -158,7 +164,8 @@ class TasksView {
   }
 }
 
-function createTasksView() {
+/** Exported so the tests can drive one instance directly. */
+export function createTasksView() {
   let view: TasksView | null = null;
   return {
     mount(el: HTMLElement) {

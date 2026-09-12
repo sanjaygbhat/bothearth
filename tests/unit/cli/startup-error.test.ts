@@ -305,3 +305,26 @@ test("the configured approval TTL reaches the daemon options", async () => {
     else process.env.MODELBOT_VAULT_KEY_HEX = prev;
   }
 });
+
+test("omitted policy.gates reaches the daemon as an empty list, and an explicit list is kept", async () => {
+  const { home } = await initHome(KEY_A);
+  const cfgFile = join(home, "modelbot.yaml");
+  const prev = process.env.MODELBOT_VAULT_KEY_HEX;
+  process.env.MODELBOT_VAULT_KEY_HEX = KEY_A;
+  try {
+    const shipped = await buildProductionComposition({ home, port: 0 });
+    assert.deepEqual(shipped.config.policy.gates, []);
+    assert.deepEqual(shipped.daemon.enabledGates, []);
+    assert.equal(shipped.daemon.configPath, cfgFile);
+
+    writeFileSync(cfgFile, `${readFileSync(cfgFile, "utf8")}policy:\n  gates: [payment, upload]\n`, {
+      mode: 0o600,
+    });
+    const edited = await buildProductionComposition({ home, port: 0 });
+    assert.deepEqual(edited.config.policy.gates, ["payment", "upload"]);
+    assert.deepEqual(edited.daemon.enabledGates, ["payment", "upload"]);
+  } finally {
+    if (prev === undefined) delete process.env.MODELBOT_VAULT_KEY_HEX;
+    else process.env.MODELBOT_VAULT_KEY_HEX = prev;
+  }
+});

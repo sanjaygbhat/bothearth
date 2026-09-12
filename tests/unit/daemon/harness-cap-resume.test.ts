@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { startDaemon } from "../../../src/daemon/server.ts";
 import { bootstrapSession } from "../../helpers/daemon.ts";
-import { fakeCli } from "../../helpers/fake-cli.ts";
+import { fakeCli, isolateModelbotHome } from "../../helpers/fake-cli.ts";
 import { until } from "../../helpers/until.ts";
 
+isolateModelbotHome();
+
 /**
- * A budget is a pause, not a death — on the CLI-runner path too. A task killed
- * by its spend cap or its step cap used to end `failed` there, while
- * `POST /tasks/:id/resume` accepts only a paused task, so "Resume with a higher
- * budget" answered 409 on exactly the task that needed it.
+ * Native Codex / Claude Code tasks are not paused by BotHearth's proxy meter
+ * or by `agent.max_steps`. Those caps belong to the API-adapter loop.
  */
 
 const PER_CALL_USD = 0.01;
@@ -23,6 +23,7 @@ if(process.argv[2]==='login'&&process.argv[3]==='status') process.exit(0);
 const argv=process.argv.slice(2);
 const url=JSON.parse(argv.find(a=>a.startsWith('mcp_servers.modelbot.url=')).split('=').slice(1).join('='));
 let input=''; for await (const chunk of process.stdin) input+=chunk;
+console.log(JSON.stringify({type:'thread.started',thread_id:'00000000-0000-0000-0000-0000000000aa'}));
 const client=new Client({name:'cap-resume-fixture',version:'1'});
 await client.connect(new StreamableHTTPClientTransport(new URL(url),
   {requestInit:{headers:{authorization:'Bearer '+process.env.MODELBOT_SCOPED_TOKEN}}}));
@@ -65,101 +66,27 @@ async function withDaemon(fn: (ctx: Ctx) => Promise<void>): Promise<void> {
   }
 }
 
-/** The paused event the runner wrote, whole: the API projection drops `detail`. */
-async function pausedStep(ctx: Ctx, taskId: string): Promise<Record<string, unknown>> {
-  const activity = (await (await ctx.api(`/api/v1/tasks/${taskId}`)).json()) as {
-    steps: Array<{ kind: string }>;
-  };
-  assert.equal(activity.steps.some((step) => step.kind === "task.failed"), false,
-    "a budget stop was recorded as a failure");
-  const paused = (ctx.daemon.store.db
-    .prepare("SELECT body_json FROM audit_refs WHERE task_id = ? AND type = 'task.step'")
-    .all(taskId) as Array<{ body_json: string }>)
-    .map((row) => JSON.parse(row.body_json) as Record<string, unknown>)
-    .filter((body) => body.status === "paused");
-  assert.equal(paused.length, 1, `expected one paused step, got ${paused.length}`);
-  return paused[0]!;
-}
-
-test("a spend cap on the CLI-runner path pauses, and a bigger budget resumes it", async () => {
+test("a native task ignores a requested spend cap and step cap and finishes", async () => {
   await withDaemon(async (ctx) => {
-    const created = await ctx.api("/api/v1/tasks",
-      { computer_id: "c1", goal: "read the page until the budget stops it", spend_cap_usd: 5 * PER_CALL_USD });
+    const created = await ctx.api("/api/v1/tasks", {
+      computer_id: "c1", goal: "read the page",
+      spend_cap_usd: 5 * PER_CALL_USD, max_steps: 3,
+    });
     assert.equal(created.status, 201);
     const { task } = (await created.json()) as { task: { id: string } };
 
-    await until(() => ctx.daemon.store.getTask(task.id)?.status === "paused",
-      "the capped task did not pause", 20_000);
-    assert.deepEqual(await pausedStep(ctx, task.id), {
-      status: "paused",
-      reason: "spend_cap",
-      // Word for word what the standalone loop says when it stops on the same cap.
-      detail: "estimated spend reached $0.05",
-      failure_kind: "spend_cap",
-      steps: 5,
-    });
-
-    // Resume with nothing more to spend is refused, not started.
-    const refused = await ctx.api(`/api/v1/tasks/${task.id}/resume`, {});
-    assert.equal(refused.status, 409);
-    const refusal = (await refused.json()) as { error: string; spend_usd: number };
-    assert.equal(refusal.error, "E_SPEND_CAP");
-    assert.equal(refusal.spend_usd, 0.05);
-    assert.equal(ctx.daemon.store.getTask(task.id)?.status, "paused", "a refused resume restarted the task");
-
-    // A raised budget un-refuses the calls the old one refused: the same task
-    // carries on and finishes.
-    const resumed = await ctx.api(`/api/v1/tasks/${task.id}/resume`, { spend_cap_usd: 30 });
-    assert.equal(resumed.status, 202);
     await until(() => ctx.daemon.store.getTask(task.id)?.status === "completed",
-      "the resumed task never finished", 20_000);
+      "the native task never finished", 20_000);
 
     const detail = (await (await ctx.api(`/api/v1/tasks/${task.id}`)).json()) as {
-      task: { spend_usd: number; spend_cap_usd: number; calls: number };
+      task: { spend_usd: number; spend_cap_usd: number | null; calls: number; calls_cap: number | null };
+      steps: Array<{ kind: string; body: Record<string, unknown> }>;
     };
-    assert.equal(detail.task.spend_cap_usd, 30);
-    // Twelve calls in total: the budget is one running total, not an allowance
-    // the second run buys again.
-    assert.equal(detail.task.calls, 12);
-    assert.equal(detail.task.spend_usd, 0.12);
-  });
-});
-
-test("a step cap on the CLI-runner path pauses, and more steps resume it", async () => {
-  await withDaemon(async (ctx) => {
-    const created = await ctx.api("/api/v1/tasks",
-      { computer_id: "c1", goal: "read the page until the steps run out", spend_cap_usd: 5, max_steps: 3 });
-    assert.equal(created.status, 201);
-    const { task } = (await created.json()) as { task: { id: string } };
-
-    await until(() => ctx.daemon.store.getTask(task.id)?.status === "paused",
-      "the step-capped task did not pause", 20_000);
-    assert.deepEqual(await pausedStep(ctx, task.id), {
-      status: "paused",
-      reason: "max_steps",
-      detail: "maximum 3 steps reached",
-      failure_kind: "max_steps",
-      steps: 3,
-    });
-    // The step budget is the ceiling the meter shows, since the cap it would
-    // otherwise report buys far more calls than the task may make.
-    const capped = (await (await ctx.api(`/api/v1/tasks/${task.id}`)).json()) as { task: { calls_cap: number } };
-    assert.equal(capped.task.calls_cap, 3);
-
-    const refused = await ctx.api(`/api/v1/tasks/${task.id}/resume`, {});
-    assert.equal(refused.status, 409);
-    assert.deepEqual(await refused.json(), {
-      error: "E_LIMIT",
-      message: "It used every one of the 3 steps set for this task. Give it more steps to carry on.",
-      max_steps: 3,
-      steps: 3,
-    });
-    assert.equal(ctx.daemon.store.getTask(task.id)?.status, "paused", "a refused resume restarted the task");
-
-    const resumed = await ctx.api(`/api/v1/tasks/${task.id}/resume`, { max_steps: 30 });
-    assert.equal(resumed.status, 202);
-    await until(() => ctx.daemon.store.getTask(task.id)?.status === "completed",
-      "the resumed task never finished", 20_000);
-    assert.equal(ctx.daemon.store.getTask(task.id)?.max_steps, 30);
+    assert.equal(detail.task.spend_cap_usd, null);
+    assert.equal(detail.task.calls_cap, null);
+    assert.ok(detail.task.calls >= 6, `expected the six snapshots, got ${detail.task.calls}`);
+    assert.equal(detail.task.spend_usd, Number((detail.task.calls * PER_CALL_USD).toFixed(12)));
+    assert.equal(detail.steps.some((step) => step.kind === "task.failed"), false);
+    assert.equal(detail.steps.some((step) => step.body.reason === "spend_cap" || step.body.reason === "max_steps"), false);
   });
 });

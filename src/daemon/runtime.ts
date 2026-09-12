@@ -286,7 +286,7 @@ export interface RuntimeDeps {
   preparer: ImagePreparer;
   /** Which provider the owner has configured, if any. */
   configuredProvider(): "claude" | "codex" | null;
-  /** Existing connection probe: "connected" | "signed_in" | "signed_out" | "missing" | "error". */
+  /** Existing connection probe: "connected" | "signed_in" | "signed_out" | "missing" | "error" | "unknown". */
   providerStatus(provider: "claude" | "codex"): Promise<string>;
   /** Native CLIs are bundled in the virtual computer, so no host installation is required. */
   nativeInComputer?(): boolean;
@@ -551,6 +551,8 @@ export interface RuntimeProbe {
   snapshot(): Promise<RuntimeStatus>;
   /** Drop the cache so the next poll re-probes (used after a prepare run). */
   invalidate(): void;
+  /** Docker engine liveness only — no image inspect, no AI/provider. */
+  dockerLive(): Promise<boolean>;
 }
 
 export function createRuntimeProbe(deps: RuntimeDeps): RuntimeProbe {
@@ -694,6 +696,10 @@ export function createRuntimeProbe(deps: RuntimeDeps): RuntimeProbe {
   return {
     invalidate() {
       cached = undefined;
+    },
+    async dockerLive(): Promise<boolean> {
+      const docker = await probeDocker();
+      return docker.running;
     },
     async snapshot(): Promise<RuntimeStatus> {
       if (cached && now() - cached.at < ttlMs) {

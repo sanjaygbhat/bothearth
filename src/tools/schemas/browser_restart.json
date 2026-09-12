@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modelbot://tools/browser_restart.json",
+  "title": "browser_restart",
+  "description": "Close and relaunch the bot's browser with the same profile. Returns the URL of the active page.",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": false
+}

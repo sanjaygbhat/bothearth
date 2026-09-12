@@ -7,12 +7,20 @@
  */
 
 import { appendTextChild } from "../safe.ts";
-import { leaseText } from "../takeover.ts";
+import { leaseText, SWITCH_GOOGLE_ACCOUNT } from "../takeover.ts";
 import { icon } from "./icons.ts";
 import { LiveView } from "./session.ts";
 
 /** How long the control confirmation stays up when nobody types. */
 const NOTICE_MS = 6000;
+
+/** Overlay stays on "Starting…" this long with no frame, then tells the truth. */
+export const NO_FRAME_HINT_MS = 8_000;
+/** After this long with no frame, offer Restart the picture. */
+export const NO_FRAME_RESTART_MS = 30_000;
+
+/** S6 producer-restart notice — reused when the person asks to restart the picture. */
+const RESTARTING_PICTURE = "Restarting the picture…";
 
 /** The one line that tells a person the screen takes their keyboard now. */
 export const DRIVING_HINT = "Click the computer to type. Ctrl+Alt+T opens Terminal; Ctrl+Alt+E opens Files. Use Return control when finished.";
@@ -39,6 +47,7 @@ export interface LivePanelOptions {
   label?: string;
   onTakeControl?: () => void;
   onReturnControl?: () => void;
+  onSwitchGoogleAccount?: () => void;
   onFullScreen?: (full: boolean) => void;
   /** An input reached the computer, which restarts the human's lease. */
   onInput?: () => void;
@@ -65,7 +74,7 @@ export function phaseCopy(phase: PanelPhase): PhaseCopy {
       return {
         state: "Paused",
         dot: "dot warn",
-        note: "Paused while it waits for you. Nothing happens on its computer until you answer.",
+        note: "The login is on this screen, in its browser. Nothing happens on its computer until you answer.",
         dim: true,
       };
     case "driving":
@@ -95,7 +104,7 @@ export function phaseCopy(phase: PanelPhase): PhaseCopy {
       return {
         state: "Not connected",
         dot: "dot",
-        note: "The picture stopped. Reconnect to see what its computer is doing now.",
+        note: "Connection interrupted. Reconnecting automatically…",
         dim: true,
       };
     default:
@@ -116,14 +125,19 @@ export function phaseCopy(phase: PanelPhase): PhaseCopy {
  * computer is on a page, this says what it is doing instead of showing an empty
  * grey rectangle.
  */
-export function waitingCopy(phase: PanelPhase): string {
+export function waitingCopy(phase: PanelPhase, url: string | null = null, waitedMs = 0): string {
   if (phase === "offline") {
-    return "The picture stopped. Nothing was lost — choose Reconnect to see its computer again.";
+    return "Reconnecting automatically. Nothing you type is sent until the picture returns.";
   }
   if (phase === "paused") {
     return "Waiting for your answer. Its computer opens a page once you reply.";
   }
-  return "Starting its computer…";
+  if (phase === "connecting") {
+    return waitedMs >= NO_FRAME_HINT_MS
+      ? "No picture yet from its computer. It may be busy loading a page."
+      : "Starting its computer…";
+  }
+  return url ?? "No picture yet. Take control still works.";
 }
 
 /** `https://google.com/flights?x=1` -> `google.com/flights`. Never a scheme. */
@@ -155,6 +169,8 @@ export class LivePanel {
   private readonly hintText: HTMLElement;
   private readonly acts: HTMLElement;
   private readonly takeBtn: HTMLButtonElement;
+  private readonly returnBtn: HTMLButtonElement;
+  private readonly googleBtn: HTMLButtonElement;
   private readonly fullBtn: HTMLButtonElement;
   private readonly reconnectBtn: HTMLButtonElement;
   private live: LiveView | null = null;
@@ -163,12 +179,20 @@ export class LivePanel {
   private hasFrame = false;
   private driver = false;
   private full = false;
+  private fullScreenDeny: string | null = null;
   private noticeTimer = 0;
+  private waitTimer = 0;
+  /** 0 = Starting…; 1 = no-picture hint; 2 = Restart the picture offered. */
+  private waitStage = 0;
+  private heldReconnect = false;
   private readonly opts: LivePanelOptions;
   private readonly onFullScreenChange = () => {
     // Esc out of the browser's full screen tells this page nothing else: the
     // layout goes back, the keyboard stays exactly where it was.
-    if (this.full && document.fullscreenElement !== this.root) this.applyFullScreen(false);
+    if (this.full && document.fullscreenElement !== this.root) {
+      this.applyFullScreen(false);
+      this.focusScreen();
+    }
   };
 
   constructor(opts: LivePanelOptions) {
@@ -191,7 +215,12 @@ export class LivePanel {
     giveBtn.className = "btn primary sm";
     giveBtn.textContent = "Give control back";
     giveBtn.addEventListener("click", () => opts.onReturnControl?.());
-    this.driveBar.append(giveBtn);
+    this.googleBtn = document.createElement("button");
+    this.googleBtn.type = "button";
+    this.googleBtn.className = "btn ghost sm";
+    this.googleBtn.textContent = SWITCH_GOOGLE_ACCOUNT;
+    this.googleBtn.addEventListener("click", () => opts.onSwitchGoogleAccount?.());
+    this.driveBar.append(giveBtn, this.googleBtn);
 
     this.view = appendTextChild(this.root, "div", "", "view");
     appendTextChild(this.view, "span", "", "wipe");
@@ -236,6 +265,13 @@ export class LivePanel {
     this.takeBtn.append(icon("hand"), document.createTextNode("Take control"));
     this.takeBtn.addEventListener("click", () => opts.onTakeControl?.());
 
+    this.returnBtn = document.createElement("button");
+    this.returnBtn.type = "button";
+    this.returnBtn.className = "btn primary";
+    this.returnBtn.textContent = "Give control back";
+    this.returnBtn.hidden = true;
+    this.returnBtn.addEventListener("click", () => opts.onReturnControl?.());
+
     this.fullBtn = document.createElement("button");
     this.fullBtn.type = "button";
     this.fullBtn.className = "btn";
@@ -248,18 +284,36 @@ export class LivePanel {
     this.reconnectBtn.textContent = "Reconnect";
     this.reconnectBtn.hidden = true;
     this.reconnectBtn.addEventListener("click", () => {
+      const restart = this.reconnectBtn.textContent === "Restart the picture";
       this.reconnectBtn.hidden = true;
+      this.reconnectBtn.textContent = "Reconnect";
+      this.clearNoFrameWatch();
       this.setPhase("connecting");
-      this.connect();
+      if (restart) this.setNotice(RESTARTING_PICTURE);
+      if (this.live) this.live.reconnect();
+      else this.connect();
+      this.startNoFrameWatch();
+      this.updateWaiting();
     });
 
-    this.acts.append(this.takeBtn, this.fullBtn, this.reconnectBtn);
+    this.acts.append(this.takeBtn, this.returnBtn, this.fullBtn, this.reconnectBtn);
 
     if (opts.computerId) {
       this.live = new LiveView(this.canvas, banner, opts.computerId, {
+        onConnecting: () => {
+          if (this.reconnectBtn.textContent === "Reconnect") this.reconnectBtn.hidden = true;
+          if (!this.driver) this.setPhase("connecting");
+          this.updateWaiting();
+        },
         onFrame: () => {
           this.hasFrame = true;
-          if (this.phase === "connecting" || this.phase === "offline") this.setPhase("live");
+          this.reconnectBtn.hidden = true;
+          if (this.heldReconnect) {
+            this.heldReconnect = false;
+            this.clearNotice();
+          }
+          if (this.driver) this.setPhase("driving");
+          else if (this.phase === "connecting" || this.phase === "offline") this.setPhase("live");
           this.updateWaiting();
         },
         onMode: (mode) => {
@@ -267,18 +321,29 @@ export class LivePanel {
           // driving; who that person is, is `driver`. The optimistic UI in
           // task.ts is corrected here, in both directions.
           if (mode === "human") this.setPhase(this.driver ? "driving" : "observing");
+          else if (mode === "validating") { this.hasFrame = false; this.setPhase("paused"); }
           else if (this.phase === "driving" || this.phase === "observing") this.setPhase("live");
           else if (this.phase === "connecting" && this.hasFrame) this.setPhase("live");
         },
-        onError: () => {
-          this.hasFrame = false;
+        onError: (err, recovery) => {
+          this.hasFrame = this.hasPainted();
+          if (recovery?.held) {
+            this.heldReconnect = true;
+            this.reconnectBtn.hidden = true;
+            this.setNotice(err.message, recovery.tone ?? "ok");
+            if (this.driver) this.setPhase("driving");
+            this.updateWaiting();
+            return;
+          }
+          this.heldReconnect = false;
+          this.reconnectBtn.textContent = "Reconnect";
           this.reconnectBtn.hidden = false;
           this.setPhase("offline");
           this.updateWaiting();
         },
         onInput: () => {
           // First keystroke: the confirmation has been read or does not matter.
-          this.clearNotice();
+          if (!this.heldReconnect) this.clearNotice();
           opts.onInput?.();
         },
       });
@@ -296,6 +361,7 @@ export class LivePanel {
 
   /** `keepFrame` keeps the last picture on screen for the receipt to label. */
   close(keepFrame = false): void {
+    this.clearNoFrameWatch();
     this.live?.close(keepFrame);
     this.live = null;
     if (!keepFrame) this.hasFrame = false;
@@ -317,7 +383,7 @@ export class LivePanel {
     this.notice.className = tone === "warn" ? "notice warn" : "notice";
     this.notice.hidden = false;
     window.clearTimeout(this.noticeTimer);
-    this.noticeTimer = window.setTimeout(() => this.clearNotice(), NOTICE_MS);
+    if (!this.heldReconnect) this.noticeTimer = window.setTimeout(() => this.clearNotice(), NOTICE_MS);
   }
 
   clearNotice(): void {
@@ -330,6 +396,16 @@ export class LivePanel {
   /** The lease countdown, so the full-screen bar says it too. */
   setLease(msLeft: number | null): void {
     this.driveLease.textContent = msLeft === null ? "" : leaseText(msLeft);
+  }
+
+  /** Latest `expires_at` from the live session (`mode` or `input_ack`). */
+  leaseExpiresAt(): number | null {
+    return this.live?.leaseExpiresAt() ?? null;
+  }
+
+  /** When that deadline was last taken from the server. */
+  leaseSeenAt(): number | null {
+    return this.live?.leaseSeenAt() ?? null;
   }
 
   /**
@@ -398,8 +474,52 @@ export class LivePanel {
     if (!this.opts.computerId) return; // "no computer to show" is the whole story
     const blank =
       this.url === null && (this.phase === "connecting" || this.phase === "paused");
-    this.waiting.textContent = waitingCopy(this.phase);
-    this.waiting.hidden = this.hasFrame && !blank;
+    this.waiting.textContent = waitingCopy(
+      this.phase,
+      this.url,
+      this.waitStage >= 1 ? NO_FRAME_HINT_MS : 0,
+    );
+    this.waiting.hidden =
+      (this.hasFrame && !blank) || this.phase === "driving" || this.phase === "observing";
+    this.syncNoFrameWatch();
+  }
+
+  private syncNoFrameWatch(): void {
+    if (!this.opts.computerId || this.hasFrame || this.phase !== "connecting") {
+      if (this.phase !== "offline" && this.reconnectBtn.textContent === "Restart the picture") {
+        this.reconnectBtn.hidden = true;
+        this.reconnectBtn.textContent = "Reconnect";
+      }
+      this.clearNoFrameWatch();
+      return;
+    }
+    this.startNoFrameWatch();
+  }
+
+  private startNoFrameWatch(): void {
+    if (!this.opts.computerId || this.hasFrame || this.waitTimer || this.waitStage >= 2) {
+      return;
+    }
+    const delay = this.waitStage === 0 ? NO_FRAME_HINT_MS : NO_FRAME_RESTART_MS - NO_FRAME_HINT_MS;
+    this.waitTimer = window.setTimeout(() => this.advanceNoFrameWait(), delay);
+  }
+
+  private advanceNoFrameWait(): void {
+    this.waitTimer = 0;
+    if (this.hasFrame || this.phase !== "connecting") return;
+    this.waitStage = this.waitStage === 0 ? 1 : 2;
+    if (this.waitStage === 2) {
+      this.reconnectBtn.textContent = "Restart the picture";
+      this.reconnectBtn.hidden = false;
+      this.acts.hidden = false;
+    }
+    this.updateWaiting();
+  }
+
+  private clearNoFrameWatch(): void {
+    window.clearTimeout(this.waitTimer);
+    this.waitTimer = 0;
+    this.waitStage = 0;
   }
 
   /**
@@ -423,7 +543,7 @@ export class LivePanel {
   setActionsVisible(take: boolean, full: boolean): void {
     this.takeBtn.hidden = !take;
     this.fullBtn.hidden = !full;
-    this.acts.hidden = !take && !full && this.reconnectBtn.hidden;
+    this.acts.hidden = !take && !full && this.reconnectBtn.hidden && this.returnBtn.hidden;
   }
 
   setTakeLabel(text: string, primary: boolean): void {
@@ -445,24 +565,37 @@ export class LivePanel {
    * looks the same inside the window.
    */
   async setFullScreen(full: boolean): Promise<void> {
+    this.fullScreenDeny = null;
     if (full) {
+      this.applyFullScreen(true);
       try {
-        await this.root.requestFullscreen?.();
-      } catch {
-        // Denied: the in-page layout below is the whole fallback.
+        const request = this.root.requestFullscreen?.();
+        if (request) await request;
+      } catch (error) {
+        const raw = error instanceof Error ? error.message.trim() : "";
+        this.fullScreenDeny = raw && raw.length < 120 && !/[\r\n]/.test(raw) ? raw : "";
       }
-    } else if (document.fullscreenElement === this.root) {
+      this.focusScreen();
+      return;
+    }
+    this.applyFullScreen(false);
+    if (document.fullscreenElement === this.root) {
       try {
         await document.exitFullscreen();
       } catch {
         // Already leaving; `fullscreenchange` settles the flag either way.
       }
     }
-    this.applyFullScreen(full);
+    this.focusScreen();
   }
 
   isFullScreen(): boolean {
     return this.full;
+  }
+
+  /** Browser Fullscreen API refusal; in-page full-bleed is already on. */
+  fullScreenDeniedDetail(): string | null {
+    return this.fullScreenDeny;
   }
 
   private applyFullScreen(full: boolean): void {
@@ -477,6 +610,10 @@ export class LivePanel {
     const bare = this.full && this.phase === "driving";
     this.root.classList.toggle("driving-full", bare);
     this.driveBar.hidden = !bare;
+    this.googleBtn.hidden = this.phase !== "driving";
+    if (bare) this.driveBar.append(this.googleBtn);
+    else if (this.phase === "driving") this.acts.append(this.googleBtn);
+    else this.driveBar.append(this.googleBtn);
   }
 
   private applyPhase(): void {
@@ -495,6 +632,7 @@ export class LivePanel {
     this.canvas.setAttribute("role", driving ? "application" : "img");
     this.canvas.setAttribute("aria-label", screenLabel(this.phase, this.url));
     this.hintText.hidden = !driving;
+    this.returnBtn.hidden = this.phase !== "paused" && this.phase !== "driving";
     this.applyChrome();
     this.updateWaiting();
     if (driving) this.canvas.focus({ preventScroll: true });
